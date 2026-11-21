@@ -283,29 +283,61 @@ start_server {tags {"info" "external:skip" "debug_defrag:skip"}} {
             }
             # Validate that custom LUA errors are tracked in `ERRORSTATS_OVERFLOW` when errors
             # has 128 entries.
-            assert_equal "count=972" [errorstat ERRORSTATS_OVERFLOW]
+            assert_match "count=972*" [errorstat ERRORSTATS_OVERFLOW]
             # Validate that non LUA errors continue to be tracked even when we have >=128 entries.
             assert_error {ERR syntax error} {r set a b c d e f g}
-            assert_equal "count=1" [errorstat ERR]
+            assert_match "count=1*" [errorstat ERR]
             # Validate that custom errors that were already tracked continue to increment when past 128 entries.
-            assert_equal "count=1" [errorstat 1]
+            assert_match "count=1*" [errorstat 1]
             assert_error "1 my error message" {
                 r eval {return server.error_reply(string.format('1 my error message', ARGV[1]))} 0
             }
-            assert_equal "count=2" [errorstat 1]
+            assert_match "count=2*" [errorstat 1]
             # Test LUA error variants.
             assert_error "My error message" {r eval {return server.error_reply('My error message')} 0}
             assert_error "My error message" {r eval {return {err = 'My error message'}} 0}
-            assert_equal "count=974" [errorstat ERRORSTATS_OVERFLOW]
+            assert_match "count=974*" [errorstat ERRORSTATS_OVERFLOW]
             # Function calls that contain custom error messages should call be included in overflow counter
             r FUNCTION LOAD replace [format "#!lua name=mylib\nserver.register_function('customerrorfn', function() return server.error_reply('My error message') end)"]
             assert_error "My error message" {r fcall customerrorfn 0}
-            assert_equal "count=975" [errorstat ERRORSTATS_OVERFLOW]
+            assert_match "count=975*" [errorstat ERRORSTATS_OVERFLOW]
             # Function calls that contain non lua errors should continue to be tracked normally (in a separate counter).
             r FUNCTION LOAD replace [format "#!lua name=mylib\nserver.register_function('invalidgetcmd', function() return server.call('get', 'x', 'x', 'x') end)"]
             assert_error "ERR Wrong number of args*" {r fcall invalidgetcmd 0}
-            assert_equal "count=975" [errorstat ERRORSTATS_OVERFLOW]
-            assert_equal "count=2" [errorstat ERR]
+            assert_match "count=975*" [errorstat ERRORSTATS_OVERFLOW]
+            assert_match "count=2*" [errorstat ERR]
+        }
+
+        test {errorstats: breakdown by command} {
+            r config resetstat
+            r set key1 abc
+
+            # Multiple commands causing WRONGTYPE
+            assert_error "WRONGTYPE*" {r zdiff 1 key1}
+            assert_error "WRONGTYPE*" {r hset key1 f v}
+            assert_error "WRONGTYPE*" {r hset key1 f v} ;# Twice for hset
+
+            # Multiple commands causing ERR (generic)
+            assert_error "ERR *" {r get}
+            assert_error "ERR *" {r set k}
+
+            # Check INFO Errorstats
+            set info [r info errorstats]
+            # Lexicographical order: HSET before ZDIFF
+            assert_match {*errorstat_WRONGTYPE:count=3(HSET=2,ZDIFF=1)*} $info
+            # Lexicographical order: GET before SET
+            assert_match {*errorstat_ERR:count=2(GET=1,SET=1)*} $info
+        }
+
+        test {errorstats: breakdown with subcommands} {
+            r config resetstat
+
+            # Trigger error with command that has subcommands (wrong arity)
+            assert_error "*wrong number of arguments for 'client|setname' command" {r client setname n1 n2}
+
+            set info [r info errorstats]
+            # The command name should be "CLIENT|SETNAME"
+            assert_match {*errorstat_ERR:count=1(CLIENT|SETNAME=1)*} $info
         }
 
         test {stats: eventloop metrics} {

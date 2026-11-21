@@ -45,6 +45,7 @@
 #include <string.h>
 #include <time.h>
 #include <errno.h>
+#include <limits.h>
 
 #include "zmalloc.h"
 #include "config.h"
@@ -150,8 +151,7 @@ void aeSetDontWait(aeEventLoop *eventLoop, int noWait) {
  * performed at all.
  *
  * Otherwise, AE_OK is returned and the operation is successful. */
-int aeResizeSetSize(aeEventLoop *eventLoop, int setsize) {
-    AE_LOCK(eventLoop);
+static int aeResizeSetSizeUnlocked(aeEventLoop *eventLoop, int setsize) {
     int ret = AE_OK;
     int i;
 
@@ -176,6 +176,12 @@ int aeResizeSetSize(aeEventLoop *eventLoop, int setsize) {
 err:
     ret = AE_ERR;
 done:
+    return ret;
+}
+
+int aeResizeSetSize(aeEventLoop *eventLoop, int setsize) {
+    AE_LOCK(eventLoop);
+    int ret = aeResizeSetSizeUnlocked(eventLoop, setsize);
     AE_UNLOCK(eventLoop);
     return ret;
 }
@@ -208,9 +214,21 @@ int aeCreateFileEvent(aeEventLoop *eventLoop, int fd, int mask, aeFileProc *proc
     AE_LOCK(eventLoop);
     int ret = AE_ERR;
 
-    if (fd >= eventLoop->setsize) {
+    if (fd < 0 || fd == INT_MAX) {
         errno = ERANGE;
         goto done;
+    }
+    if (fd >= eventLoop->setsize) {
+        /* Descriptor numbers can exceed the initial capacity even when the
+         * number of connections is below maxclients. Grow geometrically, but
+         * retry the exact size if a backend (such as select) limits capacity. */
+        int setsize = fd + 1;
+        if (setsize <= INT_MAX / 2) setsize *= 2;
+        if (aeResizeSetSizeUnlocked(eventLoop, setsize) == AE_ERR &&
+            aeResizeSetSizeUnlocked(eventLoop, fd + 1) == AE_ERR) {
+            errno = ERANGE;
+            goto done;
+        }
     }
     aeFileEvent *fe = &eventLoop->events[fd];
 
@@ -742,18 +760,25 @@ int aeActuateQoSEventLoopIfSupported(aeEventLoop *eventLoop, uint64_t qosPreempt
         return AE_ERR;
     }
 
-    aeFiredEvent *priority_fired = zmalloc(sizeof(aeFiredEvent) * eventLoop->setsize);
-    if (priority_fired == NULL) {
-        aeApiFree(priority_apidata);
-        return AE_ERR;
-    }
-
     /* Register priority_fd with NULL callback: priority_fd is only used to wake up the main loop's
      * multiplexer when high-priority traffic arrives. aeProcessEvents() checks for priority_fd and drains
      * priority_apidata directly before dispatching normal events, and explicitly skips callback
      * dispatch for priority_fd. */
     if (aeCreateFileEvent(eventLoop, priority_fd, AE_READABLE, NULL, NULL) == AE_ERR) {
-        zfree(priority_fired);
+        aeApiFree(priority_apidata);
+        return AE_ERR;
+    }
+
+    /* Registering the wakeup descriptor may have grown the main event loop.
+     * Size the priority polling state and result buffer to match it. */
+    if (aeApiResize(priority_apidata, eventLoop->setsize) == -1) {
+        aeDeleteFileEvent(eventLoop, priority_fd, AE_READABLE);
+        aeApiFree(priority_apidata);
+        return AE_ERR;
+    }
+    aeFiredEvent *priority_fired = zmalloc(sizeof(aeFiredEvent) * eventLoop->setsize);
+    if (priority_fired == NULL) {
+        aeDeleteFileEvent(eventLoop, priority_fd, AE_READABLE);
         aeApiFree(priority_apidata);
         return AE_ERR;
     }

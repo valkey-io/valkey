@@ -41,7 +41,7 @@ typedef struct aeApiState {
 
 static aeApiState *aeApiCreate(int setsize) {
     /* Just ensure we have enough room in the fd_set type. */
-    if (setsize >= FD_SETSIZE) return NULL;
+    if (setsize > FD_SETSIZE) return NULL;
 
     aeApiState *state = zmalloc(sizeof(aeApiState));
 
@@ -54,7 +54,7 @@ static aeApiState *aeApiCreate(int setsize) {
 static int aeApiResize(aeApiState *state, int setsize) {
     AE_NOTUSED(state);
     /* Just ensure we have enough room in the fd_set type. */
-    if (setsize >= FD_SETSIZE) return -1;
+    if (setsize > FD_SETSIZE) return -1;
     return 0;
 }
 

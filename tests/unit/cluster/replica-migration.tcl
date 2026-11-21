@@ -508,3 +508,161 @@ start_cluster 5 10 {tags {external:skip cluster} overrides {shutdown-timeout 0}}
         resume_process [srv -2 pid]
     }
 } ;# start_cluster
+
+# The number of NOREPLICAS error replies server j has sent.
+proc noreplicas_error_count {j} {
+    set stat [errorrstat NOREPLICAS [Rn $j]]
+    if {![regexp {count=(\d+)} $stat -> count]} { return 0 }
+    return $count
+}
+
+proc test_cluster_setslot_broadcast {} {
+    test "valkey-cli ignores NOREPLICAS error when broadcasting the last CLUSTER SETSLOT to a non-source primary" {
+        # Primary 3 owns only slot 0 (my_slot_allocation). Move it to primary 0.
+        # Server 5 is the replica of primary 1, which is neither the source
+        # nor the target, so only the broadcast SETSLOT NODE reaches primary
+        # 1. With server 5 paused, primary 1 does not get the ACK for it and
+        # replies NOREPLICAS after the 2 second timeout. The reshard must still
+        # succeed.
+        set source_id [R 3 CLUSTER MYID]
+        set target_id [R 0 CLUSTER MYID]
+        set addr "[srv 0 host]:[srv 0 port]"
+        set cmd [list $::VALKEY_CLI_BIN {*}[valkeycli_tls_config "./tests"] --cluster reshard $addr \
+            --cluster-from $source_id --cluster-to $target_id --cluster-slots 1]
+        set fd [open [concat [list |] $cmd [list 2>@1]] r+]
+        test_defer { catch {close $fd} }
+        fconfigure $fd -blocking 0 -buffering none
+
+        # valkey-cli reads every node, replicas included, before it prints the
+        # plan, so pause the replica only at the confirmation prompt, before
+        # the first SETSLOT.
+        set result ""
+        wait_for_condition 100 100 {
+            [string match "*Do you want to proceed*" [append result [read $fd]]]
+        } else {
+            fail "valkey-cli did not reach the reshard confirmation, output below:\n$result"
+        }
+        set noreplicas_before [noreplicas_error_count 1]
+        set replica_pid [s -5 process_id]
+        pause_process $replica_pid
+        puts $fd yes
+
+        # Keep the replica paused until valkey-cli exits.
+        wait_for_condition 300 100 {
+            [string length [append result [read $fd]]] >= 0 && [eof $fd]
+        } else {
+            fail "valkey-cli --cluster reshard did not exit"
+        }
+        resume_process $replica_pid
+        # On a nonblocking pipe, close returns 0 even when the child failed.
+        fconfigure $fd -blocking 1
+
+        set code [catch {close $fd} close_err]
+        if {$code != 0} {
+            set result "$result\n$close_err"
+        }
+        # The slot moves whatever valkey-cli reports: every node, including the
+        # primary that replied NOREPLICAS, ends up with slot 0 on the target.
+        # Check it first, so a failure below shows the error was spurious.
+        wait_for_condition 1000 50 {
+            [slot_owner_on_all_nodes 0] eq $target_id
+        } else {
+            fail "Slot 0 is not owned by the target on every node"
+        }
+        if {$code != 0} {
+            fail "valkey-cli --cluster reshard returns non-zero exit code, output below:\n$result"
+        }
+        # Primary 1 replied NOREPLICAS to the broadcast, exactly once.
+        assert_equal [expr {$noreplicas_before + 1}] [noreplicas_error_count 1]
+
+        wait_for_condition 1000 50 {
+            [cluster_config_consistent] eq 1
+        } else {
+            fail "Cluster configuration did not converge after the reshard"
+        }
+    }
+}
+
+# Returns the owner of the slot if every node agrees on it, or "" otherwise.
+proc slot_owner_on_all_nodes {slot} {
+    set owners {}
+    for {set j 0} {$j < [llength $::servers]} {incr j} {
+        set owner ""
+        foreach range [R $j CLUSTER SLOTS] {
+            if {[lindex $range 0] <= $slot && $slot <= [lindex $range 1]} {
+                set owner [lindex $range 2 2]
+            }
+        }
+        lappend owners $owner
+    }
+    if {[llength [lsort -unique $owners]] == 1} { return [lindex $owners 0] }
+    return ""
+}
+
+start_cluster 4 4 {tags {external:skip cluster} overrides {cluster-node-timeout 1000 cluster-migration-barrier 999}} {
+    test_cluster_setslot_broadcast
+} my_slot_allocation cluster_allocate_replicas ;# start_cluster
+
+proc test_cluster_setslot_replica_paused {side} {
+    test "valkey-cli fails the reshard when the $side's replica does not ACK CLUSTER SETSLOT" {
+        # Primary 3 owns only slot 0 (my_slot_allocation). Move it to primary 0.
+        # Server 4 is the replica of the target (0), server 7 the replica of
+        # the source (3). With the replica paused, its primary replies
+        # NOREPLICAS to the first SETSLOT it gets: IMPORTING on the target, or
+        # MIGRATING on the source. Unlike the broadcast to the other primaries,
+        # these steps must succeed for the slot to move, so valkey-cli must
+        # fail, and the slot must stay on the source.
+        set source_id [R 3 CLUSTER MYID]
+        set target_id [R 0 CLUSTER MYID]
+        set replica [expr {$side eq "target" ? 4 : 7}]
+        set addr "[srv 0 host]:[srv 0 port]"
+        set cmd [list $::VALKEY_CLI_BIN {*}[valkeycli_tls_config "./tests"] --cluster reshard $addr \
+            --cluster-from $source_id --cluster-to $target_id --cluster-slots 1]
+        set fd [open [concat [list |] $cmd [list 2>@1]] r+]
+        test_defer { catch {close $fd} }
+        fconfigure $fd -blocking 0 -buffering none
+
+        # valkey-cli reads every node, replicas included, before it prints the
+        # plan, so pause the replica only at the confirmation prompt, before
+        # the first SETSLOT.
+        set result ""
+        wait_for_condition 100 100 {
+            [string match "*Do you want to proceed*" [append result [read $fd]]]
+        } else {
+            fail "valkey-cli did not reach the reshard confirmation, output below:\n$result"
+        }
+        set replica_pid [s -$replica process_id]
+        pause_process $replica_pid
+        puts $fd yes
+
+        # Keep the replica paused until valkey-cli exits.
+        wait_for_condition 300 100 {
+            [string length [append result [read $fd]]] >= 0 && [eof $fd]
+        } else {
+            fail "valkey-cli --cluster reshard did not exit"
+        }
+        resume_process $replica_pid
+        # On a nonblocking pipe, close returns 0 even when the child failed.
+        fconfigure $fd -blocking 1
+        set code [catch {close $fd} close_err]
+
+        assert_equal 1 $code
+        assert_equal CHILDSTATUS [lindex $::errorCode 0]
+        assert_match {*NOREPLICAS*} $result
+
+        wait_for_condition 1000 50 {
+            [cluster_config_consistent] eq 1
+        } else {
+            fail "Cluster configuration did not converge after the failed reshard"
+        }
+        assert_equal $source_id [slot_owner_on_all_nodes 0]
+    }
+}
+
+start_cluster 4 4 {tags {external:skip cluster} overrides {cluster-node-timeout 1000 cluster-migration-barrier 999}} {
+    test_cluster_setslot_replica_paused target
+} my_slot_allocation cluster_allocate_replicas ;# start_cluster
+
+start_cluster 4 4 {tags {external:skip cluster} overrides {cluster-node-timeout 1000 cluster-migration-barrier 999}} {
+    test_cluster_setslot_replica_paused source
+} my_slot_allocation cluster_allocate_replicas ;# start_cluster

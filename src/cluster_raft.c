@@ -1927,12 +1927,16 @@ static void clusterRaftBroadcastAppendEntries(void) {
     dictReleaseIterator(di);
 }
 
-/* AE_ACK <term> <success> <last-log-index> */
-static void clusterRaftSendAppendEntriesResponse(clusterLink *link, uint64_t term, int success) {
+/* Send an AppendEntries response to the leader. Because we do not pair up AE
+ * calls and replies, we need to send additional info so the leader tracks
+ * progress accurately, namely the index that we have safely verified. This is
+ * not necessarily the last log entry, because it may be from a stale tail.
+ * Format: AE_ACK <term> <success> <verified-index> */
+static void clusterRaftSendAppendEntriesResponse(clusterLink *link, uint64_t term, uint64_t verified_index, int success) {
     long long offset = nodeIsReplica(myself) ? replicationGetReplicaOffset() : server.primary_repl_offset;
     sds msg = wireNewMsg("AE_ACK");
     msg = sdscatfmt(msg, " %U %i %U %I", (unsigned long long)term, success,
-                    (unsigned long long)raftLogLastIndex(), (long long)offset);
+                    (unsigned long long)verified_index, (long long)offset);
     msg = wireFinishMsg(msg);
     clusterRaftSendMsg(link, msg);
 }
@@ -1978,7 +1982,7 @@ static int clusterRaftProcessAppendEntries(clusterLink *link, int argc, sds *arg
     int entry_count = atoi(argv[6]);
 
     if (msg_term < rs->current_term) {
-        clusterRaftSendAppendEntriesResponse(link, rs->current_term, 0);
+        clusterRaftSendAppendEntriesResponse(link, rs->current_term, 0, 0);
         return 1;
     }
 
@@ -1993,7 +1997,7 @@ static int clusterRaftProcessAppendEntries(clusterLink *link, int argc, sds *arg
      * term >= 1, so 0 means we don't know the entry and never matches. */
     uint64_t local_prev_term = raftLogTermAt(prev_log_index);
     if (prev_log_index > 0 && (local_prev_term == 0 || local_prev_term != prev_log_term)) {
-        clusterRaftSendAppendEntriesResponse(link, rs->current_term, 0);
+        clusterRaftSendAppendEntriesResponse(link, rs->current_term, 0, 0);
         return 1;
     }
 
@@ -2049,11 +2053,15 @@ static int clusterRaftProcessAppendEntries(clusterLink *link, int argc, sds *arg
         return 0;
     }
 
-    // JL TODO: send the verified index (previous index + entries processed)
-
     /* Defer AE_ACK until after persistence in beforeSleep. This ensures
-     * entries are on stable storage before the leader counts our ACK. */
-    rs->todo_send_ae_ack = 1;
+     * entries are on stable storage before the leader counts our ACK. If we
+     * have no entries sent, we have verified our prev_log_index and term.
+     * Otherwise, we can verify up to the new index applied */
+    if (entry_line_count == 0) {
+        raftSetVerifiedIndexToAck(msg_term, prev_log_index);   
+    } else {
+        raftSetVerifiedIndexToAck(msg_term, new_index);
+    }
     return 1;
 }
 
@@ -2245,14 +2253,14 @@ static int clusterRaftProcessInstallSnapshot(clusterLink *link, int argc, sds *a
             serverLog(LL_WARNING, "Rejecting INSTALL_SNAPSHOT from %.40s: invalid node line: %s",
                       argv[1], config_lines[i]);
             dictRelease(seen);
-            clusterRaftSendAppendEntriesResponse(link, rs->current_term, 0);
+            clusterRaftSendAppendEntriesResponse(link, rs->current_term, 0, 0);
             return 1;
         }
     }
     if (!sender_included) {
         serverLog(LL_WARNING, "Rejecting INSTALL_SNAPSHOT from %.40s: the sender isn't included", argv[1]);
         dictRelease(seen);
-        clusterRaftSendAppendEntriesResponse(link, rs->current_term, 0);
+        clusterRaftSendAppendEntriesResponse(link, rs->current_term, 0, 0);
         return 1;
     }
 
@@ -3202,13 +3210,15 @@ static void clusterRaftBeforeSleep(bool blocked) {
         myself->repl_offset = replicationGetReplicaOffset();
     }
 
+    /* We need to send only a verified response
+     * If our term has been bumped, we should not send a verified ack from a past term */
     if (rs->todo_send_ae_ack) {
         rs->todo_send_ae_ack = 0;
         clusterNode *leader = clusterLookupNode(rs->leader, CLUSTER_NAMELEN);
         /* AE arrives on the inbound link (leader connects to us). */
         clusterLink *link = leader ? (leader->inbound_link ? leader->inbound_link : leader->link) : NULL;
         if (link) {
-            clusterRaftSendAppendEntriesResponse(link, rs->current_term, 1);
+            clusterRaftSendAppendEntriesResponse(link, rs->ae_ack_term, rs->ae_ack_index, 1);
         }
     }
 

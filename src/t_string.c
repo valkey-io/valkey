@@ -434,7 +434,18 @@ void getexCommand(client *c) {
 
 void getdelCommand(client *c) {
     initDeferredReplyBuffer(c);
-    if (getGenericCommand(c) == C_ERR) return;
+
+    /* GET: look up the key. If it does not exist, the null reply has already
+     * been added, so there is nothing to delete and we can skip the DEL. */
+    robj *o = lookupKeyReadOrReply(c, c->argv[1], shared.null[c->resp]);
+    if (o == NULL) {
+        commitDeferredReplyBuffer(c, 1);
+        return;
+    }
+    if (checkType(c, o, OBJ_STRING)) return;
+    addReplyBulk(c, o);
+
+    /* DEL: delete the key we just read. */
     if (dbSyncDelete(c->db, c->argv[1])) {
         /* Propagate as DEL command */
         rewriteClientCommandVector(c, 2, shared.del, c->argv[1]);
@@ -442,6 +453,7 @@ void getdelCommand(client *c) {
         notifyKeyspaceEvent(NOTIFY_GENERIC, "del", c->argv[1], c->db->id);
         server.dirty++;
     }
+
     commitDeferredReplyBuffer(c, 1);
 }
 

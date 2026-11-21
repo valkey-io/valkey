@@ -1,0 +1,41 @@
+name: Check Project Assignment
+
+on:
+  pull_request_target:
+    types: [opened, edited, reopened, synchronize]
+    branches:
+      - unstable
+
+permissions:
+  pull-requests: read
+
+jobs:
+  check-project:
+    if: github.repository == 'valkey-io/valkey'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check PR has an assigned project
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO_OWNER: ${{ github.repository_owner }}
+          REPO_NAME: ${{ github.event.repository.name }}
+        run: |
+          PROJECT_COUNT=$(gh api graphql -f query='
+            query($owner: String!, $repo: String!, $pr: Int!) {
+              repository(owner: $owner, name: $repo) {
+                pullRequest(number: $pr) {
+                  projectItems(first: 1) {
+                    totalCount
+                  }
+                }
+              }
+            }' -f owner="$REPO_OWNER" -f repo="$REPO_NAME" -F pr="$PR_NUMBER" \
+            --jq '.data.repository.pullRequest.projectItems.totalCount')
+
+          if [ "$PROJECT_COUNT" -eq 0 ]; then
+            echo "::error::This PR has no assigned project. Please add it to a project before merging."
+            exit 1
+          fi
+
+          echo "PR is assigned to $PROJECT_COUNT project(s)."

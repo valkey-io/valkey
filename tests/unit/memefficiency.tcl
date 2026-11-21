@@ -494,6 +494,200 @@ run_solo {defrag} {
         }
     }
 
+    # Active defrag scans path hash keys like any other key, but payload
+    # defragmentation of OBJ_PATH_HASH values is intentionally deferred (see
+    # defrag.c).  This test covers that gap: with path hash keys present in a
+    # fragmented keyspace and being mutated while active defrag runs, the
+    # keys must stay readable and consistent, and the digest and RDB
+    # serialization must not change.  It intentionally does NOT assert that
+    # the path hash payload itself gets defragmented, since that part is
+    # deferred.
+    proc test_path_hash {type} {
+        set title "Active Defrag path hash keys remain consistent while mutated: $type"
+        test $title {
+            set nstrings 4000
+            set npaths 1500
+            set val300 [string repeat A 300]
+            set val100 [string repeat B 100]
+
+            # Populate string keys interleaved with path hash keys,
+            # including one path whose field map is promoted past the
+            # listpack encoding.
+            set rd [valkey_deferring_client]
+            $rd client reply off
+            for {set j 0} {$j < $nstrings} {incr j} {
+                $rd set k$j $val300
+                if {$j % 1000 == 999} {client_reply_off_wait_for_server $rd}
+            }
+            for {set i 0} {$i < $npaths} {incr i} {
+                $rd phset ph-big "p:[format %04d $i]" fields 2 f "value:$i" g $val100
+                if {$i % 500 == 499} {client_reply_off_wait_for_server $rd}
+            }
+            for {set i 0} {$i < 600} {incr i} {
+                $rd phset ph-big deep fields 1 "field:$i" "deep:$i"
+                if {$i % 500 == 499} {client_reply_off_wait_for_server $rd}
+            }
+            $rd phmset ph-multi a fields 1 f one ab fields 1 f two abc fields 1 f three
+            $rd phmset ph-temp a fields 1 f one ab fields 1 f two
+            client_reply_off_wait_for_server $rd
+            $rd close
+
+            assert_equal [expr {$npaths + 1}] [r phpathcount ph-big]
+            assert_equal [list "value:7" $val100] [r phget ph-big p:0007 f g]
+            assert_equal 3 [r phpathcount ph-multi]
+            assert_equal 2 [r phpathcount ph-temp]
+
+            # Fragment the keyspace: free half of the string values and
+            # every fourth path hash path, interleaving the holes with
+            # survivors.
+            set rd [valkey_deferring_client]
+            $rd client reply off
+            for {set j 0} {$j < $nstrings} {incr j 2} {
+                $rd del k$j
+                if {$j % 1000 == 998} {client_reply_off_wait_for_server $rd}
+            }
+            for {set i 0} {$i < $npaths} {incr i 4} {
+                $rd phpathdel ph-big "p:[format %04d $i]"
+                if {$i % 500 == 0} {client_reply_off_wait_for_server $rd}
+            }
+            client_reply_off_wait_for_server $rd
+            $rd close
+
+            set survivors {}
+            set expected_paths {deep}
+            for {set i 0} {$i < $npaths} {incr i} {
+                if {$i % 4 != 0} {
+                    lappend survivors $i
+                    lappend expected_paths "p:[format %04d $i]"
+                }
+            }
+            assert_equal [llength $expected_paths] [r phpathcount ph-big]
+
+            # The dataset digest covers every path hash path, field, and
+            # value (pathHashTypeDigest), so it detects any corruption or
+            # change introduced while defrag runs.
+            set digest [debug_digest]
+            set hits_before [s active_defrag_hits]
+
+            # Defrag regardless of fragmentation, slowly, so the defrag
+            # cycles keep scanning while the keys are mutated below.
+            r config set active-defrag-threshold-lower 0
+            r config set active-defrag-ignore-bytes 1
+            r config set active-defrag-cycle-min 5
+            r config set active-defrag-cycle-max 5
+            set scans [expr {[s active_defrag_key_hits] + [s active_defrag_key_misses]}]
+            r config set activedefrag yes
+            # Require a complete scan pass, so every path hash key is
+            # visited by active defrag before and while it is being mutated.
+            wait_for_condition 300 100 {
+                [s active_defrag_key_hits] + [s active_defrag_key_misses] > $scans + [r dbsize]
+            } else {
+                fail "defrag did not complete a scan pass over the keyspace"
+            }
+
+            # Mutate the path hash keys while defrag keeps scanning.  Every
+            # mutation is content preserving: identical rewrites, or
+            # additions that are undone, so the final digest must be
+            # unchanged.
+            set rd [valkey_deferring_client]
+            $rd client reply off
+            set count 0
+            foreach i $survivors {
+                $rd phset ph-big "p:[format %04d $i]" fields 2 f "value:$i" g $val100
+                if {[incr count] % 500 == 0} {client_reply_off_wait_for_server $rd}
+            }
+            client_reply_off_wait_for_server $rd
+            assert_equal [list "value:9" $val100] [r phget ph-big p:0009 f g]
+            assert_equal {deep} [r phprefixes ph-big deepz count 1]
+
+            for {set i 0} {$i < $npaths} {incr i 4} {
+                # Re-add and re-delete a deleted path to churn the index.
+                $rd phset ph-big "p:[format %04d $i]" fields 1 f "value:$i"
+                $rd phpathdel ph-big "p:[format %04d $i]"
+                if {$i % 500 == 0} {client_reply_off_wait_for_server $rd}
+            }
+            client_reply_off_wait_for_server $rd
+            assert_equal [llength $expected_paths] [r phpathcount ph-big]
+
+            # Grow and shrink another tree with a temporary subtree.
+            for {set i 0} {$i < 200} {incr i} {
+                $rd phset ph-multi "temp:tmp:$i" fields 1 f "t:$i"
+            }
+            client_reply_off_wait_for_server $rd
+            assert_equal 1 [r phpathexists ph-multi temp:tmp:0]
+            assert_equal 203 [r phpathcount ph-multi]
+            assert_equal 200 [r phpathdel ph-multi temp:tmp: withsubpaths]
+            assert_equal 3 [r phpathcount ph-multi]
+
+            # Delete and re-create a field, and rewrite part of the
+            # promoted payload with identical values.
+            assert_equal 1 [r phdel ph-multi a f]
+            assert_equal [list {}] [r phget ph-multi a f]
+            assert_equal OK [r phset ph-multi a fields 1 f one]
+            for {set i 0} {$i < 600} {incr i 7} {
+                $rd phset ph-big deep fields 1 "field:$i" "deep:$i"
+            }
+            client_reply_off_wait_for_server $rd
+            $rd close
+
+            # Replace a whole path hash key while defrag may be mid-scan
+            # over the keyspace.
+            assert_equal 1 [r del ph-temp]
+            assert_equal OK [r phmset ph-temp a fields 1 f one ab fields 1 f two]
+            assert_equal 2 [r phpathcount ph-temp]
+
+            # Let defrag scan the mutated state and verify it really
+            # relocated allocations (the freed string values left holes),
+            # then stop defragging.
+            set scans [expr {[s active_defrag_key_hits] + [s active_defrag_key_misses]}]
+            wait_for_condition 300 100 {
+                [s active_defrag_key_hits] + [s active_defrag_key_misses] > $scans + [r dbsize]
+            } else {
+                fail "defrag did not scan the mutated keyspace"
+            }
+            assert_morethan [expr [s active_defrag_hits] - $hits_before] 0
+            r config set activedefrag no
+            after 120
+
+            # Nothing changed: the digest is insertion order independent and
+            # must be byte-for-byte identical to the pre-defrag digest.
+            assert_equal $digest [debug_digest]
+
+            # Saving an RDB iterates over all the data and pointers.
+            r save
+
+            # Full read verification of every surviving path and field.
+            assert_equal pathhash [r type ph-big]
+            assert_equal pathhash [r object encoding ph-big]
+            assert_equal [llength $expected_paths] [r phpathcount ph-big]
+            foreach i $survivors {
+                assert_equal [list "value:$i" $val100] [r phget ph-big "p:[format %04d $i]" f g]
+            }
+            set cursor 0
+            set fields {}
+            while 1 {
+                lassign [r phscan ph-big deep $cursor count 37] cursor entries
+                foreach {field value} $entries {dict set fields $field $value}
+                if {$cursor eq "0"} break
+            }
+            assert_equal 600 [dict size $fields]
+            assert_equal deep:0 [dict get $fields field:0]
+            assert_equal deep:599 [dict get $fields field:599]
+            set cursor 0
+            set paths {}
+            while 1 {
+                lassign [r phpathscan ph-big $cursor count 100] cursor page
+                lappend paths {*}$page
+                if {$cursor eq "0"} break
+            }
+            assert_equal [lsort $expected_paths] $paths
+            assert_equal {abc} [r phprefixes ph-multi abcd count 1]
+            assert_equal [list one] [r phget ph-multi a f]
+            assert_equal [list one] [r phget ph-temp a f]
+            assert_equal [list two] [r phget ph-temp ab f]
+        }
+    }
+
     proc test_big_zset {type score} {
         set title "Active Defrag big zset: $type $score-score"
         test $title {
@@ -729,6 +923,7 @@ run_solo {defrag} {
     lappend tests [list test_pubsub standalone $std_overrides]
     lappend tests [list test_tracking_table standalone $std_overrides]
     lappend tests [list test_defrag_later_type_change standalone $std_overrides]
+    lappend tests [list test_path_hash standalone $std_overrides]
 
     lappend tests [list test_main_dictionary cluster $std_overrides]
     lappend tests [list test_eval_scripts cluster $std_overrides]
@@ -741,6 +936,7 @@ run_solo {defrag} {
     lappend tests [list test_pubsub cluster $std_overrides]
     lappend tests [list test_tracking_table cluster $std_overrides]
     lappend tests [list test_defrag_later_type_change cluster $std_overrides]
+    lappend tests [list test_path_hash cluster $std_overrides]
 
     # set ::verbose 1
 

@@ -3217,7 +3217,7 @@ static void clusterRaftBeforeSleep(bool blocked) {
         clusterNode *leader = clusterLookupNode(rs->leader, CLUSTER_NAMELEN);
         /* AE arrives on the inbound link (leader connects to us). */
         clusterLink *link = leader ? (leader->inbound_link ? leader->inbound_link : leader->link) : NULL;
-        if (link) {
+        if (link && rs->ae_ack_term == rs->current_term) {
             clusterRaftSendAppendEntriesResponse(link, rs->ae_ack_term, rs->ae_ack_index, 1);
         }
     }

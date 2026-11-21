@@ -1931,7 +1931,7 @@ static void clusterRaftBroadcastAppendEntries(void) {
  * calls and replies, we need to send additional info so the leader tracks
  * progress accurately, namely the index that we have safely verified. This is
  * not necessarily the last log entry, because it may be from a stale tail.
- * Format: AE_ACK <term> <success> <verified-index> */
+ * Format: AE_ACK <term> <success> <verified-log-index> [<repl-offset>] */
 static void clusterRaftSendAppendEntriesResponse(clusterLink *link, uint64_t term, uint64_t verified_index, int success) {
     long long offset = nodeIsReplica(myself) ? replicationGetReplicaOffset() : server.primary_repl_offset;
     sds msg = wireNewMsg("AE_ACK");
@@ -2066,7 +2066,7 @@ static int clusterRaftProcessAppendEntries(clusterLink *link, int argc, sds *arg
 }
 
 static int clusterRaftProcessAppendEntriesResponse(clusterLink *link, int argc, sds *argv) {
-    /* argv: AE_ACK <term> <success> <last-log-index> [<repl-offset>] */
+    /* argv: AE_ACK <term> <success> <verified-log-index> [<repl-offset>] */
     if (argc < 4) return 1;
     serverLog(LL_DEBUG, "Received AE_ACK: term=%s success=%s last_index=%s from %.40s",
               argv[1], argv[2], argv[3], link->node ? link->node->name : "?");

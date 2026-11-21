@@ -330,7 +330,10 @@ void bgIteration_updateDbEntryPtr(dbEntry *old_entry, dbEntry *new_entry);
  *
  * For MULTI/EXEC - This function is called when hitting the EXEC - after all of the commands
  *                  have been queued.  This may block the EXEC, but will NOT block individual
- *                  commands as they are executed in the MULTI/EXEC block.
+ *                  commands as they are executed in the MULTI/EXEC block. If a queued script
+ *                  performs SWAPDB, or a queued SWAPDB remaps the destination database of a COPY
+ *                  or MOVE, a synchronous block may be performed (returning false) on the
+ *                  individual command.
  *
  * For LUA script - This function is first called for EVAL/EVALSHA.  It may block the script while
  *                  waiting on declared keys.  However, if the script accesses undeclared keys or

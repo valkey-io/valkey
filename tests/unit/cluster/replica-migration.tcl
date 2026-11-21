@@ -340,7 +340,7 @@ proc test_sub_replica {type} {
         }
 
         # Make sure server 7 got a sub-replica log.
-        verify_log_message -7 "*I'm a sub-replica!*" 0
+        verify_log_message_re -7 {I'm a sub-replica!|My primary .* became a replica} 0
 
         if {$type == "shutdown"} {
             # Shutdown primary 0.
@@ -367,11 +367,11 @@ proc test_sub_replica {type} {
         # The node may not be able to initiate an election in time due to
         # problems with cluster communication. If an election is initiated,
         # we make sure the offset of server 3 / 7 is 0.
-        if {[count_log_message -3 "Start of election"] != 0} {
-            verify_log_message -3 "*Start of election*offset 0*" 0
+        if {[count_log_message -3 "Start of election\\|scheduling failover"] != 0} {
+            verify_log_message_re -3 {(Start of election|scheduling failover).*offset 0} 0
         }
-        if {[count_log_message -7 "Start of election"] != 0} {
-            verify_log_message -7 "*Start of election*offset 0*" 0
+        if {[count_log_message -7 "Start of election\\|scheduling failover"] != 0} {
+            verify_log_message_re -7 {(Start of election|scheduling failover).*offset 0} 0
         }
 
         # Wait for the cluster to be ok.
@@ -415,11 +415,11 @@ proc test_sub_replica {type} {
     }
 }
 
-start_cluster 4 4 {tags {external:skip cluster cluster-raft:skip} overrides {cluster-node-timeout 1000 cluster-migration-barrier 999 shutdown-timeout 0}} {
+start_cluster 4 4 {tags {external:skip cluster} overrides {cluster-node-timeout 1000 cluster-migration-barrier 999 shutdown-timeout 0}} {
     test_sub_replica "shutdown"
 } my_slot_allocation cluster_allocate_replicas ;# start_cluster
 
-start_cluster 4 4 {tags {external:skip cluster cluster-raft:skip} overrides {cluster-node-timeout 1000 cluster-migration-barrier 999 shutdown-timeout 0}} {
+start_cluster 4 4 {tags {external:skip cluster} overrides {cluster-node-timeout 1000 cluster-migration-barrier 999 shutdown-timeout 0}} {
     test_sub_replica "sigstop"
 } my_slot_allocation cluster_allocate_replicas ;# start_cluster
 
@@ -469,11 +469,11 @@ start_cluster 4 4 {tags {external:skip cluster} overrides {cluster-node-timeout 
     test_cluster_setslot "gossip"
 } my_slot_allocation cluster_allocate_replicas ;# start_cluster
 
-start_cluster 4 4 {tags {external:skip cluster cluster-raft:skip} overrides {cluster-node-timeout 1000 cluster-migration-barrier 999}} {
+start_cluster 4 4 {tags {external:skip cluster} overrides {cluster-node-timeout 1000 cluster-migration-barrier 999}} {
     test_cluster_setslot "setslot"
 } my_slot_allocation cluster_allocate_replicas ;# start_cluster
 
-start_cluster 3 0 {tags {external:skip cluster cluster-raft:skip} overrides {cluster-node-timeout 1000 cluster-migration-barrier 999}} {
+start_cluster 3 0 {tags {external:skip cluster} overrides {cluster-node-timeout 1000 cluster-migration-barrier 999}} {
     test "Empty primary will check and delete the dirty slots" {
         R 2 config set cluster-allow-replica-migration no
 
@@ -535,16 +535,15 @@ test "Replica migration to orphaned primaries" {
 
 # Now test the migration to a primary which used to be a replica, after
 # a failover.
-start_cluster 5 10 {tags {external:skip cluster cluster-raft:skip} overrides {shutdown-timeout 0}} {
+start_cluster 5 10 {tags {external:skip cluster} overrides {shutdown-timeout 0}} {
     test "Primary #12 should get at least one migrated replica" {
         # Kill replica #7 of primary #2. Only replica left is #12 now"
         pause_process [srv -7 pid]
 
         # Killing primary node #2, #12 should failover
-        set current_epoch [CI 1 cluster_current_epoch]
         pause_process [srv -2 pid]
         wait_for_condition 1000 50 {
-            [CI 1 cluster_current_epoch] > $current_epoch
+            [s -12 role] eq {master}
         } else {
             fail "No failover detected"
         }
@@ -565,3 +564,38 @@ start_cluster 5 10 {tags {external:skip cluster cluster-raft:skip} overrides {sh
         resume_process [srv -2 pid]
     }
 } ;# start_cluster
+
+# R2 is an empty primary with replicas R3 and R4.
+proc empty_primary_slot_allocation {masters replicas} {
+    R 0 cluster addslotsrange 0 8191
+    R 1 cluster addslotsrange 8192 16383
+}
+
+proc empty_primary_replica_allocation {masters replicas} {
+    set r2_id [R 2 cluster myid]
+    R 3 cluster replicate $r2_id
+    R 4 cluster replicate $r2_id
+}
+
+start_cluster 3 2 {tags {external:skip cluster} overrides {cluster-node-timeout 1000}} {
+    test "Replicas follow an empty primary that becomes a replica" {
+        set addr "[srv 0 host]:[srv 0 port]"
+        R 2 cluster replicate [R 0 cluster myid]
+        wait_for_condition 1000 50 {
+            [get_my_primary_peer 2] eq $addr &&
+            [get_my_primary_peer 3] eq $addr &&
+            [get_my_primary_peer 4] eq $addr
+        } else {
+            fail "R2, R3 and R4 didn't all become replicas of R0"
+        }
+        set shard_id [R 0 cluster myshardid]
+        wait_for_condition 1000 50 {
+            [R 2 cluster myshardid] eq $shard_id &&
+            [R 3 cluster myshardid] eq $shard_id &&
+            [R 4 cluster myshardid] eq $shard_id
+        } else {
+            fail "R2, R3 and R4 aren't in R0's shard"
+        }
+        wait_for_cluster_propagation
+    }
+} empty_primary_slot_allocation empty_primary_replica_allocation ;# start_cluster

@@ -896,6 +896,21 @@ proc raft_next_ae_from {fd skip_prev} {
     return {}
 }
 
+# Ack AEs until an empty heartbeat, so no older AE is still queued.
+# Returns the leader's last applied index.
+proc raft_ack_until_idle {fd} {
+    set last [CI 0 cluster_raft_last_applied]
+    set fields {}
+    while {[lindex $fields 3] != $last || [lindex $fields 6] != 0} {
+        set reply [raft_recv $fd 5000]
+        if {[string match "AE *" $reply]} {
+            set fields [raft_ae_header $reply]
+            raft_reply_ae_ack $fd $reply 0
+        }
+    }
+    return $last
+}
+
 test "Raft proto: leader backs off next_index to the follower's last index on rejection" {
     start_server {overrides {cluster-enabled yes cluster-protocol raft cluster-node-timeout 1000}} {
         set fd [raft_join_fake_follower [string repeat "a" 40] [string repeat "b" 40]]
@@ -903,16 +918,7 @@ test "Raft proto: leader backs off next_index to the follower's last index on re
         for {set j 0} {$j < 20} {incr j} {
             R 0 config set cluster-announce-hostname "host-$j.com"
         }
-        set last [CI 0 cluster_raft_last_applied]
-        # Ack until an empty heartbeat, so no older AE is still queued.
-        set fields {}
-        while {[lindex $fields 3] != $last || [lindex $fields 6] != 0} {
-            set reply [raft_recv $fd 5000]
-            if {[string match "AE *" $reply]} {
-                set fields [raft_ae_header $reply]
-                raft_reply_ae_ack $fd $reply 0
-            }
-        }
+        set last [raft_ack_until_idle $fd]
 
         # Reject with a log 10 entries behind; the leader resends from there.
         set term [CI 0 cluster_raft_current_term]
@@ -934,15 +940,7 @@ test "Raft proto: successful AE_ACK continues catch-up without a heartbeat" {
     start_server {overrides {cluster-enabled yes cluster-protocol raft cluster-node-timeout 20000}} {
         set fd [raft_join_fake_follower [string repeat "a" 40] [string repeat "b" 40]]
 
-        set last [CI 0 cluster_raft_last_applied]
-        set fields {}
-        while {[lindex $fields 3] != $last || [lindex $fields 6] != 0} {
-            set reply [raft_recv $fd 5000]
-            if {[string match "AE *" $reply]} {
-                set fields [raft_ae_header $reply]
-                raft_reply_ae_ack $fd $reply 0
-            }
-        }
+        set last [raft_ack_until_idle $fd]
 
         R 0 MULTI
         for {set j 0} {$j < 10} {incr j} {
@@ -953,12 +951,19 @@ test "Raft proto: successful AE_ACK continues catch-up without a heartbeat" {
         set tail [expr {$new_last - $last}]
         assert_equal 10 $tail
 
-        # Drop the AE from the proposals themselves. The ACK below is
-        # what must trigger the resend, not a leftover queued message.
+        # Drain the pipelined AEs, then reject to put the leader back in
+        # probing mode, where sending doesn't advance next_index.
         while {![catch {raft_recv $fd 500}]} {}
-
         set term [CI 0 cluster_raft_current_term]
-        # Report progress without catching up, so the leader sends the rest.
+        raft_send $fd "AE_ACK $term 0 $last 0"
+        set reply [raft_recv $fd 1000]
+        assert_match "AE *" $reply
+        set fields [raft_ae_header $reply]
+        assert_equal $last [lindex $fields 3]
+        assert_equal $tail [lindex $fields 6]
+
+        # Report partial progress on the probe. The ACK must trigger the
+        # next AE, without waiting for a heartbeat or a new proposal.
         raft_send $fd "AE_ACK $term 1 [expr {$last + 1}] 0"
 
         # Heartbeat interval is election_timeout/10 (>= 2s here).
@@ -967,6 +972,35 @@ test "Raft proto: successful AE_ACK continues catch-up without a heartbeat" {
         set fields [raft_ae_header $reply]
         assert_equal [expr {$last + 1}] [lindex $fields 3]
         assert_equal [expr {$tail - 1}] [lindex $fields 6]
+
+        close $fd
+    }
+}
+
+test "Raft proto: leader doesn't resend entries in flight" {
+    # The leader drops a link without AE_ACKs after half the node timeout.
+    start_server {overrides {cluster-enabled yes cluster-protocol raft cluster-node-timeout 5000}} {
+        set fd [raft_join_fake_follower [string repeat "a" 40] [string repeat "b" 40]]
+        set last [raft_ack_until_idle $fd]
+
+        for {set i 0} {$i < 5} {incr i} {
+            R 0 MULTI
+            for {set j 0} {$j < 20} {incr j} {
+                R 0 config set cluster-announce-hostname "host-$i-$j.com"
+            }
+            R 0 EXEC
+        }
+
+        # Without AE_ACKs, each AE continues where the previous one ended.
+        set next [expr {$last + 1}]
+        while {$next <= $last + 100} {
+            set reply [raft_recv $fd 5000]
+            if {![string match "AE *" $reply]} continue
+            set fields [raft_ae_header $reply]
+            assert_equal [expr {$next - 1}] [lindex $fields 3]
+            incr next [lindex $fields 6]
+        }
+        assert_equal [list [expr {$last + 100}] 0] [raft_next_ae_from $fd -1]
 
         close $fd
     }
@@ -1084,6 +1118,64 @@ test "Raft proto: proposal waits for a new leader instead of expiring" {
 
         $rd close
         foreach fd [list $fd_a $fd_b $out_a $out_b] {close $fd}
+    }
+}
+
+# The shard id of a node, from CLUSTER SHARDS on server id.
+proc shard_of {id node_id} {
+    foreach shard [R $id cluster shards] {
+        foreach node [dict get $shard nodes] {
+            if {[dict get $node id] eq $node_id} {return [dict get $shard id]}
+        }
+    }
+}
+
+test "Raft proto: SET_REPLICA_OF follows a target that became a replica in its shard" {
+    # Entries applied in this order by a follower: the target X of a
+    # SET_REPLICA_OF fails over before it's applied, so the node replicates
+    # X's new primary. Later X moves to another shard, so a SET_REPLICA_OF
+    # with X's old shard is rejected.
+    start_server {overrides {cluster-enabled yes cluster-protocol raft cluster-node-timeout 1000}} {
+        set cport [expr {[srv 0 port] + 10000}]
+        set node_id [R 0 CLUSTER MYID]
+        set node_addr "127.0.0.1:[srv 0 port]@$cport,,tls-port=0,shard-id=[string repeat a 40]"
+        set a_id [string repeat "1" 40]
+        set a_addr "127.0.0.1:9991@19991,,tls-port=0,shard-id=[string repeat b 40]"
+        # Fake learners, each in its own shard: X in shard sx, and so on.
+        foreach n {x y z w q} id {7 8 6 5 4} sh {c d e f 9} port {9992 9993 9994 9995 9996} {
+            set ${n}_id [string repeat $id 40]
+            set s$n [string repeat $sh 40]
+            set ${n}_addr "127.0.0.1:$port@1$port,,tls-port=0,shard-id=[set s$n]"
+        }
+
+        set fd [raft_connect_fake_node 127.0.0.1 $cport $a_id $a_addr]
+        raft_send $fd "MEET cluster"
+        assert_match "ADD_ME*" [raft_recv $fd]
+        set entries [list \
+            "1 NODE_JOIN $a_id $a_addr voter" \
+            "1 NODE_JOIN $node_id $node_addr voter"]
+        foreach n {x y z w q} {
+            lappend entries "1 NODE_JOIN [set ${n}_id] [set ${n}_addr] learner"
+        }
+        lappend entries \
+            "1 SET_REPLICA_OF $y_id $sy 0 $x_id $sx 0" \
+            "1 FAILOVER $y_id $x_id $sx 1" \
+            "1 SET_REPLICA_OF $z_id $sz 0 $x_id $sx 2" \
+            "1 SET_REPLICA_OF $x_id $sx 3 $w_id $sw 0" \
+            "1 SET_REPLICA_OF $q_id $sq 0 $x_id $sx 4"
+        set n [llength $entries]
+        raft_send $fd "AE $a_id 1 0 0 $n $n\n[join $entries \n]"
+        assert_match "AE_ACK *" [raft_recv $fd]
+
+        # Z replicates Y, which took over from X in shard sx.
+        assert_equal $y_id [dict get [cluster_get_node_by_id 0 $z_id] slaveof]
+        assert_equal $sx [shard_of 0 $z_id]
+        # Q is still a primary in its own shard: X moved to shard sw.
+        assert_equal $w_id [dict get [cluster_get_node_by_id 0 $x_id] slaveof]
+        assert_equal $sw [shard_of 0 $x_id]
+        assert_equal - [dict get [cluster_get_node_by_id 0 $q_id] slaveof]
+        assert_equal $sq [shard_of 0 $q_id]
+        close $fd
     }
 }
 

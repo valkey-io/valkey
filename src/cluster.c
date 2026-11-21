@@ -76,6 +76,7 @@ void clusterInit(void) {
     server.cluster->importing_slots_from = dictCreate(&clusterSlotDictType);
     server.cluster->stat_cluster_links_buffer_limit_exceeded = 0;
     server.cluster->before_sleep_handle_slot_migration = 0;
+    server.cluster->replica_migration_in_progress = 0;
     server.cluster->protocol_data = NULL;
     memset(server.cluster->slots, 0, sizeof(server.cluster->slots));
     clusterCloseAllSlots();
@@ -554,6 +555,22 @@ void clusterSetPrimary(clusterNode *n, int closeSlots, int full_sync_required) {
     clusterUpdateSlotImportsOnOwnershipChange();
 }
 
+/* Completion of our replica migration. With gossip it takes effect
+ * immediately, with Raft when the change is committed. Until then, we
+ * don't decide to migrate again. */
+static void clusterReplicaMigrationDone(void *ctx, const char *error) {
+    UNUSED(ctx);
+    UNUSED(error);
+    server.cluster->replica_migration_in_progress = 0;
+}
+
+/* Start replicating target. Until it takes effect, don't decide on another
+ * replica migration. */
+static void clusterStartReplicaMigration(clusterNode *target) {
+    server.cluster->replica_migration_in_progress = 1;
+    clusterCurrentBus->setReplicaOf(target, NULL, clusterReplicaMigrationDone);
+}
+
 /* Called by cluster internals when a node has lost its last slot. Triggers
  * replica migration. */
 void clusterHandleLostLastSlot(clusterNode *target) {
@@ -564,7 +581,7 @@ void clusterHandleLostLastSlot(clusterNode *target) {
                   "Lost my last slot during slot migration. "
                   "Reconfiguring myself as a replica of %.40s (%s) in shard %.40s",
                   target->name, humanNodename(target), target->shard_id);
-        clusterCurrentBus->setReplicaOf(target, NULL, NULL);
+        clusterStartReplicaMigration(target);
     } else if (nodeIsPrimary(myself)) {
         serverLog(LL_NOTICE,
                   "My last slot was migrated to node %.40s (%s) "
@@ -677,7 +694,7 @@ static void clusterHandleReplicaMigration(int max_replicas) {
         !(server.cluster_module_flags & CLUSTER_MODULE_FLAG_NO_FAILOVER)) {
         serverLog(LL_NOTICE, "Migrating to orphaned primary %.40s (%s) in shard %.40s", target->name,
                   humanNodename(target), target->shard_id);
-        clusterCurrentBus->setReplicaOf(target, NULL, NULL);
+        clusterStartReplicaMigration(target);
     }
 }
 
@@ -686,6 +703,7 @@ static void clusterHandleReplicaMigration(int max_replicas) {
  * if conditions are met. */
 static void clusterCheckReplicaMigration(void) {
     if (!nodeIsReplica(myself) || !server.cluster_allow_replica_migration) return;
+    if (server.cluster->replica_migration_in_progress) return;
 
     int orphaned_primaries = 0, max_replicas = 0, this_replicas = 0;
     dictIterator *di = dictGetSafeIterator(server.cluster->nodes);

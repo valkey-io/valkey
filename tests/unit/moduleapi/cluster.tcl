@@ -266,6 +266,73 @@ start_cluster 2 2 [list config_lines $modules] {
         }
         close_replication_stream $repl
     }
+
+    test "Verify keys deletion and notification effects happened on atomic slot migration are replicated after CLUSTER FLUSHSLOT" {
+        # Slot 16383 ({6ZJ}) is owned by master2. Populate it, then move it to
+        # master1 with atomic slot migration. On the exporting side (master2)
+        # the cleanup must propagate a single CLUSTER FLUSHSLOT *before* the
+        # module notification side effects, so that anything the module writes
+        # during the cleanup survives on the replica.
+        $master2 set count_dels_1_{6ZJ} 1
+        $master2 set count_dels_2_{6ZJ} 1
+        set dels_before [$master2 keyspace.get_dels]
+        set before_deleted_len [$master2 llen before_deleted]
+        assert_equal $dels_before [$replica2 keyspace.get_dels]
+        wait_for_ofs_sync $master2 $replica2
+        assert_equal 2 [$replica2 cluster countkeysinslot 16383]
+
+        set repl [attach_to_replication_stream_on_connection -1]
+
+        $master2 cluster migrateslots slotsrange 16383 16383 node [$master1 cluster myid]
+        wait_for_condition 100 100 {
+            [$master1 cluster countkeysinslot 16383] eq 2 &&
+            [$master2 cluster countkeysinslot 16383] eq 0
+        } else {
+            fail "slot 16383 was not migrated to master1"
+        }
+        wait_for_cluster_propagation
+
+        # The module del callback ran once per key on the primary and its
+        # replicated side effect (keyspace.incr_dels) reached the replica.
+        wait_for_condition 50 100 {
+            [$master2 keyspace.get_dels] eq [expr {$dels_before + 2}]
+        } else {
+            fail "master did not run the del notification for the migrated keys"
+        }
+        wait_for_condition 50 100 {
+            [$replica2 keyspace.get_dels] eq [expr {$dels_before + 2}]
+        } else {
+            fail "replica did not increase del counter"
+        }
+
+        # Exactly one FLUSHSLOT, emitted ahead of the per-key notification side
+        # effects, and no per-key DEL/UNLINK in between. FLUSHSLOT itself is
+        # database agnostic (no SELECT before it); the SELECT is only emitted
+        # for the first db-bound command after our listener attached.
+        assert_replication_stream $repl {
+            {cluster FLUSHSLOT 16383 ASYNC}
+            {multi}
+            {select 0}
+            {keyspace.incr_dels}
+            {lpush before_deleted count_dels_*_{6ZJ}}
+            {exec}
+            {multi}
+            {keyspace.incr_dels}
+            {lpush before_deleted count_dels_*_{6ZJ}}
+            {exec}
+        }
+        close_replication_stream $repl
+
+        # The replica dropped the slot and kept the module's post-notification writes.
+        wait_for_condition 50 100 {
+            [$replica2 cluster countkeysinslot 16383] eq 0
+        } else {
+            fail "replica did not flush slot 16383"
+        }
+        $replica2 readonly
+        assert_equal [expr {$before_deleted_len + 2}] [$replica2 llen before_deleted]
+        assert_equal [expr {$before_deleted_len + 2}] [$master2 llen before_deleted]
+    }
 }
 
 set testmodule [file normalize tests/modules/basics.so]

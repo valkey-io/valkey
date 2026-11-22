@@ -17,14 +17,17 @@ class CreatedDbsTest : public ::testing::Test {
     int saved_dbnum;
     int *saved_ids;
     int saved_count;
+    int saved_capacity;
 
     void SetUp() override {
         saved_dbnum = server.dbnum;
         saved_ids = server.created_db_ids;
         saved_count = server.created_db_count;
+        saved_capacity = server.created_db_capacity;
         server.dbnum = 16;
-        server.created_db_ids = (int *)zcalloc(sizeof(int) * server.dbnum);
+        server.created_db_ids = NULL;
         server.created_db_count = 0;
+        server.created_db_capacity = 0;
     }
 
     void TearDown() override {
@@ -32,13 +35,14 @@ class CreatedDbsTest : public ::testing::Test {
         server.dbnum = saved_dbnum;
         server.created_db_ids = saved_ids;
         server.created_db_count = saved_count;
+        server.created_db_capacity = saved_capacity;
     }
 };
 
 /* The list is sorted by id whatever the order databases are created in. */
 TEST_F(CreatedDbsTest, SortedForAnyCreationOrder) {
     const int order[] = {5, 3, 9, 0, 15, 1};
-    for (int id : order) trackCreatedDatabase(id);
+    for (size_t i = 0; i < numElements(order); i++) trackCreatedDatabase(order[i]);
 
     const int expected[] = {0, 1, 3, 5, 9, 15};
     ASSERT_EQ(server.created_db_count, 6);

@@ -2136,6 +2136,7 @@ struct valkeyServer {
     int dbnum;                                   /* Total number of initialized DBs */
     int *created_db_ids;                         /* Ids of non-NULL server.db[] entries, ascending */
     int created_db_count;                        /* Number of entries in created_db_ids */
+    int created_db_capacity;                     /* Allocated length of created_db_ids */
     int supervised;                              /* 1 if supervised, 0 otherwise. */
     int supervised_mode;                         /* See SUPERVISED_* */
     int daemonize;                               /* True if running as a daemon */

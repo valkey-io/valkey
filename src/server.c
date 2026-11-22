@@ -3066,12 +3066,20 @@ serverDb *createDatabase(int id) {
 }
 
 /* Adds id to server.created_db_ids. Databases are never freed while the
- * server runs, so the list only grows. The list is sorted by id so that the
- * order of loops over it (for example eviction sampling and defrag stages) is
- * deterministic and does not depend on the order databases were created.
- * Only createDatabaseIfNeeded() calls this; it is exported for unit tests. */
+ * server runs, so the list only grows. Its array grows by doubling, up to
+ * dbnum entries, so memory follows the number of created databases. The list
+ * is sorted by id so that the order of loops over it (for example eviction
+ * sampling and defrag stages) is deterministic and does not depend on the
+ * order databases were created. Only createDatabaseIfNeeded() calls this; it
+ * is exported for unit tests. */
 void trackCreatedDatabase(int id) {
     serverAssert(server.created_db_count < server.dbnum);
+    if (server.created_db_count == server.created_db_capacity) {
+        int cap = server.created_db_capacity ? server.created_db_capacity * 2 : 16;
+        if (cap > server.dbnum) cap = server.dbnum;
+        server.created_db_ids = zrealloc(server.created_db_ids, sizeof(int) * cap);
+        server.created_db_capacity = cap;
+    }
     int pos = server.created_db_count;
     while (pos > 0 && server.created_db_ids[pos - 1] > id) {
         server.created_db_ids[pos] = server.created_db_ids[pos - 1];
@@ -3195,8 +3203,9 @@ void initServer(void) {
     }
     server.dbnum = server.cluster_enabled ? server.config_databases_cluster : server.config_databases;
     server.db = zcalloc(sizeof(serverDb *) * server.dbnum);
-    server.created_db_ids = zcalloc(sizeof(int) * server.dbnum);
+    server.created_db_ids = NULL;
     server.created_db_count = 0;
+    server.created_db_capacity = 0;
 
     /* Set object metadata size before creating any database key objects */
     if (server.forkless_infrastructure_enabled) {

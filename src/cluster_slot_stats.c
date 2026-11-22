@@ -52,6 +52,12 @@ typedef struct {
     int first_slot;
 } slotKeyCounts;
 
+/* Returns true when db holds keys. kvstoreSize() leaves out keys in importing
+ * slots, which countKeysInSlotForDb() counts, so they are added here. */
+static bool dbHasSlotKeys(serverDb *db) {
+    return kvstoreSize(db->keys) + kvstoreImportingSize(db->keys) > 0;
+}
+
 /* A contiguous range of slots, start..end inclusive. */
 typedef struct {
     int start;
@@ -65,7 +71,8 @@ typedef struct {
  * friendly. Iterating slots in the outer loop would read one entry from every
  * database's array per slot, a cache miss per database once several databases
  * hold keys. The assigned slots are grouped into contiguous ranges first, so
- * the inner loop has no ownership check. Databases without keys are skipped. */
+ * the inner loop has no ownership check. Databases without keys, including keys
+ * in importing slots, are skipped. */
 static void collectKeyCounts(slotKeyCounts *key_counts, const unsigned char *assigned_slots, int startslot, int endslot) {
     key_counts->first_slot = startslot;
     key_counts->counts = zcalloc(sizeof(unsigned int) * (endslot - startslot + 1));
@@ -87,7 +94,7 @@ static void collectKeyCounts(slotKeyCounts *key_counts, const unsigned char *ass
 
     serverDb *db;
     forEachCreatedDb(db) {
-        if (kvstoreSize(db->keys) == 0) continue;
+        if (!dbHasSlotKeys(db)) continue;
         for (int r = 0; r < num_ranges; r++) {
             const int range_start = ranges[r].start;
             const int range_end = ranges[r].end;
@@ -107,7 +114,7 @@ static bool multipleDbsHaveKeys(void) {
     int dbs_with_keys = 0;
     serverDb *db;
     forEachCreatedDb(db) {
-        if (kvstoreSize(db->keys) > 0 && ++dbs_with_keys > 1) return true;
+        if (dbHasSlotKeys(db) && ++dbs_with_keys > 1) return true;
     }
     return false;
 }

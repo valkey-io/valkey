@@ -448,6 +448,7 @@ static void clusterRaftStartElection(void);
 static clusterNode *clusterRaftSelectTransferTarget(void);
 static int clusterRaftRequestLeaderTransfer(void);
 static void clusterRaftMaybeSendTimeoutNow(void);
+static int clusterRaftLeaderHasFreshQuorum(mstime_t now);
 
 static void clusterRaftRandomizeElectionTimeout(void) {
     mstime_t base = server.cluster_node_timeout;
@@ -469,21 +470,6 @@ static void clusterRaftDropSlotMigrationPause(void) {
     slotExportTryUnpause();
 }
 
-/* Isolated leader: peer cluster-bus links are gone, so SLOT_CHANGE can
- * commit in the remaining quorum while we still ACK writes. */
-static bool clusterRaftLeaderHasQuorumLinks(void) {
-    int reachable = 1;
-    dictIterator *di = dictGetSafeIterator(server.cluster->nodes);
-    dictEntry *de;
-    while ((de = dictNext(di)) != NULL) {
-        clusterNode *node = dictGetVal(de);
-        if (node == myself || !nodeIsVoter(node)) continue;
-        if (node->link || node->inbound_link) reachable++;
-    }
-    dictReleaseIterator(di);
-    return reachable >= clusterRaftQuorum();
-}
-
 static int clusterRaftLogFullyApplied(void) {
     clusterRaftState *rs = RAFT_STATE();
     return rs->last_applied >= raftLogLastIndex();
@@ -498,7 +484,7 @@ static void clusterRaftSyncSlotMigrationPause(void) {
     if (!rs->slot_migration_pause && clusterIsAnySlotExportFailoverGranted()) rs->slot_migration_pause = 1;
     if (!rs->slot_migration_pause) return;
     if (!clusterIsAnySlotExportFailoverGranted() && rs->role == RAFT_ROLE_LEADER && clusterRaftLogFullyApplied() &&
-        clusterRaftLeaderHasQuorumLinks()) {
+        clusterRaftLeaderHasFreshQuorum(monotonicMs())) {
         clusterRaftDropSlotMigrationPause();
         return;
     }

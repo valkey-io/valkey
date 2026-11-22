@@ -63,6 +63,7 @@ struct fbtreeIndex {
     node *root;
     leafNode *leftmost_leaf;  /* Cache for fast-path prepend */
     leafNode *rightmost_leaf; /* Cache for fast-path append */
+    size_t num_leaves;        /* Leaf nodes currently allocated, maintained at every leaf birth and death */
 };
 
 /* Architecture-specific size assertions */

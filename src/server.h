@@ -1258,6 +1258,7 @@ typedef struct ClientFlags {
     uint64_t module_prevent_aof_prop : 1;  /* Module client do not want to propagate to AOF */
     uint64_t module_prevent_repl_prop : 1; /* Module client do not want to propagate to replica */
     uint64_t reexecuting_command : 1;      /* The client is re-executing the command. */
+    uint64_t processing_command : 1;       /* The client is inside processCommandAndResetClient(). */
     uint64_t replication_done : 1;         /* Indicate that replication has been done on the client */
     uint64_t authenticated : 1;            /* Indicate a client has successfully authenticated */
     uint64_t ever_authenticated : 1;       /* Indicate a client was ever successfully authenticated during it's lifetime */
@@ -1289,6 +1290,7 @@ typedef struct ClientFlags {
     uint64_t throttled : 1;                /* Currently queued in a throttler */
     uint64_t throttle_checked : 1;         /* Already passed throttle check for this command */
     uint64_t throttle_multi : 1;           /* Matches multiple throttlers */
+    uint64_t priority_source : 1;          /* Client connection originated from priority-subnets */
     uint64_t forkless_managed : 1;         /* Client is owned by forkless save. Written only on the
                                             * main thread. The save thread only reads it */
 } ClientFlags;
@@ -2034,7 +2036,6 @@ struct valkeyServer {
     long long stat_forkless_fallbacks_exclude_data;        /* Forkless fallbacks caused by data-excluding RDB requests. */
     long long stat_forkless_fallbacks_missing_inband_repl; /* Forkless fallbacks caused by missing inline replication support. */
     long long stat_forkless_fallbacks_compression;         /* Forkless fallbacks caused by stream compression. */
-    long long stat_forkless_fallbacks_old_rdb_version;     /* Forkless fallbacks caused by an old RDB version. */
     long long stat_rejected_conn;                          /* Clients rejected because of maxclients */
     long long stat_rejected_priority_conn;                 /* Prioritized clients rejected because of maxclients */
     long long stat_num_active_priority_clients;            /* Number of active prioritized clients */
@@ -2360,6 +2361,8 @@ struct valkeyServer {
      * the server->primary client structure. */
     char primary_replid[CONFIG_RUN_ID_SIZE + 1];   /* Primary PSYNC runid. */
     long long primary_initial_offset;              /* Primary PSYNC offset. */
+    bool primary_initial_offset_in_rdb;            /* Set on +FULLRESYNC <replid> -1: start offset
+                                                    * comes from the RDB repl-offset aux field. */
     int repl_replica_lazy_flush;                   /* Lazy FLUSHALL before loading DB? */
     monotime repl_full_sync_start_time;            /* Monotonic time when full sync started. */
     long long repl_full_sync_complete_duration_ms; /* Duration of the last successful full sync in ms. */
@@ -3428,6 +3431,7 @@ void *objectGetVal(const robj *o);
 sds objectGetKey(const robj *o);
 mstime_t objectGetExpire(const robj *o);
 uint8_t objectGetLFUFrequency(robj *o);
+uint8_t objectGetLFUFrequencyReadOnly(const robj *o);
 uint32_t objectGetLRUIdleSecs(robj *o);
 uint32_t objectGetIdleness(robj *o);
 
@@ -3883,6 +3887,8 @@ void freePathHashObject(robj *o);
 robj *pathHashTypeDup(robj *o);
 size_t pathHashTypeMemUsage(robj *o, size_t sample_size);
 void pathHashTypeDigest(unsigned char *digest, robj *o);
+void pathHashTypePauseRehashing(pathHashObject *path_hash);
+void pathHashTypeResumeRehashing(pathHashObject *path_hash);
 size_t pathHashTypeCount(robj *o, const unsigned char *prefix, size_t prefix_len);
 int rewritePathHashObject(rio *r, robj *key, robj *o);
 void phsetCommand(client *c);
@@ -4114,6 +4120,7 @@ int getChannelsFromCommand(struct serverCommand *cmd, robj **argv, int argc, get
 int doesCommandHaveChannelsWithFlags(struct serverCommand *cmd, int flags);
 void getKeysFreeResult(getKeysResult *result);
 int sintercardGetKeys(struct serverCommand *cmd, robj **argv, int argc, getKeysResult *result);
+int msetexGetKeys(struct serverCommand *cmd, robj **argv, int argc, getKeysResult *result);
 int zunionInterDiffGetKeys(struct serverCommand *cmd, robj **argv, int argc, getKeysResult *result);
 int zunionInterDiffStoreGetKeys(struct serverCommand *cmd, robj **argv, int argc, getKeysResult *result);
 int evalGetKeys(struct serverCommand *cmd, robj **argv, int argc, getKeysResult *result);

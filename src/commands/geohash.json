@@ -51,7 +51,16 @@
             "description": "An array where each element is the Geohash corresponding to each member name passed as argument to the command.",
             "type": "array",
             "items": {
-                "type": "string"
+                "oneOf": [
+                    {
+                        "description": "The Geohash corresponding to the member.",
+                        "type": "string"
+                    },
+                    {
+                        "description": "The member does not exist.",
+                        "type": "null"
+                    }
+                ]
             }
         }
     }

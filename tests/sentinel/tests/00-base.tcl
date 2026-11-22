@@ -69,6 +69,22 @@ test "SENTINEL PRIMARIES returns a list of monitored primaries" {
     assert_morethan_equal [llength [S 0 SENTINEL PRIMARIES]] 1
 }
 
+test "SENTINEL GET-PRIMARY-ADDR-BY-NAME returns null for an unknown primary" {
+    set protocols {2 3}
+    if {$::force_resp3} {
+        set protocols {3}
+    }
+    foreach resp $protocols {
+        set rd [valkey_client sentinel 0]
+        $rd hello $resp
+        $rd readraw 1
+        set expected [expr {$resp == 2 ? {*-1} : {_}}]
+        assert_equal $expected [$rd SENTINEL GET-PRIMARY-ADDR-BY-NAME nosuchprimary]
+        assert_equal $expected [$rd SENTINEL GET-MASTER-ADDR-BY-NAME nosuchprimary]
+        $rd close
+    }
+}
+
 test "SENTINEL SENTINELS returns a list of sentinel instances" {
      assert_morethan_equal [llength [S 0 SENTINEL SENTINELS mymaster]] 1
 }
@@ -152,6 +168,65 @@ test "The old primary eventually gets reconfigured as a slave" {
         fail "Old master not reconfigured as slave of new master"
     }
     reset_sentinel_user_acl $::user
+}
+
+test "Stale primary-down reports do not trigger another failover" {
+    # Reports from the first failover expire after five 500ms ask-periods.
+    after 3000
+    set primary [S 0 SENTINEL PRIMARY mymaster]
+    set primary_addr [S 0 SENTINEL GET-PRIMARY-ADDR-BY-NAME mymaster]
+    set primary_id [get_instance_id_by_port valkey [lindex $primary_addr 1]]
+    set log [open "sentinel_0/log.txt" r]
+    seek $log 0 end
+
+    # Only Sentinel 0 uses this user; the primary remains reachable by its peers.
+    foreach_valkey_id id {
+        R $id ACL SETUSER isolated-sentinel on >$::password +@all allchannels
+    }
+    S 0 SENTINEL SET mymaster auth-user isolated-sentinel auth-pass $::password
+    wait_for_sentinels_connect_servers
+    R $primary_id ACL SETUSER isolated-sentinel -ping
+    set errcode [catch {
+        wait_for_condition 100 100 {
+            [string match "*s_down*" [dict get [S 0 SENTINEL PRIMARY mymaster] flags]]
+        } else {
+            fail "The isolated Sentinel did not enter SDOWN"
+        }
+
+        # Allow even a delayed, incorrect second failover to start.
+        after [expr {2 * [dict get $primary failover-timeout]}]
+        set events [read $log]
+        assert_match "*+sdown master*" $events
+        assert_no_match "*+odown*" $events
+        assert_no_match "*+try-failover*" $events
+        foreach_sentinel_id id {
+            assert_equal $primary_addr [S $id SENTINEL GET-PRIMARY-ADDR-BY-NAME mymaster]
+            set info [S $id SENTINEL PRIMARY mymaster]
+            assert_equal [dict get $primary config-epoch] [dict get $info config-epoch]
+            if {$id == 0} {
+                assert_match "*s_down*" [dict get $info flags]
+            } else {
+                assert_equal master [dict get $info flags]
+            }
+        }
+    } error options]
+    close $log
+    S 0 SENTINEL SET mymaster auth-user "" auth-pass ""
+    foreach_valkey_id id {
+        R $id ACL DELUSER isolated-sentinel
+    }
+    wait_for_sentinels_connect_servers
+    if {$errcode} {
+        return -options $options $error
+    }
+
+    foreach_sentinel_id id {
+        wait_for_condition 100 100 {
+            ![string match "*master_down*" [S $id SENTINEL SENTINELS mymaster]]
+        } else {
+            fail "Sentinel $id still has stale primary-down reports"
+        }
+    }
 }
 
 test "ODOWN is not possible without N (quorum) Sentinels reports" {

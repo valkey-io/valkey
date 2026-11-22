@@ -589,6 +589,10 @@ start_server {tags {"maxmemory" "external:skip"}} {
         r del foo 
         r set foo a
         assert {[r object freq foo] == 5}
+        set rd [valkey_client]
+        test_defer [list $rd close]
+        $rd readraw 1
+        assert_equal [expr {$::force_resp3 ? {_} : {$-1}}] [$rd object freq missing]
     }
 }
 

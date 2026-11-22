@@ -45,8 +45,16 @@
             }
         ],
         "reply_schema": {
-            "description": "The number of references.",
-            "type": "integer"
+            "oneOf": [
+                {
+                    "description": "The number of references.",
+                    "type": "integer"
+                },
+                {
+                    "description": "The key does not exist.",
+                    "type": "null"
+                }
+            ]
         }
     }
 }

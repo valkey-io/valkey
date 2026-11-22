@@ -96,6 +96,142 @@ tags {"aof external:skip logreqres:skip"} {
         }
     }
 
+    # A crash or power loss can leave the end of an AOF filled with zero
+    # bytes: the file size was updated but the data blocks were not.
+    proc append_zeroes_to_aof {aof_file count} {
+        set fp [open $aof_file a]
+        fconfigure $fp -translation binary
+        puts -nonewline $fp [string repeat "\x00" $count]
+        close $fp
+    }
+
+    ## Complete commands followed by zero padding.
+    create_aof $aof_dirpath $aof_file {
+        append_to_aof [formatCommand set foo hello]
+        append_to_aof [formatCommand incr counter]
+    }
+    append_zeroes_to_aof $aof_file 10000
+
+    start_server_aof [list dir $server_path aof-load-truncated yes] {
+        test "Zero padded tail: Server should start if load-truncated is yes" {
+            assert_equal 1 [is_alive [srv pid]]
+            wait_for_log_messages 0 {"*AOF * ends with 10000 zero bytes*"} 0 10 1000
+        }
+
+        test "Zero padded tail: Keyspace is loaded and the padding is truncated" {
+            set client [valkey [srv host] [srv port] 0 $::tls]
+            wait_done_loading $client
+            assert_equal "hello" [$client get foo]
+            assert_equal "1" [$client get counter]
+            set valid_size [string length "[formatCommand set foo hello][formatCommand incr counter]"]
+            assert_equal $valid_size [file size [get_last_incr_aof_path $client]]
+            $client incr counter
+        }
+    }
+
+    # The truncated AOF, with the command appended after loading, is valid.
+    start_server_aof [list dir $server_path aof-load-truncated no] {
+        test "Zero padded tail: Appended command survives a restart" {
+            set client [valkey [srv host] [srv port] 0 $::tls]
+            wait_done_loading $client
+            assert_equal "hello" [$client get foo]
+            assert_equal "2" [$client get counter]
+        }
+    }
+
+    ## A partial timestamp annotation and zero padding can be read by one fgets.
+    create_aof $aof_dirpath $aof_file {
+        append_to_aof [formatCommand set foo hello]
+        append_to_aof "#TS:1628217470"
+    }
+    append_zeroes_to_aof $aof_file 100
+
+    start_server_aof [list dir $server_path aof-load-truncated yes] {
+        test "Zero padded tail: Partial timestamp annotation is truncated before appending" {
+            set client [valkey [srv host] [srv port] 0 $::tls]
+            wait_done_loading $client
+            assert_equal "hello" [$client get foo]
+            set valid_size [string length [formatCommand set foo hello]]
+            assert_equal $valid_size [file size [get_last_incr_aof_path $client]]
+            $client set bar world
+        }
+    }
+
+    start_server_aof [list dir $server_path aof-load-truncated no] {
+        test "Zero padded tail: Command after partial timestamp annotation survives a restart" {
+            set client [valkey [srv host] [srv port] 0 $::tls]
+            wait_done_loading $client
+            assert_equal "hello" [$client get foo]
+            assert_equal "world" [$client get bar]
+        }
+    }
+
+    ## A command cut off by the zero padding. Its last argument and CRLF are
+    ## all zero bytes, so it parses, but it must not be executed.
+    create_aof $aof_dirpath $aof_file {
+        append_to_aof [formatCommand set foo hello]
+        append_to_aof [formatCommand multi]
+        append_to_aof [formatCommand set bar world]
+        append_to_aof [formatCommand exec]
+        append_to_aof "*3\r\n\$3\r\nset\r\n\$3\r\nbaz\r\n\$5\r\n"
+    }
+    append_zeroes_to_aof $aof_file 4096
+
+    start_server_aof [list dir $server_path aof-load-truncated yes] {
+        test "Zero padded tail: Partial command before the padding is discarded" {
+            set client [valkey [srv host] [srv port] 0 $::tls]
+            wait_done_loading $client
+            assert_equal "hello" [$client get foo]
+            assert_equal "world" [$client get bar]
+            assert_equal 0 [$client exists baz]
+            assert_equal 2 [$client dbsize]
+        }
+    }
+
+    ## A MULTI block cut off by the zero padding is reverted.
+    create_aof $aof_dirpath $aof_file {
+        append_to_aof [formatCommand set foo hello]
+        append_to_aof [formatCommand multi]
+        append_to_aof [formatCommand set bar world]
+    }
+    append_zeroes_to_aof $aof_file 100
+
+    start_server_aof [list dir $server_path aof-load-truncated yes] {
+        test "Zero padded tail: Unfinished MULTI before the padding is discarded" {
+            set client [valkey [srv host] [srv port] 0 $::tls]
+            wait_done_loading $client
+            assert_equal "hello" [$client get foo]
+            assert_equal 0 [$client exists bar]
+        }
+    }
+
+    ## Without aof-load-truncated, zero padding is reported as a short read.
+    create_aof $aof_dirpath $aof_file {
+        append_to_aof [formatCommand set foo hello]
+    }
+    append_zeroes_to_aof $aof_file 4096
+
+    start_server_aof_ex [list dir $server_path aof-load-truncated no] [list wait_ready false] {
+        test "Zero padded tail: Server should have logged an error if load-truncated is no" {
+            wait_for_log_messages 0 {"*Unexpected end of file reading the append only file*"} 0 10 1000
+        }
+    }
+
+    ## Zero bytes followed by more data are corruption, not a truncated tail.
+    create_aof $aof_dirpath $aof_file {
+        append_to_aof [formatCommand set foo hello]
+    }
+    append_zeroes_to_aof $aof_file 100
+    set fp [open $aof_file a]
+    puts -nonewline $fp [formatCommand set bar world]
+    close $fp
+
+    start_server_aof_ex [list dir $server_path aof-load-truncated yes] [list wait_ready false] {
+        test "Zero bytes in the middle of the AOF: Server should have logged an error" {
+            wait_for_log_messages 0 {"*Bad file format reading the append only file*"} 0 10 1000
+        }
+    }
+
     ## Test that the server exits when the AOF contains a format error
     create_aof $aof_dirpath $aof_file {
         append_to_aof [formatCommand set foo hello]

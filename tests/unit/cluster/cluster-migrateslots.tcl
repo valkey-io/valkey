@@ -86,8 +86,8 @@ proc wait_for_migration {node_idx slot {maxtries 100}} {
     }
     wait_for_cluster_propagation
 
-    # Raft ownership can converge before the source finishes its export and
-    # cleans up the old keys. Wait for that job before checking source data.
+    # Raft ownership can converge before the source finishes its export.
+    # Wait for that job before checking migration completion.
     if {$::cluster_raft} {
         set jobname [get_job_name $node_idx $slot]
         for {set i 0} {$i < [llength $::servers]} {incr i} {

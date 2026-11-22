@@ -1860,6 +1860,10 @@ void clusterFeedSlotExportJobs(int dbid, robj **argv, int argc, int slot) {
         return;
     }
 
+    /* After losing the slot, cleanup writes must not reach the target,
+     * which may still be consuming the export stream. */
+    if (server.cluster->slots[slot] != server.cluster->myself) return;
+
     listIter li;
     listNode *ln;
     listRewind(server.cluster->slot_migration_jobs, &li);

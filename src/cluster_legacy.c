@@ -8444,7 +8444,11 @@ clusterNode *clusterNodeGetPrimary(clusterNode *node) {
     while (primary->replicaof != NULL) {
         primary = primary->replicaof;
         if (primary == node || --remaining_steps == 0) {
-            serverLog(LL_WARNING, "Cycle detected in the replicaof chain of node %.40s", node->name);
+            static mstime_t last_log_time_ms = 0;
+            if (server.mstime > last_log_time_ms + 10000) {
+                last_log_time_ms = server.mstime;
+                serverLog(LL_WARNING, "Cycle detected in the replicaof chain of node %.40s", node->name);
+            }
             return node;
         }
     }

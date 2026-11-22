@@ -215,6 +215,27 @@ int zset_walk(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     return VALKEYMODULE_OK;
 }
 
+/* ZSET.CLOSE_AFTER_CALL key src
+ *
+ * Opens 'key' for writing, overwrites it through ValkeyModule_Call with
+ * ZUNIONSTORE key 1 src (so the value type can change while the handle is
+ * open), then closes the handle. Replies with the key type seen before and
+ * after the Call.
+ */
+int zset_close_after_call(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    if (argc != 3) return ValkeyModule_WrongArity(ctx);
+    ValkeyModuleKey *key = ValkeyModule_OpenKey(ctx, argv[1], VALKEYMODULE_READ | VALKEYMODULE_WRITE);
+    int before = ValkeyModule_KeyType(key);
+    ValkeyModuleCallReply *reply = ValkeyModule_Call(ctx, "ZUNIONSTORE", "sls", argv[1], 1LL, argv[2]);
+    if (reply) ValkeyModule_FreeCallReply(reply);
+    int after = ValkeyModule_KeyType(key);
+    ValkeyModule_CloseKey(key);
+    ValkeyModule_ReplyWithArray(ctx, 2);
+    ValkeyModule_ReplyWithLongLong(ctx, before);
+    ValkeyModule_ReplyWithLongLong(ctx, after);
+    return VALKEYMODULE_OK;
+}
+
 int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     VALKEYMODULE_NOT_USED(argv);
     VALKEYMODULE_NOT_USED(argc);
@@ -247,6 +268,10 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
 
     if (ValkeyModule_CreateCommand(ctx, "zset.walk", zset_walk, "readonly",
                                   1, 1, 1) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
+
+    if (ValkeyModule_CreateCommand(ctx, "zset.close_after_call", zset_close_after_call, "write",
+                                  1, 2, 1) == VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
 
     return VALKEYMODULE_OK;

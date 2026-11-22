@@ -33,6 +33,7 @@ ssize_t compressionLz4DecompressFeed(streamDecompressor *decompressor,
                                      const uint8_t *input,
                                      size_t input_len,
                                      size_t *input_consumed);
+int compressionLz4DecompressorReset(streamDecompressor *decompressor);
 void compressionLz4DecompressorFree(streamDecompressor *decompressor);
 
 #endif /* COMPRESSION_LZ4_H */

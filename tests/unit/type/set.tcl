@@ -55,6 +55,26 @@ start_server {
         r memory usage myset
     }
 
+    test {SISMEMBER with XX parameter} {
+        r sadd myset foo bar baz
+
+        assert_equal 1 [r sismember myset foo]
+        assert_equal 1 [r sismember myset foo XX]
+        assert_equal 0 [r sismember myset nonexist]
+        assert_equal 0 [r sismember myset nonexist XX]
+
+        r del nonexistkey
+        assert_equal 0 [r sismember nonexistkey foo]
+        assert_equal -1 [r sismember nonexistkey foo XX]
+        
+        r set wrongtype "not a set"
+        assert_error WRONGTYPE* {r sismember wrongtype foo}
+        assert_error WRONGTYPE* {r sismember wrongtype foo XX}
+        
+        assert_error "ERR*syntax error*" {r sismember myset foo invalidparam}
+        assert_error "ERR*syntax error*" {r sismember myset foo XX invalidparam}
+    }
+
     test {SMISMEMBER SMEMBERS SCARD against non set} {
         r lpush mylist foo
         assert_error WRONGTYPE* {r smismember mylist bar}
@@ -849,6 +869,35 @@ foreach type {single multiple single_multiple} {
         assert_error {*value is out of range*} {r srandmember myset -9223372036854775808}
     } {}
 
+    test "SRANDMEMBER with <count> on case variants of one member" {
+        r del ordinary{t} variants{t}
+        set ordinary {}
+        set variants {}
+        # The variants are 10000 distinct spellings of "aaaaaaaaaaaaaa" in mixed case.
+        for {set i 0} {$i < 10000} {incr i} {
+            binary scan [binary format I $i] B32 bits
+            lappend ordinary x[format %013d $i]
+            lappend variants [string map {0 a 1 A} [string range $bits 18 end]]
+        }
+        r sadd ordinary{t} {*}$ordinary
+        r sadd variants{t} {*}$variants
+
+        # Take the fastest of several runs so one stall on a slow host does not fail the test.
+        foreach key {ordinary variants} {
+            set ${key}_usec {}
+            for {set j 0} {$j < 3} {incr j} {
+                r config resetstat
+                r srandmember $key{t} 5000
+                regexp {usec=(\d+)} [cmdrstat srandmember r] _ usec
+                lappend ${key}_usec $usec
+            }
+        }
+        set ordinary_usec [tcl::mathfunc::min {*}$ordinary_usec]
+        set variants_usec [tcl::mathfunc::min {*}$variants_usec]
+        r del ordinary{t} variants{t}
+        assert_lessthan $variants_usec [expr {10 * $ordinary_usec + 100000}]
+    } {} {needs:config-resetstat}
+
     # Make sure we can distinguish between an empty array and a null response
     r readraw 1
 
@@ -1233,3 +1282,24 @@ if {[lindex [r config get proto-max-bulk-len] 1] == 10000000000} {
 } ;# skip 32bit builds
 }
 } ;# run_solo
+
+start_server {config "minimal.conf" tags {"set" "external:skip"} overrides {io-threads 4 io-threads-always-active yes set-max-listpack-entries 0}} {
+    test "Set nested prefetch - SISMEMBER correctness with pipelined commands" {
+        for {set i 0} {$i < 200} {incr i} {
+            r sadd myset "member:$i"
+        }
+        assert_encoding hashtable myset
+
+        set rd [valkey_deferring_client]
+        for {set i 0} {$i < 50} {incr i} {
+            $rd sismember myset "member:$i"
+        }
+        $rd sismember myset "absent"
+        $rd flush
+        for {set i 0} {$i < 50} {incr i} {
+            assert_equal 1 [$rd read]
+        }
+        assert_equal 0 [$rd read]
+        $rd close
+    }
+}

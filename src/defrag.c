@@ -713,6 +713,8 @@ static void defragKey(defragKeysCtx *ctx, robj **elemref) {
         defragHash(ob);
     } else if (ob->type == OBJ_STREAM) {
         defragStream(ob);
+    } else if (ob->type == OBJ_PATH_HASH) {
+        /* Path hash payload defragmentation is intentionally deferred. */
     } else if (ob->type == OBJ_MODULE) {
         defragModule(db, ob);
     } else {
@@ -923,6 +925,9 @@ static doneStatus defragStageDbKeys(monotime endtime, void *target, void *privda
     static defragKeysCtx ctx; // STATIC - this persists
     if (endtime == 0) {
         ctx.dbid = dbid;
+        /* Drop keys left over from a previous DbKeys stage that was aborted. */
+        if (defrag_later) listEmpty(defrag_later);
+        defrag_later_cursor = 0;
         // Don't return yet.  Call the helper with endtime==0 below.
     }
     serverAssert(ctx.dbid == dbid);
@@ -968,7 +973,7 @@ static doneStatus defragLuaScripts(monotime endtime, void *target, void *privdat
     /* In case we are in the process of eval some script we do not want to replace the script being run
      * so we just bail out without really defragging here. */
     if (scriptIsRunning()) return DEFRAG_DONE;
-    activeDefragSdsDict(evalScriptsDict(), DEFRAG_SDS_DICT_VAL_LUA_SCRIPT);
+    activeDefragSdsDict(evalCtxScriptsDict(), DEFRAG_SDS_DICT_VAL_LUA_SCRIPT);
     return DEFRAG_DONE;
 }
 
@@ -976,9 +981,16 @@ static doneStatus defragLuaScripts(monotime endtime, void *target, void *privdat
 static doneStatus defragModuleGlobals(monotime endtime, void *target, void *privdata) {
     UNUSED(target);
     UNUSED(privdata);
-    if (endtime == 0) return DEFRAG_NOT_DONE; // required initialization
-    moduleDefragGlobals();
-    return DEFRAG_DONE;
+    return moduleDefragGlobals(endtime) ? DEFRAG_NOT_DONE : DEFRAG_DONE;
+}
+
+
+/* The tracking table's structure is private to tracking.c, which provides
+ * the actual incremental defrag walker; this stage just drives it. */
+static doneStatus defragStageTrackingTable(monotime endtime, void *target, void *privdata) {
+    UNUSED(target);
+    UNUSED(privdata);
+    return defragTrackingTable(endtime) ? DEFRAG_DONE : DEFRAG_NOT_DONE;
 }
 
 
@@ -1231,6 +1243,7 @@ static void beginDefragCycle(void) {
 
     addDefragStage(defragLuaScripts, NULL, NULL);
     addDefragStage(defragModuleGlobals, NULL, NULL);
+    addDefragStage(defragStageTrackingTable, NULL, NULL);
 
     defrag.current_stage = NULL;
     defrag.start_cycle = getMonotonicUs();

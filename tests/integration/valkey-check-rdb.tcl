@@ -3,11 +3,40 @@ proc get_function_code {args} {
 }
 
 tags {"check-rdb external:skip logreqres:skip"} {
+    # Legacy snapshot: "emptied" has no paths; "kept" contains p -> f = v.
+    test {RDB loading skips a legacy empty Path Hash} {
+        set server_path [tmpdir "server.rdb-path-hash-empty-key"]
+        exec cp tests/assets/path-hash-empty-key.rdb $server_path
+        start_server [list overrides [list dir $server_path dbfilename path-hash-empty-key.rdb]] {
+            r select 0
+            assert_equal 1 [r dbsize]
+            assert_equal 0 [r exists emptied]
+            assert_equal {v} [r phget kept p f]
+            verify_log_message 0 "*skipping empty key: emptied*" 0
+        }
+    }
+
+    foreach fixture {path-hash-empty-key.rdb corrupt_empty_keys.rdb} {
+        test "Check legacy empty containers: $fixture" {
+            set result [exec $::VALKEY_CHECK_RDB_BIN tests/assets/$fixture]
+            assert_match {*RDB looks OK!*} $result
+            set result [exec $::VALKEY_CHECK_RDB_BIN tests/assets/$fixture --stats --format info]
+            assert_match {*RDB looks OK!*} $result
+        }
+    }
+
     test {Check old valid RDB} {
         catch {
             exec $::VALKEY_CHECK_RDB_BIN tests/assets/encodings.rdb
         } result
         assert_match {*\[offset ???\] \\o/ RDB looks OK! \\o/*} $result
+    }
+
+    test {Check --output without a file name prints usage} {
+        catch {
+            exec $::VALKEY_CHECK_RDB_BIN tests/assets/encodings.rdb --output
+        } result
+        assert_match {Usage: *} $result
     }
 
     test {Check foreign RDB without unknown data} {
@@ -45,29 +74,45 @@ tags {"check-rdb external:skip logreqres:skip"} {
         assert_match {*\[offset ??\] Unknown object type 150 in RDB file with future version 987*} $result
         assert_no_match {*RDB looks OK*} $result
     }
+
+    test {Check RDB stats when the highest selected DB has no keys} {
+        # SELECTDB 2, EOF, zero checksum.
+        set rdb [tmpfile empty-last-db.rdb]
+        write_binary_file $rdb [binary format a9H* REDIS0009 fe02ff0000000000000000]
+        catch {
+            exec $::VALKEY_CHECK_RDB_BIN $rdb --stats --format info
+        } result
+        assert_match {*db.2.type.string.keys.total:0*} $result
+    }
 }
 
 tags {"check-rdb network external:skip logreqres:skip"} {
     start_server {} {
-        test "valkey-check-rdb validates the contents of an LZ4-compressed RDB" {
-            r config set rdbcompression lz4
-            with_cleanup {
-                r flushall
-                r set lz4:key [string repeat "payload " 200]
-                r save
+        foreach mode {lz4 zstd} {
+            test "valkey-check-rdb validates the contents of a [string toupper $mode]-compressed RDB" {
+                if {$mode eq "zstd" && ![config_value_supported r rdbcompression zstd]} {
+                    skip "zstd is not supported by this build"
+                }
 
-                set dump_rdb [file join [lindex [r config get dir] 1] dump.rdb]
-                set failed [catch {
-                    exec $::VALKEY_CHECK_RDB_BIN $dump_rdb --stats --format info
-                } result]
+                r config set rdbcompression $mode
+                with_cleanup {
+                    r flushall
+                    r set "$mode:key" [string repeat "payload " 200]
+                    r save
 
-                assert_equal 0 $failed
-                assert_match {*RDB looks OK!*} $result
-                assert_match {*\[logical offset *, physical offset *\] Logical RDB CRC64 skipped for streaming-compressed input*} $result
-                assert_match {*type.string.keys.total:1*} $result
-                assert_no_match {*Checksum OK*} $result
-            } {
-                catch {r config set rdbcompression yes}
+                    set dump_rdb [file join [lindex [r config get dir] 1] dump.rdb]
+                    set failed [catch {
+                        exec $::VALKEY_CHECK_RDB_BIN $dump_rdb --stats --format info
+                    } result]
+
+                    assert_equal 0 $failed
+                    assert_match {*RDB looks OK!*} $result
+                    assert_match {*\[logical offset *, physical offset *\] Logical RDB CRC64 skipped for streaming-compressed input*} $result
+                    assert_match {*type.string.keys.total:1*} $result
+                    assert_no_match {*Checksum OK*} $result
+                } {
+                    catch {r config set rdbcompression yes}
+                }
             }
         }
 
@@ -98,28 +143,63 @@ tags {"check-rdb network external:skip logreqres:skip"} {
             }
         }
 
-        test "valkey-check-rdb rejects a compressed RDB with a truncated frame trailer" {
+        foreach mode {lz4 zstd} {
+            test "valkey-check-rdb rejects a [string toupper $mode]-compressed RDB with a truncated frame trailer" {
+                if {$mode eq "zstd" && ![config_value_supported r rdbcompression zstd]} {
+                    skip "zstd is not supported by this build"
+                }
+
+                r config set rdbcompression $mode
+                set dir [lindex [r config get dir] 1]
+                set truncated_rdb [file join $dir "truncated-$mode-vcs.rdb"]
+                with_cleanup {
+                    r flushall
+                    r set "$mode:truncated" [string repeat "payload " 200]
+                    r save
+
+                    set dump_rdb [file join $dir dump.rdb]
+                    set data [read_binary_file $dump_rdb]
+                    write_binary_file $truncated_rdb [string range $data 0 end-1]
+
+                    set failed [catch {
+                        exec $::VALKEY_CHECK_RDB_BIN $truncated_rdb
+                    } result]
+
+                    assert_equal 1 $failed
+                    assert_match {*\[logical offset *, physical offset *\] Compressed RDB stream did not end cleanly*} $result
+                    assert_no_match {*RDB looks OK*} $result
+                } {
+                    file delete -force $truncated_rdb
+                    catch {r config set rdbcompression yes}
+                }
+            }
+        }
+
+        test "valkey-check-rdb rejects a compressed RDB truncated mid-frame" {
             r config set rdbcompression lz4
             set dir [lindex [r config get dir] 1]
-            set truncated_rdb [file join $dir truncated-vcs.rdb]
+            set midframe_rdb [file join $dir midframe-vcs.rdb]
             with_cleanup {
                 r flushall
-                r set lz4:truncated [string repeat "payload " 200]
+                r set lz4:midframe [string repeat "payload " 200]
                 r save
 
                 set dump_rdb [file join $dir dump.rdb]
                 set data [read_binary_file $dump_rdb]
-                write_binary_file $truncated_rdb [string range $data 0 end-1]
+                # Cut mid-frame rather than dropping the trailer: a file has no
+                # more bytes coming, so this is corruption.
+                set keep [expr {[string length $data] * 6 / 10}]
+                write_binary_file $midframe_rdb [string range $data 0 [expr {$keep - 1}]]
 
                 set failed [catch {
-                    exec $::VALKEY_CHECK_RDB_BIN $truncated_rdb
+                    exec $::VALKEY_CHECK_RDB_BIN $midframe_rdb
                 } result]
 
                 assert_equal 1 $failed
-                assert_match {*\[logical offset *, physical offset *\] Compressed RDB stream did not end cleanly*} $result
+                assert_match {*Corrupt compressed RDB stream*} $result
                 assert_no_match {*RDB looks OK*} $result
             } {
-                file delete -force $truncated_rdb
+                file delete -force $midframe_rdb
                 catch {r config set rdbcompression yes}
             }
         }

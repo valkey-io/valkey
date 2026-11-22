@@ -17,6 +17,22 @@ proc get_aof_manifest_path {r} {
     return [file join $dir $appenddirname $appendfilename$::manifest_suffix]
 }
 
+proc assert_aof_base_compression {r mode} {
+    set manifest_path [get_aof_manifest_path $r]
+    set base_name [get_cur_base_aof_name $manifest_path]
+    assert {$base_name ne ""}
+    set base_path [file join [file dirname $manifest_path] $base_name]
+
+    if {$mode eq "no"} {
+        assert_equal "VALKEY" [read_binary_file_prefix $base_path 6]
+    } else {
+        binary scan [read_binary_file_prefix $base_path 7] cu* envelope
+        set codec [dict get {lz4 1 zstd 2} $mode]
+        # V C S / envelope version / codec / reserved / RDB stream kind.
+        assert_equal [list 86 67 83 1 $codec 0 1] $envelope
+    }
+}
+
 tags {"repl external:skip"} {
 
     # Test 1: Disk-based full sync with aof-use-rdb-preamble yes should
@@ -159,6 +175,81 @@ tags {"repl external:skip"} {
                 assert_equal 80 [$replica dbsize]
                 for {set i 0} {$i < 80} {incr i} {
                     assert_equal "value:$i" [$replica get "key:$i"]
+                }
+            }
+        }
+    }
+
+    # The primary selects the disk-based sync codec, while the replica selects
+    # the on-disk format that is reused as its AOF base.
+    foreach case {
+        {no lz4}
+        {lz4 lz4}
+        {lz4 no}
+        {lz4 zstd}
+        {zstd zstd}
+    } {
+        lassign $case primary_mode replica_mode
+        test "Disk-based [string toupper $primary_mode] sync is reused using replica rdbcompression $replica_mode" {
+            start_server {overrides {repl-diskless-sync no save ""}} {
+                set primary [srv 0 client]
+                set primary_host [srv 0 host]
+                set primary_port [srv 0 port]
+
+                if {($primary_mode eq "zstd" || $replica_mode eq "zstd") &&
+                    ![config_value_supported $primary rdbcompression zstd]} {
+                    skip "zstd is not supported by this build"
+                }
+                $primary config set rdbcompression $primary_mode
+                $primary config set repl-compression $primary_mode
+                set expected_sync_compression [expr {$primary_mode eq "no" ? "none" : $primary_mode}]
+
+                set key_prefix "rcomp-$primary_mode-$replica_mode"
+                for {set i 0} {$i < 40} {incr i} {
+                    $primary set "$key_prefix-key:$i" "value:$i"
+                }
+                set primary_loglines [count_log_lines 0]
+
+                start_server {overrides {appendonly yes aof-use-rdb-preamble yes repl-diskless-sync no save ""}} {
+                    set replica [srv 0 client]
+                    set replica_log [srv 0 stdout]
+                    $replica config set rdbcompression $replica_mode
+                    $replica config set repl-compression $primary_mode
+
+                    $replica replicaof $primary_host $primary_port
+                    wait_for_sync $replica
+                    wait_for_log_messages -1 \
+                        [list "*Starting BGSAVE for SYNC with target: disk*compression: $expected_sync_compression*"] \
+                        $primary_loglines 50 100
+
+                    # The locally encoded sync RDB is reused without another rewrite.
+                    wait_for_condition 50 100 {
+                        [log_file_matches $replica_log "*Reused RDB file from primary sync as AOF base file*"]
+                    } else {
+                        fail "Expected sync RDB to be reused as the AOF base"
+                    }
+                    assert_equal 0 [count_message_lines $replica_log "Background append only file rewriting started"]
+                    assert_aof_base_compression $replica $replica_mode
+
+                    # Data is correct after loading the locally encoded sync RDB.
+                    assert_equal 40 [$replica dbsize]
+                    for {set i 0} {$i < 40} {incr i} {
+                        assert_equal "value:$i" [$replica get "$key_prefix-key:$i"]
+                    }
+
+                    # Add an incremental command, then verify both AOF files reload.
+                    $primary set "$key_prefix-after-sync" incremental
+                    wait_for_ofs_sync $primary $replica
+                    $replica replicaof no one
+                    restart_server 0 true false
+                    set replica [srv 0 client]
+                    wait_done_loading $replica
+
+                    assert_equal 41 [$replica dbsize]
+                    for {set i 0} {$i < 40} {incr i} {
+                        assert_equal "value:$i" [$replica get "$key_prefix-key:$i"]
+                    }
+                    assert_equal incremental [$replica get "$key_prefix-after-sync"]
                 }
             }
         }

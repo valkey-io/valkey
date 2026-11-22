@@ -64,7 +64,7 @@ proc exec_instance {type dirname cfgfile} {
 
     set errfile [file join $dirname err.txt]
     if {$::valgrind} {
-        set pid [exec valgrind --track-origins=yes --suppressions=../../../src/valgrind.sup --show-reachable=no --show-possibly-lost=no --leak-check=full ${program_path} $cfgfile 2>> $errfile &]
+        set pid [exec valgrind --fair-sched=try --track-origins=yes --suppressions=../../../src/valgrind.sup --show-reachable=no --show-possibly-lost=no --leak-check=full ${program_path} $cfgfile 2>> $errfile &]
     } else {
         set pid [exec ${program_path} $cfgfile 2>> $errfile &]
     }
@@ -113,6 +113,13 @@ proc spawn_instance {type base_port count {conf {}} {base_conf_file ""}} {
             puts $cfg [format "tls-ca-cert-file %s/../../tls/ca.crt" [pwd]]
         } else {
             puts $cfg "port $port"
+        }
+
+        if {$::valgrind} {
+            # The crash report's fast memory test scribbles over every anonymous
+            # mapping, including Valgrind's own, which buries a real crash under
+            # bogus memcheck errors and can abort Valgrind itself.
+            puts $cfg "crash-memcheck-enabled no"
         }
 
         if {$::io_threads} {
@@ -441,7 +448,7 @@ proc pause_on_error {} {
             }
         } elseif {$cmd eq {help}} {
             puts "ls                     List Sentinel and Valkey instances."
-            puts "show-sentinel-logs \[N\] Show latest N lines of logs."
+            puts "show-sentinel-logs \[N\] Show latest N lines of sentinel logs."
             puts "show-valkey-logs \[N\]    Show latest N lines of logs."
             puts "S <id> cmd ... arg     Call command in Sentinel <id>."
             puts "R <id> cmd ... arg     Call command in Valkey <id>."
@@ -462,7 +469,35 @@ proc test {descr code} {
     puts -nonewline "$ts> $descr: "
     flush stdout
 
-    if {[catch {set retval [uplevel 1 $code]} error]} {
+    # Tests can be nested; keep the outer test's cleanup state for it.
+    set prev_paused_pids $::test_paused_pids
+    set prev_deferred $::test_deferred
+    set prev_test $::cur_test
+    set ::test_paused_pids {}
+    set ::test_deferred {}
+    set ::cur_test $descr
+    set code_failed [catch {set retval [uplevel 1 $code]} error]
+    # ::errorInfo is only set for TCL_ERROR, not for return/break/continue.
+    if {$code_failed == 1} {
+        set saved_error_info $::errorInfo
+    }
+
+    # Run automatic cleanup regardless of the test outcome. A cleanup failure
+    # only fails a test that passed.
+    set cleanup_errors [uplevel 1 [list test_cleanup $code_failed]]
+    set ::test_paused_pids $prev_paused_pids
+    set ::test_deferred $prev_deferred
+    set ::cur_test $prev_test
+    if {$code_failed} {
+        if {[info exists saved_error_info]} {
+            set ::errorInfo $saved_error_info
+        }
+    } elseif {[llength $cleanup_errors]} {
+        set code_failed 1
+        set error "assertion:[join $cleanup_errors "\n"]"
+    }
+
+    if {$code_failed} {
         incr ::failed
         if {[string match "assertion:*" $error]} {
             set msg [string range $error 10 end]

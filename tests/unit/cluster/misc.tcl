@@ -40,6 +40,36 @@ start_cluster 1 1 {tags {external:skip cluster}} {
         assert_error {CROSSSLOT *} {r exec}
     }
 
+    test {Conditional EXEC rejects cross-slot condition keys} {
+        set condition1 "{condition1}key"
+        set condition2 "{condition2}key"
+        set destination "{condition1}destination"
+        assert {[R 0 cluster keyslot $condition1] != [R 0 cluster keyslot $condition2]}
+
+        R 0 del $condition1
+        R 0 del $condition2
+        R 0 del $destination
+        R 0 set $condition1 value
+        R 0 multi
+        R 0 set $destination should-not-execute
+        assert_error {CROSSSLOT Keys*} {R 0 exec ifeq $condition1 value nx $condition2}
+        assert_equal 0 [R 0 exists $destination]
+    }
+
+    test {Conditional EXEC rejects a queued key in a different slot} {
+        set condition "{condition}key"
+        set destination "{destination}key"
+        assert {[R 0 cluster keyslot $condition] != [R 0 cluster keyslot $destination]}
+
+        R 0 del $condition
+        R 0 del $destination
+        R 0 set $condition value
+        R 0 multi
+        R 0 set $destination should-not-execute
+        assert_error {CROSSSLOT Keys*} {R 0 exec ifeq $condition value}
+        assert_equal 0 [R 0 exists $destination]
+    }
+
     # Regression tests for WATCHed keys that hash to a different slot than the transaction's commands. EXEC
     # committed such a transaction even when the WATCHed key had expired or had been removed.
     test {WATCHed key in another slot that expired aborts EXEC} {
@@ -51,15 +81,23 @@ start_cluster 1 1 {tags {external:skip cluster}} {
         # the key having expired can abort the transaction.
         R 0 debug set-active-expire 0
         R 0 del $transaction_key
-        R 0 set $watched_key alive px 50
-        R 0 watch $watched_key
-        set keys_before [R 0 dbsize]
-        after 100
-        assert_equal $keys_before [R 0 dbsize]
 
-        R 0 multi
-        R 0 set $transaction_key committed
-        set reply [R 0 exec]
+        # Retry if timing issues occur on slow CI runners
+        for {set j 0} {$j < 10} {incr j} {
+            R 0 del $transaction_key
+            R 0 set $watched_key alive px 100
+            R 0 watch $watched_key
+            set keys_before [R 0 dbsize]
+            after 101
+            assert_equal $keys_before [R 0 dbsize]
+
+            R 0 multi
+            R 0 set $transaction_key committed
+            set reply [R 0 exec]
+            if {$reply eq {}} break
+        }
+        if {$::verbose} { puts "WATCHed key in another slot that expired aborts EXEC attempts: $j" }
+
         R 0 debug set-active-expire 1
 
         assert_equal {} $reply
@@ -103,6 +141,130 @@ start_cluster 1 1 {tags {external:skip cluster}} {
     }
 }
 
+start_cluster 2 0 {tags {external:skip cluster}} {
+    test {EXEC with conditions without MULTI returns EXEC without MULTI, not MOVED or CROSSSLOT} {
+        set remote_key key_for_other_node
+        while {![catch {R 0 get $remote_key} err] || ![string match {MOVED *} $err]} {
+            append remote_key x
+        }
+
+        set slotA "{slotA}key"
+        set slotB "{slotB}key"
+        assert {[R 0 cluster keyslot $slotA] != [R 0 cluster keyslot $slotB]}
+        assert_error {*EXEC without MULTI*} {R 0 exec ifeq $remote_key val}
+        assert_error {*EXEC without MULTI*} {R 0 exec ifeq $slotA val1 ifeq $slotB val2}
+    }
+
+    test {Queue-time MOVED followed by EXEC with remote condition returns EXECABORT} {
+        set other_key key_for_other_node
+        while {![catch {R 0 get $other_key} err] || ![string match {MOVED *} $err]} {
+            append other_key x
+        }
+
+        R 0 multi
+        assert_error {MOVED *} {R 0 set $other_key val}
+        assert_error {EXECABORT*previous errors*} {R 0 exec ifeq $other_key val}
+    }
+
+    test {Keyless queued commands with remote condition key on EXEC returns MOVED} {
+        set other_key key_for_other_node
+        while {![catch {R 0 get $other_key} err] || ![string match {MOVED *} $err]} {
+            append other_key x
+        }
+
+        R 0 multi
+        assert_equal {QUEUED} [R 0 dbsize]
+        assert_error {MOVED *} {R 0 exec ifeq $other_key val}
+        assert_equal {PONG} [R 0 ping]
+    }
+
+    # MSETEX key positions are counted pairs, so cluster routing needs msetexGetKeys.
+    # Without it the command looks keyless and a non-owner executes the write.
+    test {MSETEX cluster key routing} {
+        set remote remotekey
+        while {![catch {R 0 exists $remote}]} {
+            append remote x
+        }
+        if {[catch {R 1 exists $remote} err]} {
+            fail "node 1 should own $remote ($err)"
+        }
+
+        set remote_slot [R 0 cluster keyslot $remote]
+        set remote_before [R 0 cluster countkeysinslot $remote_slot]
+        assert_error {MOVED *} {R 0 msetex 1 $remote hello}
+        assert_equal $remote_before [R 0 cluster countkeysinslot $remote_slot]
+        assert_equal 1 [R 1 msetex 1 $remote hello]
+        assert_equal hello [R 1 get $remote]
+        assert_equal $remote_before [R 0 cluster countkeysinslot $remote_slot]
+        R 1 del $remote
+
+        set cross_a "{slotA}a"
+        set cross_b "{slotB}b"
+        assert {[R 0 cluster keyslot $cross_a] != [R 0 cluster keyslot $cross_b]}
+        set slot_a [R 0 cluster keyslot $cross_a]
+        set slot_b [R 0 cluster keyslot $cross_b]
+        set before_a0 [R 0 cluster countkeysinslot $slot_a]
+        set before_b0 [R 0 cluster countkeysinslot $slot_b]
+        set before_a1 [R 1 cluster countkeysinslot $slot_a]
+        set before_b1 [R 1 cluster countkeysinslot $slot_b]
+        assert_error {CROSSSLOT Keys*} {R 0 msetex 2 $cross_a hello $cross_b world}
+        assert_equal $before_a0 [R 0 cluster countkeysinslot $slot_a]
+        assert_equal $before_b0 [R 0 cluster countkeysinslot $slot_b]
+        assert_equal $before_a1 [R 1 cluster countkeysinslot $slot_a]
+        assert_equal $before_b1 [R 1 cluster countkeysinslot $slot_b]
+
+        set k1 "{msetex}a"
+        set k2 "{msetex}b"
+        assert {[R 0 cluster keyslot $k1] == [R 0 cluster keyslot $k2]}
+        set owner 0
+        if {[catch {R 0 exists $k1}]} {set owner 1}
+        set other [expr {$owner ? 0 : 1}]
+        set same_slot [R 0 cluster keyslot $k1]
+        assert_equal 1 [R $owner msetex 2 $k1 hello $k2 world]
+        assert_equal hello [R $owner get $k1]
+        assert_equal world [R $owner get $k2]
+        assert_equal 0 [R $other cluster countkeysinslot $same_slot]
+
+        assert_equal [list $k1 $k2] [R $owner command getkeys msetex 2 $k1 v1 $k2 v2 ex 10]
+        assert_error {MOVED *} {R $other msetex 1 $k1 hello EX 60}
+        assert_equal hello [R $owner get $k1]
+        assert_equal 1 [R $owner msetex 1 $k1 hello2 EX 60]
+        assert_morethan [R $owner pttl $k1] 0
+
+        # 257 keys is past the inline getKeys buffer (MAX_KEYS_BUFFER 256).
+        set args [list 257]
+        for {set i 0} {$i < 257} {incr i} {
+            lappend args "{msetex}k$i" "v$i"
+        }
+        assert_equal 1 [R $owner msetex {*}$args]
+        assert_equal v0 [R $owner get "{msetex}k0"]
+        assert_equal v256 [R $owner get "{msetex}k256"]
+        assert_equal 0 [R $other cluster countkeysinslot $same_slot]
+
+        R 0 multi
+        assert_error {MOVED *} {R 0 msetex 1 $remote gone}
+        assert_error {EXECABORT*} {R 0 exec}
+        assert_equal 0 [R 0 cluster countkeysinslot $remote_slot]
+        assert_equal 0 [R 1 exists $remote]
+
+        R 0 multi
+        assert_error {CROSSSLOT Keys*} {R 0 msetex 2 $cross_a hello $cross_b world}
+        assert_error {EXECABORT*} {R 0 exec}
+
+        R $owner multi
+        assert_equal QUEUED [R $owner msetex 2 $k1 q1 $k2 q2]
+        assert_equal {1} [R $owner exec]
+        assert_equal q1 [R $owner get $k1]
+        assert_equal q2 [R $owner get $k2]
+
+        set delargs [list $k1 $k2]
+        for {set i 0} {$i < 257} {incr i} {
+            lappend delargs "{msetex}k$i"
+        }
+        R $owner del {*}$delargs
+    }
+}
+
 # Get the path to the cluster config file.
 proc get_nodes_conf_path {srv_idx} {
     set dir [lindex [R $srv_idx config get dir] 1]
@@ -115,14 +277,42 @@ proc get_nodes_conf_path {srv_idx} {
 # failure and it will cause cluster config file save to fail at the rename.
 proc create_nodes_conf_folder {srv_idx} {
     set cluster_conf_path [get_nodes_conf_path $srv_idx]
-    if {[file exists $cluster_conf_path]} { exec rm -rf $cluster_conf_path }
-    exec mkdir -p $cluster_conf_path
+    # Retry: a background config save can recreate nodes.conf between the rm and the mkdir.
+    wait_for_condition 50 100 {
+        ![catch {exec rm -rf $cluster_conf_path; exec mkdir -p $cluster_conf_path}]
+    } else {
+        fail "Could not create folder $cluster_conf_path"
+    }
 }
 
 # Remove the folder (or nodes.conf) that we created from create_nodes_conf_folder.
 proc remove_nodes_conf_folder {srv_idx} {
     set cluster_conf_path [get_nodes_conf_path $srv_idx]
     exec rm -rf $cluster_conf_path
+}
+
+proc file_inode {path} {
+    file stat $path st
+    return $st(ino)
+}
+
+# The temp files a save leaves behind, if any. A save writes one and renames it
+# over the cluster config file, so none should survive a completed save.
+proc leftover_nodes_conf_tmp_files {srv_idx} {
+    return [glob -nocomplain "[get_nodes_conf_path $srv_idx].tmp-*"]
+}
+
+# Wait until node srv_idx has no temp files left. A drain does not stop new
+# saves: cluster bus messages can start one right after it, and that save's
+# temp file exists until its rename fails and it deletes the file. So drain
+# and check again a few times. A temp file that is never deleted still fails.
+proc wait_for_no_nodes_conf_tmp_files {srv_idx} {
+    wait_for_condition 10 100 {
+        [R $srv_idx debug bio-drain BIO_CLUSTER_SAVE] eq {OK} &&
+        [leftover_nodes_conf_tmp_files $srv_idx] eq {}
+    } else {
+        fail "Node $srv_idx left temp files: [leftover_nodes_conf_tmp_files $srv_idx]"
+    }
 }
 
 start_cluster 1 1 {tags {external:skip cluster} overrides {cluster-config-save-behavior sync}} {
@@ -200,6 +390,12 @@ start_cluster 1 1 {tags {external:skip cluster} overrides {cluster-config-save-b
         assert_morethan_equal [count_log_message -1 "Could not rename tmp cluster config file"] 2
         assert_equal [count_log_message -1 "Cluster config updated even though writing the cluster config file to disk failed"] 1
 
+        # A node whose renames keep failing must not accumulate temp files. This
+        # holds before this commit too; it is here to keep the invariant from
+        # regressing as the save path is reordered.
+        wait_for_no_nodes_conf_tmp_files 0
+        wait_for_no_nodes_conf_tmp_files 1
+
         # Check the info field is err.
         assert_equal "err" [getInfoProperty [R 0 cluster info] cluster_config_save_status]
         assert_equal "err" [getInfoProperty [R 1 cluster info] cluster_config_save_status]
@@ -248,6 +444,45 @@ start_cluster 1 1 {tags {external:skip cluster} overrides {cluster-config-save-b
         # cluster_config_last_save_time must have advanced after a successful save.
         assert_morethan_equal [getInfoProperty [R 0 cluster info] cluster_config_last_save_time] $last_save_time_0
         assert_morethan_equal [getInfoProperty [R 1 cluster info] cluster_config_last_save_time] $last_save_time_1
+    }
+}
+
+start_server {tags {external:skip cluster singledb} overrides {cluster-enabled yes}} {
+    test {nodes.conf stays locked after the config is saved} {
+        set dir [lindex [r config get dir] 1]
+        set cluster_conf [lindex [r config get cluster-config-file] 1]
+        set conf_path [file join $dir $cluster_conf]
+
+        # Every save publishes nodes.conf with rename(), which puts a new inode
+        # under the name. Force one, then confirm the running node still holds
+        # the lock that stops a second node from using the same file.
+        set inode_before [file_inode $conf_path]
+        assert_equal {OK} [r cluster saveconfig]
+        wait_for_condition 50 100 {
+            [file_inode $conf_path] != $inode_before
+        } else {
+            fail "the save did not replace $cluster_conf"
+        }
+
+        # flock() does not exist on Solaris, so clusterLockConfig() does not lock
+        # at all there and a second node is expected to start.
+        if {$::tcl_platform(os) ne "SunOS"} {
+            set logfile [file join $dir second-node.log]
+            set pid [exec $::VALKEY_SERVER_BIN --port 0 \
+                         --unixsocket [file join $dir second-node.sock] \
+                         --cluster-enabled yes \
+                         --dir $dir \
+                         --cluster-config-file $cluster_conf \
+                         --logfile $logfile &]
+
+            wait_for_condition 100 100 {
+                ![process_is_alive $pid]
+            } else {
+                catch {exec kill -9 $pid}
+                fail "a second node started while $cluster_conf was already in use"
+            }
+            assert_match "*already used by a different Cluster node*" [exec cat $logfile]
+        }
     }
 }
 

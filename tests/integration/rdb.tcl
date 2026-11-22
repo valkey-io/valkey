@@ -225,19 +225,22 @@ start_server_and_kill_it [list "dir" $server_path] {
 }
 
 start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
-    foreach bgsave_type {"fork" "forkless"} {
+    foreach {policy bgsave_type} {require-fork fork prefer-forkless forkless} {
         test "Test FLUSHALL aborts bgsave $bgsave_type" {
             # 5000 keys with 1ms sleep per key should take 5 second
             r config set rdb-key-save-delay 1000
             populate 5000
             assert_lessthan 999 [s rdb_changes_since_last_save]
-            r config set bgsave-default-method $bgsave_type
+            r config set forkless-policy $policy
             r bgsave
             assert_equal [s rdb_bgsave_in_progress] 1
             
             # Verify we're testing the right save type while it's running
-            set expected_type [expr {$bgsave_type eq "forkless" ? "forkless" : "fork"}]
-            assert_equal [s rdb_current_bgsave_type] $expected_type
+            assert_equal [s rdb_current_bgsave_type] $bgsave_type
+
+            # Use this opportunity to also test the "bad arg" reply.
+            assert_error {ERR*} {r flushall bad_arg}
+            assert_equal [r ping] "PONG"
             
             r flushall
             # wait a second max (bgsave should take 5)
@@ -253,10 +256,10 @@ start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
         }
     }
 
-    foreach bgsave_type {"fork" "forkless"} {
+    foreach {policy bgsave_type} {require-fork fork prefer-forkless forkless} {
         test "bgsave $bgsave_type resets the change counter" {
             r config set rdb-key-save-delay 0
-            r config set bgsave-default-method $bgsave_type
+            r config set forkless-policy $policy
             r bgsave
             wait_for_condition 50 100 {
                 [s rdb_bgsave_in_progress] == 0
@@ -266,16 +269,15 @@ start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
             assert_equal [s rdb_changes_since_last_save] 0
             
             # Verify we tested the right save type
-            set expected_type [expr {$bgsave_type eq "forkless" ? "forkless" : "fork"}]
-            assert_equal [s rdb_last_bgsave_type] $expected_type
+            assert_equal [s rdb_last_bgsave_type] $bgsave_type
         }
     }
 
-    foreach bgsave_type {"fork" "forkless"} {
+    foreach {policy bgsave_type} {require-fork fork prefer-forkless forkless} {
         test "bgsave $bgsave_type metrics are correct after success" {
             set saves_before [s rdb_saves]
             populate 100 "" 16
-            r config set bgsave-default-method $bgsave_type
+            r config set forkless-policy $policy
             r bgsave
             waitForBgsave r
             assert {[s rdb_saves] == $saves_before + 1}
@@ -289,11 +291,11 @@ start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
         }
     }
 
-    foreach bgsave_type {"fork" "forkless"} {
+    foreach {policy bgsave_type} {require-fork fork prefer-forkless forkless} {
         test "bgsave $bgsave_type metrics are correct after failure" {
             set saves_before [s rdb_saves]
             populate 1000 "" 16
-            r config set bgsave-default-method $bgsave_type
+            r config set forkless-policy $policy
             r config set rdb-key-save-delay 10000000
             if {$bgsave_type eq "forkless"} {
                 # Inject a failure to make the save fail: a directory whose name
@@ -331,13 +333,13 @@ start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
         }
     }
 
-    foreach bgsave_type {"fork" "forkless"} {
+    foreach {policy bgsave_type} {require-fork fork prefer-forkless forkless} {
         test "bgsave cancel aborts $bgsave_type save" {
             # Generating RDB will take some 100 seconds
             r config set rdb-key-save-delay 1000000
             populate 100 "" 16
 
-            r config set bgsave-default-method $bgsave_type
+            r config set forkless-policy $policy
             r bgsave
             wait_for_condition 50 100 {
                 [s rdb_bgsave_in_progress] == 1
@@ -346,8 +348,7 @@ start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
             }
             
             # Verify we're testing the right save type
-            set expected_type [expr {$bgsave_type eq "forkless" ? "forkless" : "fork"}]
-            assert_equal [s rdb_current_bgsave_type] $expected_type
+            assert_equal [s rdb_current_bgsave_type] $bgsave_type
             
             if {$bgsave_type ne "forkless"} {
                 set fork_child_pid [get_child_pid 0]
@@ -388,7 +389,7 @@ start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
         
         # Start slow forkless save
         r config set rdb-key-save-delay 10000000
-        r config set bgsave-default-method forkless
+        r config set forkless-policy prefer-forkless
         r bgsave
         wait_for_condition 50 100 {
             [s rdb_bgsave_in_progress] == 1
@@ -417,6 +418,101 @@ start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
 }
 
 start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
+    # Regression tests for https://github.com/valkey-io/valkey/issues/4604 (item 3).
+    #
+    # During a forkless (consistent) bgsave, an early iterated key, removed from the main
+    # dictionary, was not handled properly and resulted in a crash.  A single RENAME is enough to
+    # reproduce.  These paths only exist for forkless (consistent) iteration; fork-mode bgsave is
+    # unaffected, so the tests target forkless only.
+    test "forkless save survives RENAME over an existing key" {
+        r flushall
+        r config set forkless-policy prefer-forkless
+        r config set rdb-key-save-delay 0
+
+        # Populate keys that are part of the snapshot.  The iterator has not yet reached them when
+        # we mutate them mid-save, so they get expedited into early_iterate_entries.
+        r debug populate 100000
+
+        # Hold the forkless save open so the rename happens mid-iteration.
+        r config set rdb-key-save-delay 10000
+        r bgsave
+        wait_for_condition 50 100 {
+            [s rdb_bgsave_in_progress] == 1
+        } else {
+            fail "forkless bgsave did not start"
+        }
+
+        # RENAME an existing snapshot key over another existing snapshot key: at the dbEntry level
+        # delete(dst) + delete(src) + add(new).
+        set before [r get key:1]
+        r rename key:1 key:2
+        assert_equal [r get key:2] $before
+        assert_equal [r exists key:1] 0
+
+        # Server must still be alive and the save must complete cleanly.
+        r config set rdb-key-save-delay 0
+        waitForBgsave r
+        assert_equal [r ping] "PONG"
+    } {} {needs:debug}
+
+    test "forkless save survives PEXPIRE after a collection key is emptied" {
+        r flushall
+        r config set forkless-policy prefer-forkless
+        r config set rdb-key-save-delay 0
+        r debug populate 100000
+        # 22-char key: the set's dbEntry is 48 bytes, the same jemalloc bin as a
+        # populate string once an expire is attached to it.
+        r sadd set:000000000000000000 m
+
+        r config set rdb-key-save-delay 10000
+        r bgsave
+        wait_for_condition 50 100 {
+            [s rdb_bgsave_in_progress] == 1
+        } else {
+            fail "forkless bgsave did not start"
+        }
+
+        # Emptying the set deletes it via SREM (not DEL), so its dbEntry pointer
+        # used to stay in early_iterate_entries after the free. Give the iterator
+        # time to hand the entry back so the free actually happens.
+        r srem set:000000000000000000 m
+        after 100
+        # PEXPIRE reallocates key:10's dbEntry; jemalloc returns the freed address.
+        r pexpire key:10 10000000
+        r persist key:11
+        r setex key:12 1000 newval
+        assert_equal [r get key:12] "newval"
+
+        r config set rdb-key-save-delay 0
+        waitForBgsave r
+        assert_equal [r ping] "PONG"
+    } {} {needs:debug}
+
+    test "forkless save survives PHGET on a path hash payload that is rehashing" {
+        r flushall
+        r config set forkless-policy prefer-forkless
+        r config set rdb-key-save-delay 0
+        # Just past a growth threshold (buckets * entries per bucket: 7 * 2^15 on 64-bit,
+        # 12 * 2^14 on 32-bit), the payload hashtable is partway through a resize, and
+        # each PHGET on it does an incremental rehash step unless rehashing is paused.
+        # The small path keeps a listpack payload in the same key.
+        set fields [expr {[s arch_bits] == 64 ? 230000 : 200000}]
+        r eval {for i = 1, tonumber(ARGV[1]) do
+            redis.call('phset', KEYS[1], 'p', 'FIELDS', 1, 'f' .. i, 'v')
+        end} 1 ph $fields
+        r phset ph small FIELDS 1 f v
+
+        r bgsave
+        set deadline [expr {[clock seconds] + 120}]
+        while {[s rdb_bgsave_in_progress]} {
+            r phget ph p f1
+            if {[clock seconds] > $deadline} { fail "forkless bgsave did not finish" }
+        }
+        assert_equal [s rdb_last_bgsave_status] ok
+    }
+}
+
+start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
     test "FLUSHDB during single-db forkless bgsave aborts the save without failing it" {
         
         # Populate database with complex dataset
@@ -428,7 +524,7 @@ start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
         
         # Start forkless save with very slow save (high delay per key)
         r config set rdb-key-save-delay 100000
-        r config set bgsave-default-method forkless
+        r config set forkless-policy prefer-forkless
         r bgsave
         wait_for_condition 50 100 {
             [s rdb_bgsave_in_progress] == 1
@@ -471,7 +567,7 @@ start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
         
         # Start slow forkless save
         r config set rdb-key-save-delay 100000
-        r config set bgsave-default-method forkless
+        r config set forkless-policy prefer-forkless
         r bgsave
         wait_for_condition 50 100 {
             [s rdb_bgsave_in_progress] == 1
@@ -503,6 +599,42 @@ start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
     } {} {needs:debug}
 }
 
+start_server {overrides {forkless-infrastructure-enabled yes forkless-policy prefer-forkless save ""}} {
+    test "ZINTERCARD on a set source during forkless bgsave does not corrupt the snapshot" {
+        # A zset lookup marks its key by rewriting the sds header, which makes
+        # an SDS_TYPE_5 (under 32 bytes) member read as empty. Members over 20
+        # bytes are LZF compressed on save, which keeps the saver slower than
+        # ZINTERCARD so the two pass each other on the same member. The extra
+        # zset member makes s the smaller source, which ZINTERCARD iterates.
+        r eval {
+            for i = 1, 50000 do
+                local m = string.format('member-padding-%010d', i)
+                redis.call('sadd', 's', m)
+                redis.call('zadd', 'z', 0, m)
+            end
+            redis.call('zadd', 'z', 0, 'extra')
+        } 0
+        assert_encoding hashtable s
+        assert_encoding btree z
+        set digest [r debug digest-value s]
+
+        # The race is timing dependent, so give it several saves to show up.
+        for {set i 0} {$i < 10} {incr i} {
+            r bgsave
+            set rounds 0
+            while {[s rdb_bgsave_in_progress]} {
+                if {[incr rounds] > 1000} { fail "forkless bgsave did not finish" }
+                for {set j 0} {$j < 10} {incr j} { r zintercard 2 s z }
+            }
+            assert_equal ok [s rdb_last_bgsave_status]
+            # Two corrupted members load as duplicates, so the reload fails.
+            catch {r debug reload nosave} err
+            assert_equal OK $err
+            assert_equal $digest [r debug digest-value s]
+        }
+    } {} {needs:debug}
+}
+
 start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
     test "multiple databases modifications during forkless bgsave" {
         
@@ -515,7 +647,7 @@ start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
         
         # Start slow forkless save
         r config set rdb-key-save-delay 10000
-        r config set bgsave-default-method forkless
+        r config set forkless-policy prefer-forkless
         r bgsave
         wait_for_condition 50 100 {
             [s rdb_bgsave_in_progress] == 1
@@ -599,12 +731,12 @@ start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
     test "modify new keys during forkless bgsave" {
         
         # Populate database with all data types
-        createComplexDatasetForVerification r 20
+        createComplexDatasetForVerification r 200
         set original_keys [r dbsize]
         
         # Start forkless save with very slow save (high delay per key)
         r config set rdb-key-save-delay 10000
-        r config set bgsave-default-method forkless
+        r config set forkless-policy prefer-forkless
         r bgsave
         wait_for_condition 50 100 {
             [s rdb_bgsave_in_progress] == 1
@@ -650,7 +782,7 @@ start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
         assert_equal [r dbsize] $original_keys
         
         # Verify all original data types preserved
-        for {set i 0} {$i < 20} {incr i} {
+        for {set i 0} {$i < 200} {incr i} {
             assert_equal [r get before_$i] "value_before_$i"
             assert_equal [r get int_$i] [expr {42 + $i}]
             assert_equal [r llen lst_$i] 4
@@ -692,7 +824,7 @@ start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
         
         # Start slow forkless save
         r config set rdb-key-save-delay 10000
-        r config set bgsave-default-method forkless
+        r config set forkless-policy prefer-forkless
         r bgsave
         wait_for_condition 50 100 {
             [s rdb_bgsave_in_progress] == 1
@@ -759,7 +891,7 @@ start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
         
         # Start slow forkless save
         r config set rdb-key-save-delay 10000
-        r config set bgsave-default-method forkless
+        r config set forkless-policy prefer-forkless
         r bgsave
         wait_for_condition 50 100 {
             [s rdb_bgsave_in_progress] == 1
@@ -808,15 +940,59 @@ start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
     } {} {needs:debug}
 }
 
+foreach repl {REPL_ALL REPL_AOF REPL_NONE} {
+    # A fresh server per case keeps the iterator's adaptive queue small, so
+    # the iterator is still in db0 when the swap runs.
+    start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
+        test "SWAPDB from a script with $repl during forkless bgsave" {
+            r select 1
+            r debug populate 500 db1
+            r select 0
+            r debug populate 500 db0
+
+            r config set rdb-key-save-delay 10000
+            r config set forkless-policy prefer-forkless
+            r bgsave
+            wait_for_condition 50 100 {
+                [s rdb_bgsave_in_progress] == 1
+            } else {
+                fail "forkless bgsave did not start"
+            }
+
+            r eval "server.set_repl(server.$repl); return server.call('swapdb', '0', '1')" 0
+
+            r config set rdb-key-save-delay 0
+            waitForBgsave r
+            assert_equal [s rdb_last_bgsave_status] ok
+
+            # The snapshot is point-in-time, so each DB holds its own keys from
+            # before the swap.
+            r debug reload nosave
+            for {set db 0} {$db < 2} {incr db} {
+                r select $db
+                assert_equal 500 [r dbsize]
+                assert_equal 500 [llength [r keys db$db:*]]
+            }
+        } {} {needs:debug}
+    }
+}
+
 start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
     test "deleting keys during forkless bgsave" {
         
         # Populate database with all data types
         createComplexDatasetForVerification r 20
+        set keys [r keys *]
+
+        # Add filler keys that are never deleted, so the save still has
+        # work left after every key above has been deleted (and therefore
+        # already serialized).
+        createComplexDatasetForVerification r 200 "filler_"
+        set filler_count [expr {[r dbsize] - [llength $keys]}]
         
         # Start forkless save with very slow save (high delay per key)
         r config set rdb-key-save-delay 10000
-        r config set bgsave-default-method forkless
+        r config set forkless-policy prefer-forkless
         r bgsave
         wait_for_condition 50 100 {
             [s rdb_bgsave_in_progress] == 1
@@ -824,14 +1000,13 @@ start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
             fail "forkless bgsave did not start"
         }
         
-        # Delete all keys in the database
-        set keys [r keys *]
+        # Delete all non-filler keys
         foreach key $keys {
             r del $key
         }
         
-        # Verify all keys deleted and save still in progress
-        assert_equal [r dbsize] 0
+        # Verify all non-filler keys deleted and save still in progress
+        assert_equal [r dbsize] $filler_count
         assert_equal [s rdb_bgsave_in_progress] 1
         
         # Speed up and complete save
@@ -840,16 +1015,19 @@ start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
         
         # Reload from RDB and verify ORIGINAL keys still exist
         catch {r debug reload nosave}
-        for {set i 0} {$i < 20} {incr i} {
-            assert_equal [r get before_$i] "value_before_$i"
-            assert_equal [r get int_$i] [expr {42 + $i}]
-            assert_equal [r lrange lst_$i 0 -1] [list "L1" "L2" "R1" "R2"]
-            assert_equal [lsort [r smembers set_$i]] [list "B1" "B2"]
-            assert_equal [r zscore zset_$i "Z1"] 1
-            assert_equal [r hget hash_$i "H1"] "a"
-            assert_equal [r pfcount hll_$i] 1
-            assert_equal [r zcard geo_$i] 1
-            assert_equal [r zcard geo_set_$i] 1
+        assert_equal [r dbsize] [expr {[llength $keys] + $filler_count}]
+        foreach {prefix count} {"" 20 "filler_" 200} {
+            for {set i 0} {$i < $count} {incr i} {
+                assert_equal [r get ${prefix}before_$i] "value_before_$i"
+                assert_equal [r get ${prefix}int_$i] [expr {42 + $i}]
+                assert_equal [r lrange ${prefix}lst_$i 0 -1] [list "L1" "L2" "R1" "R2"]
+                assert_equal [lsort [r smembers ${prefix}set_$i]] [list "B1" "B2"]
+                assert_equal [r zscore ${prefix}zset_$i "Z1"] 1
+                assert_equal [r hget ${prefix}hash_$i "H1"] "a"
+                assert_equal [r pfcount ${prefix}hll_$i] 1
+                assert_equal [r zcard ${prefix}geo_$i] 1
+                assert_equal [r zcard ${prefix}geo_set_$i] 1
+            }
         }
     } {} {needs:debug}
 }
@@ -888,7 +1066,7 @@ start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
         
         # Start save with slow speed
         r config set rdb-key-save-delay 100000
-        r config set bgsave-default-method forkless
+        r config set forkless-policy prefer-forkless
         r bgsave
         
         wait_for_condition 50 100 {
@@ -1005,20 +1183,79 @@ start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
         
         # Create initial dataset with 100 keys
         set num_keys 100
+        set create_start [clock milliseconds]
         createComplexDatasetForVerification r $num_keys
+        set create_ms [expr {[clock milliseconds] - $create_start}]
         
-        # Set TTLs on all keys - key i expires in (i/10 + 1) seconds
-        set start_time [clock milliseconds]
+        # Spread the deadlines 100 ms apart, starting a second after
+        # deadline_base, so that expirations keep landing throughout the save
+        # below and go on past its end. The deadlines are absolute so that the
+        # length of the loop, which issues num_keys * 12 round trips, cannot
+        # shift them. The budget for that loop is measured from the dataset
+        # creation above, which issues a comparable number of round trips, so
+        # that a slow runner gets a proportionally longer one instead of a
+        # figure that only holds on a fast one.
+        set deadline_base [expr {[clock milliseconds] + ($create_ms > 1500 ? $create_ms * 2 : 3000)}]
         for {set i 0} {$i < $num_keys} {incr i} {
-            set ttl [expr {$i/10 + 1}]
             foreach prefix {before int lst set zset hash hll bits geo geo_set stream iset} {
-                r expire ${prefix}_${i} $ttl
+                r pexpireat ${prefix}_${i} [expr {$deadline_base + 1000 + $i * 100}]
             }
         }
+        # Had the loop overrun the budget, the earliest keys would have been
+        # dropped before the save even started instead of expiring during it, and
+        # the checks below would pass without testing anything. Fail loudly
+        # rather than silently.
+        assert {[clock milliseconds] < $deadline_base}
         
-        # Start save and wait for completion
-        r config set bgsave-default-method forkless
+        # Start the save just before the first deadline, so that the stretch of
+        # save that has to be held open below is a fixed ~4 s no matter how long
+        # the loop above took. Starting it as soon as the loop ends would make
+        # that stretch grow with the budget, and it would then have to outlast
+        # the injected save duration, which does not grow with it.
+        while {[clock milliseconds] < $deadline_base - 1000} {
+            after 50
+        }
+        
+        # Hold the save open across the first part of the deadline spread, so
+        # that the iterator is walking the keyspace while keys expire under it.
+        # num_keys * 12 keys at 10 ms each would take about 12 seconds, well
+        # over that stretch; the delay is cleared once the window is covered.
+        r config set rdb-key-save-delay 10000
+        r config set forkless-policy prefer-forkless
+        set expired_before [s expired_keys]
+        
+        # Nothing has expired yet: the earliest deadline is still 2 s out. This
+        # is the positive-side check for the early key groups, whose deadlines
+        # fall inside the save window and which are therefore already gone by
+        # the time the post-reload verification below runs.
+        assert_equal [expr {$num_keys * 12}] [r dbsize]
         r bgsave
+        wait_for_condition 50 100 {
+            [s rdb_bgsave_in_progress] == 1
+        } else {
+            fail "forkless bgsave did not start"
+        }
+        
+        # The save has to be open before the first key expires, or the keys below
+        # expire with no save running and the window proves nothing.
+        assert {[clock milliseconds] < $deadline_base + 1000}
+        
+        # Keep the save in progress until the earliest deadlines have lapsed.
+        while {[clock milliseconds] < $deadline_base + 3000} {
+            assert_equal 1 [s rdb_bgsave_in_progress]
+            after 100
+        }
+        
+        # These two assertions are what make this test cover expiration during
+        # the save: keys went away while the snapshot was still open. Without
+        # them the save could complete before any deadline and only the reload
+        # path would be exercised.
+        assert_equal 1 [s rdb_bgsave_in_progress]
+        assert {[s expired_keys] > $expired_before}
+        
+        # Let the save finish. Keys whose deadline falls after this still expire
+        # once the snapshot is done, so both sides of the save are covered.
+        r config set rdb-key-save-delay 0
         waitForBgsave r
         
         # Reload from RDB
@@ -1035,11 +1272,14 @@ start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
         }
         
         while {[llength $verified] > 0} {
-            set elapsed_time [expr {([clock milliseconds] - $start_time) / 1000.0}]
-            
             foreach i $verified {
+                # Re-read the clock per key: one pass issues up to num_keys * 12 round
+                # trips, so a single reading taken before the pass goes stale.
+                set now [clock milliseconds]
+                set deadline [expr {$deadline_base + 1000 + $i * 100}]
+
                 # If not yet expired, verify all data types exist
-                if {$elapsed_time < [expr {$i/10.0}]} {
+                if {$now < $deadline - 1000} {
                     assert_equal [r exists before_${i}] 1
                     assert_equal [r exists int_${i}] 1
                     assert_equal [r exists lst_${i}] 1
@@ -1054,8 +1294,8 @@ start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
                     assert_equal [r exists iset_${i}] 1
                 }
                 
-                # If expired for more than 2 seconds, verify all data types are gone
-                if {$elapsed_time > [expr {$i/10.0 + 2}]} {
+                # If expired for more than a second, verify all data types are gone
+                if {$now > $deadline + 1000} {
                     assert_equal [r exists before_${i}] 0
                     assert_equal [r exists int_${i}] 0
                     assert_equal [r exists lst_${i}] 0
@@ -1085,7 +1325,7 @@ start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
         
         # Start save with stopped speed
         r config set rdb-key-save-delay 10000
-        r config set bgsave-default-method forkless
+        r config set forkless-policy prefer-forkless
         r bgsave
         
         wait_for_condition 50 100 {
@@ -1112,6 +1352,12 @@ start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
         r config set rdb-key-save-delay 0
         waitForBgsave r
         
+        # Lift the memory cap before verifying. It was derived from a reading taken
+        # while the save was running, and the reload brings the whole dataset back; on
+        # allocators with higher per-allocation overhead the restored dataset alone
+        # exceeds the cap, and allkeys-lru evicts the keys we are about to read.
+        r config set maxmemory 0
+        
         # Verify snapshot contains original keys
         catch {r debug reload nosave}
         for {set i 0} {$i < 1000} {incr i} {
@@ -1136,7 +1382,7 @@ start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
         
         # Start save with slow speed to keep it running during modifications
         r config set rdb-key-save-delay 1000
-        r config set bgsave-default-method forkless
+        r config set forkless-policy prefer-forkless
         r bgsave        
         wait_for_condition 50 100 {
             [s rdb_bgsave_in_progress] == 1
@@ -1215,7 +1461,7 @@ start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
         
         # Start save with stopped speed
         r config set rdb-key-save-delay 10000
-        r config set bgsave-default-method forkless
+        r config set forkless-policy prefer-forkless
         r bgsave
         
         wait_for_condition 50 100 {
@@ -1279,7 +1525,7 @@ start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
         
         # Start save with slow speed
         r config set rdb-key-save-delay 10000
-        r config set bgsave-default-method forkless
+        r config set forkless-policy prefer-forkless
         r bgsave
         
         wait_for_condition 50 100 {
@@ -1377,13 +1623,13 @@ start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
 }
 
 start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
-    foreach first_type {fork forkless} {
-        foreach second_type {fork forkless} {
+    foreach {first_policy first_type} {require-fork fork prefer-forkless forkless} {
+        foreach {second_policy second_type} {require-fork fork prefer-forkless forkless} {
             test "$first_type bgsave blocks $second_type bgsave" {
                 r config set rdb-key-save-delay 1000000
                 populate 100 "" 16
 
-                r config set bgsave-default-method $first_type
+                r config set forkless-policy $first_policy
                 r bgsave
                 wait_for_condition 50 100 {
                     [s rdb_bgsave_in_progress] == 1
@@ -1392,7 +1638,7 @@ start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
                 }
                 assert_equal [s rdb_current_bgsave_type] $first_type
 
-                r config set bgsave-default-method $second_type
+                r config set forkless-policy $second_policy
                 assert_error "ERR Background save already in progress" {r bgsave}
 
                 r bgsave cancel
@@ -1600,7 +1846,7 @@ start_server [list overrides [list "dir" $server_path "dbfilename" "scriptbackup
 }
 
 start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
-    foreach bgsave_type {"fork" "forkless"} {
+    foreach {policy bgsave_type} {require-fork fork prefer-forkless forkless} {
         test "failed bgsave $bgsave_type prevents writes" {
             # Make sure the server saves an RDB on shutdown
             r config set save "900 1"
@@ -1608,7 +1854,7 @@ start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
             r config set rdb-key-save-delay 10000000
             populate 1000
             r set x x
-            r config set bgsave-default-method $bgsave_type
+            r config set forkless-policy $policy
             if {$bgsave_type eq "forkless"} {
                 # Inject a failure to make the save fail: a directory whose name
                 # collides with the RDB file makes the final rename fail. We
@@ -1662,7 +1908,7 @@ start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
                 # Remove the blocking directory so the recovery save can succeed.
                 file delete [file join [lindex [r config get dir] 1] [lindex [r config get dbfilename] 1]]
             }
-            r config set bgsave-default-method $bgsave_type
+            r config set forkless-policy $policy
             r bgsave
             waitForBgsave r
 
@@ -1702,14 +1948,14 @@ start_server {} {
 
 
 start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
-    test {bgsave-default-method can be set to forkless with forkless-infrastructure-enabled} {
-        r config set bgsave-default-method forkless
-        assert_equal [lindex [r config get bgsave-default-method] 1] "forkless"
+    test {forkless-policy can be set to prefer-forkless with forkless-infrastructure-enabled} {
+        r config set forkless-policy prefer-forkless
+        assert_equal [lindex [r config get forkless-policy] 1] "prefer-forkless"
     }
 }
 
-start_server {overrides {forkless-infrastructure-enabled yes bgsave-default-method forkless}} {
-    test {BGSAVE uses forkless when bgsave-default-method is forkless} {
+start_server {overrides {forkless-infrastructure-enabled yes forkless-policy prefer-forkless}} {
+    test {BGSAVE uses forkless when forkless-policy is prefer-forkless} {
         r set key value
         set result [r bgsave]
         assert_match "*Background saving started*" $result
@@ -1718,8 +1964,8 @@ start_server {overrides {forkless-infrastructure-enabled yes bgsave-default-meth
     }
 }
 
-start_server {overrides {bgsave-default-method fork}} {
-    test {BGSAVE uses fork when bgsave-default-method is fork} {
+start_server {overrides {forkless-policy require-fork}} {
+    test {BGSAVE uses fork when forkless-policy is require-fork} {
         r set key value
         set result [r bgsave]
         assert_match "*Background saving started*" $result
@@ -1729,24 +1975,160 @@ start_server {overrides {bgsave-default-method fork}} {
 }
 
 start_server {overrides {save ""}} {
-    test {bgsave-default-method forkless is rejected without forkless-infrastructure-enabled} {
+    test {forkless-policy prefer-forkless is rejected without forkless-infrastructure-enabled} {
         # forkless-infrastructure-enabled defaults to no here.
         assert_error "*forkless-infrastructure-enabled yes*" {
-            r config set bgsave-default-method forkless
+            r config set forkless-policy prefer-forkless
         }
-        # The value is unchanged and remains fork.
-        assert_equal [lindex [r config get bgsave-default-method] 1] "fork"
+        # The value is unchanged and remains require-fork.
+        assert_equal [lindex [r config get forkless-policy] 1] "require-fork"
     }
 }
 
-test {Server refuses to start with bgsave-default-method forkless and no forkless-infrastructure-enabled} {
-    catch {exec $::VALKEY_SERVER_BIN --bgsave-default-method forkless} err
+test {Server refuses to start with forkless-policy prefer-forkless and no forkless-infrastructure-enabled} {
+    catch {exec $::VALKEY_SERVER_BIN --forkless-policy prefer-forkless} err
     assert_match {*forkless-infrastructure-enabled yes*} $err
 }
 
-test {Server starts with bgsave-default-method before forkless-infrastructure-enabled yes} {
-    start_server {overrides {bgsave-default-method forkless forkless-infrastructure-enabled yes save ""}} {
-        assert_equal [lindex [r config get bgsave-default-method] 1] "forkless"
+test {Server starts with forkless-policy before forkless-infrastructure-enabled yes} {
+    start_server {overrides {forkless-policy prefer-forkless forkless-infrastructure-enabled yes save ""}} {
+        assert_equal [lindex [r config get forkless-policy] 1] "prefer-forkless"
+    }
+}
+
+start_server {overrides {forkless-infrastructure-enabled yes forkless-policy prefer-forkless save ""}} {
+    test {forkless-policy accepts require-fork and prefer-forkless} {
+        foreach v {require-fork prefer-forkless} {
+            r config set forkless-policy $v
+            assert_equal [lindex [r config get forkless-policy] 1] $v
+        }
+        assert_error "*argument*" {r config set forkless-policy require-forkless}
+    }
+}
+
+# The inline-replication opcode runs the command it carries through a fake
+# client with ACL checks bypassed, so a command that is neither a write nor
+# may-replicate (here an admin CONFIG SET) must be rejected, not executed.
+set inband_path [tmpdir "server.rdb-inband-opcode"]
+start_server [list overrides [list "dir" $inband_path] keep_persistence true] {
+    r set somekey someval
+    r save
+}
+set inband_dump [file join $inband_path dump.rdb]
+
+# Drop the trailing EOF opcode + CRC, append 0xF2 (RDB_OPCODE_UPDATE) + the RESP
+# command + a fresh EOF + an all-zero checksum (cksum==0 disables CRC validation).
+set fd [open $inband_dump rb]
+fconfigure $fd -translation binary
+set data [read $fd]
+close $fd
+binary scan [string index $data end-8] c eof_byte
+if {[expr {$eof_byte & 0xff}] != 0xff} {
+    error "Expected RDB EOF opcode 0xFF before checksum"
+}
+set prefix [string range $data 0 end-9]
+set inline "\xF2*4\r\n\$6\r\nCONFIG\r\n\$3\r\nSET\r\n\$3\r\ndir\r\n\$4\r\n/tmp\r\n"
+set tail "\xFF\x00\x00\x00\x00\x00\x00\x00\x00"
+set fd [open $inband_dump wb]
+fconfigure $fd -translation binary
+puts -nonewline $fd $prefix$inline$tail
+close $fd
+
+start_server_and_kill_it [list "dir" $inband_path "rdb-version-check" "relaxed"] {
+    test {Server rejects an on-disk RDB whose inline opcode carries a non-replicable command} {
+        wait_for_condition 50 100 {
+            [string match {*inline command*not a replicable write*} \
+                [exec tail -20 < [dict get $srv stdout]]]
+        } else {
+            fail "Server loaded an RDB whose inline opcode carried a non-replicable command"
+        }
+    }
+}
+
+set foreign_update_path [tmpdir "server.rdb-foreign-update-opcode"]
+start_server [list overrides [list dir $foreign_update_path] keep_persistence true] {
+    r set existing value
+    r save
+}
+set foreign_update_dump [file join $foreign_update_path dump.rdb]
+set fd [open $foreign_update_dump rb]
+fconfigure $fd -translation binary
+set data [read $fd]
+close $fd
+set prefix "REDIS0011[string range $data 9 end-9]"
+set inline "\xF2*3\r\n\$3\r\nSET\r\n\$8\r\ninjected\r\n\$3\r\nyes\r\n"
+set tail "\xFF\x00\x00\x00\x00\x00\x00\x00\x00"
+set fd [open $foreign_update_dump wb]
+fconfigure $fd -translation binary
+puts -nonewline $fd $prefix$inline$tail
+close $fd
+
+start_server_and_kill_it [list dir $foreign_update_path rdb-version-check relaxed] {
+    test "Server rejects opcode 242 in a REDIS-magic RDB" {
+        wait_for_condition 50 100 {
+            [string match {*foreign type or opcode 242*} [exec tail -20 < [dict get $srv stdout]]]
+        } else {
+            fail "Server accepted opcode 242 in a REDIS-magic RDB"
+        }
+    }
+}
+
+set old_update_path [tmpdir "server.rdb-old-update-opcode"]
+set old_update_dump [file join $old_update_path dump.rdb]
+set fd [open $old_update_dump wb]
+fconfigure $fd -translation binary
+puts -nonewline $fd "VALKEY080[string range $data 9 end-9]$inline$tail"
+close $fd
+
+start_server_and_kill_it [list dir $old_update_path rdb-version-check relaxed] {
+    test "Server rejects opcode 242 in an RDB older than version 81" {
+        wait_for_condition 50 100 {
+            [string match {*Opcode 242 requires RDB version 81 or newer*} [exec tail -20 < [dict get $srv stdout]]]
+        } else {
+            fail "Server accepted opcode 242 in an old RDB version"
+        }
+    }
+}
+
+start_server {overrides {save ""}} {
+    set primary [srv 0 client]
+    set primary_host [srv 0 host]
+    set primary_port [srv 0 port]
+
+    start_server {overrides {
+        forkless-policy prefer-forkless
+        forkless-infrastructure-enabled yes
+        repl-diskless-load swapdb
+    }} {
+        set replica [srv 0 client]
+
+        # Regression test for a use-after-free in fullScanIteratorGetEntries: a
+        # swapdb-mode full sync frees the replica's old keyspace while a forkless
+        # save's background iterator still holds live references into it. Fixed by
+        # tearing down iterators in swapMainDbWithTempDb() before the free.
+        #
+        # A large replica keyspace against a tiny primary keeps the save reading
+        # at full speed while the small RDB loads and swaps. The crash needs the
+        # save's background thread to be actively reading an entry at the moment
+        # the swap frees the keyspace; rdb-key-save-delay is intentionally not used
+        # here, as it makes the save sleep between keys, so at the swap it is idle
+        # rather than reading.
+        test {forkless save during swapdb full sync does not use-after-free} {
+            $primary debug populate 100
+            $replica debug populate 1000000
+            $replica bgsave
+            # The save must be in progress when the swap happens.
+            wait_for_condition 50 10 {
+                [s 0 rdb_bgsave_in_progress] eq 1
+            } else {
+                fail "forkless save did not start"
+            }
+
+            $replica replicaof $primary_host $primary_port
+
+            wait_for_sync $replica
+            assert_equal [$replica dbsize] [$primary dbsize]
+        } {} {needs:debug}
     }
 }
 

@@ -49,11 +49,11 @@
             },
             {
                 "name": "increment",
-                "type": "integer"
+                "type": "double"
             },
             {
                 "name": "member",
-                "type": "string"
+                "type": "member"
             }
         ]
     }

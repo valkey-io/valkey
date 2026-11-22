@@ -165,12 +165,13 @@ char *rdb_type_string[] = {
     "set-listpack",
     "stream-v3",
     "hash-volatile-items",
+    "pathhash",
 };
 
 static_assert(sizeof(rdb_type_string) / sizeof(rdb_type_string[0]) == RDB_TYPE_LAST, "Mismatch between enum and string table");
 
 char *type_name[OBJ_TYPE_MAX] = {"string", "list", "set", "zset", "hash", "module", /* module type is special */
-                                 "stream"};
+                                 "stream", "pathhash"};
 
 /********************** Rdb stats **********************/
 void statsRecordCount(size_t eleCount, rdbStats *stats) {
@@ -390,6 +391,27 @@ void computeDatasetProfile(int dbid, robj *keyobj, robj *o, long long expiretime
         }
         streamIteratorStop(&si);
         statsRecordCount(streamLength(o), stats);
+    } else if (o->type == OBJ_PATH_HASH) {
+        pathHashObject *path_hash = objectGetVal(o);
+        raxIterator paths;
+        raxStart(&paths, path_hash->index);
+        raxSeek(&paths, "^", NULL, 0);
+        while (raxNext(&paths)) {
+            size_t element_size = paths.key_len;
+            hashTypeIterator fields;
+            hashTypeInitIterator(paths.data, &fields);
+            while (hashTypeNext(&fields) != C_ERR) {
+                sds field = hashTypeCurrentObjectNewSds(&fields, OBJ_HASH_FIELD);
+                sds value = hashTypeCurrentObjectNewSds(&fields, OBJ_HASH_VALUE);
+                element_size += sdslen(field) + sdslen(value);
+                sdsfree(field);
+                sdsfree(value);
+            }
+            hashTypeResetIterator(&fields);
+            statsRecordElementSize(element_size, 1, stats);
+        }
+        raxStop(&paths);
+        statsRecordCount(raxSize(path_hash->index), stats);
     } else if (o->type == OBJ_MODULE) {
         statsRecordCount(1, stats);
     } else {
@@ -611,7 +633,7 @@ void rdbCheckSetupSignals(void) {
     sigaction(SIGABRT, &act, NULL);
 }
 
-/* Check the specified RDB file. Return 0 if the RDB looks sane, otherwise
+/* Check the specified RDB file. Return 0 if the RDB looks sane; otherwise,
  * 1 is returned.
  * The file is specified as a filename in 'rdbfilename' if 'fp' is NULL,
  * otherwise the already open file 'fp' is checked. */
@@ -722,6 +744,14 @@ int redis_check_rdb(char *rdbfilename, FILE *fp) {
             if (selected_dbid > rdbstate.databases) {
                 rdbstate.databases = dbid;
             }
+            /* The stats report covers every selected DB, including ones with no keys. */
+            if (rdbCheckStats) {
+                int max_stats_num = (rdbstate.databases + 1) * OBJ_TYPE_MAX;
+                if (max_stats_num > rdbstate.stats_num) {
+                    rdbstate.stats = tryExpandRdbStats(rdbstate.stats, rdbstate.stats_num, max_stats_num);
+                    rdbstate.stats_num = max_stats_num;
+                }
+            }
 
             continue; /* Read type again. */
         } else if (type == RDB_OPCODE_RESIZEDB) {
@@ -750,8 +780,14 @@ int redis_check_rdb(char *rdbfilename, FILE *fp) {
             uint64_t num_slot_ranges;
             if ((num_slot_ranges = rdbLoadLen(rdb, NULL)) == RDB_LENERR) goto eoferr;
             for (uint64_t i = 0; i < num_slot_ranges; i++) {
-                if (rdbLoadLen(rdb, NULL) == RDB_LENERR) goto eoferr;
-                if (rdbLoadLen(rdb, NULL) == RDB_LENERR) goto eoferr;
+                uint64_t start_slot, end_slot;
+                if ((start_slot = rdbLoadLen(rdb, NULL)) == RDB_LENERR) goto eoferr;
+                if ((end_slot = rdbLoadLen(rdb, NULL)) == RDB_LENERR) goto eoferr;
+                if (start_slot >= CLUSTER_SLOTS || end_slot >= CLUSTER_SLOTS || start_slot > end_slot) {
+                    rdbCheckError("Invalid slot import range in RDB: start=%llu end=%llu",
+                                  (unsigned long long)start_slot, (unsigned long long)end_slot);
+                    goto err;
+                }
             }
             continue; /* Read type again. */
         } else if (type == RDB_OPCODE_AUX) {
@@ -800,7 +836,7 @@ int redis_check_rdb(char *rdbfilename, FILE *fp) {
         } else if (type == RDB_OPCODE_FUNCTION2) {
             sds err = NULL;
             rdbstate.doing = RDB_CHECK_DOING_READ_FUNCTIONS;
-            if (rdbFunctionLoad(rdb, rdbver, NULL, 0, &err) != C_OK) {
+            if (rdbFunctionLoad(rdb, rdbver, NULL, 0, 0, &err) != C_OK) {
                 rdbCheckError("Failed loading library, %s", err);
                 sdsfree(err);
                 goto err;
@@ -830,22 +866,17 @@ int redis_check_rdb(char *rdbfilename, FILE *fp) {
         rdbstate.keys++;
         /* Read value */
         rdbstate.doing = RDB_CHECK_DOING_READ_OBJECT_VALUE;
-        if ((val = rdbLoadObject(type, rdb, objectGetVal(key), selected_dbid, NULL, RDBFLAGS_NONE, 0)) == NULL) goto eoferr;
-        if (rdbCheckStats) {
-            int max_stats_num = (rdbstate.databases + 1) * OBJ_TYPE_MAX;
-            if (max_stats_num > rdbstate.stats_num) {
-                rdbstate.stats = tryExpandRdbStats(rdbstate.stats, rdbstate.stats_num, max_stats_num);
-                rdbstate.stats_num = max_stats_num;
-            }
-
-            computeDatasetProfile(selected_dbid, key, val, expiretime);
-        }
+        int error = 0;
+        val = rdbLoadObject(type, rdb, objectGetVal(key), selected_dbid, &error, RDBFLAGS_NONE, 0);
+        /* Match the server when loading legacy empty containers. */
+        if (val == NULL && error != RDB_LOAD_ERR_EMPTY_KEY) goto eoferr;
+        if (val && rdbCheckStats) computeDatasetProfile(selected_dbid, key, val, expiretime);
         /* Check if the key already expired. */
         if (expiretime != -1 && expiretime < now) rdbstate.already_expired++;
         if (expiretime != -1) rdbstate.expires++;
         rdbstate.key = NULL;
         decrRefCount(key);
-        decrRefCount(val);
+        if (val) decrRefCount(val);
         rdbstate.key_type = -1;
         expiretime = -1;
     }
@@ -920,6 +951,7 @@ void parseCheckRdbOptions(int argc, char **argv, FILE *fp) {
         } else if (!strcmp(argv[i], "--stats")) {
             rdbCheckStats = 1;
         } else if (!strcmp(argv[i], "--output")) {
+            if (lastarg) goto checkRdbUsage;
             rdbstate.stats_output = zstrdup(argv[i + 1]);
             rdbCheckOutput = 1;
             i++;

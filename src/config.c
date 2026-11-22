@@ -182,11 +182,23 @@ configEnum rdb_compression_enum[] = {{"no", RDB_COMPRESSION_NO},
                                      {"yes", RDB_COMPRESSION_YES},
                                      {"lzf", RDB_COMPRESSION_LZF},
                                      {"lz4", RDB_COMPRESSION_LZ4},
+                                     {"zstd", RDB_COMPRESSION_ZSTD},
                                      {NULL, 0}};
 
-configEnum bgsave_method_enum[] = {{"fork", RDB_BGSAVE_TYPE_FORK},
-                                   {"forkless", RDB_BGSAVE_TYPE_FORKLESS},
-                                   {NULL, 0}};
+configEnum forkless_policy_enum[] = {{"require-fork", FORKLESS_POLICY_REQUIRE_FORK},
+                                     {"prefer-forkless", FORKLESS_POLICY_PREFER_FORKLESS},
+                                     {NULL, 0}};
+
+configEnum cluster_replica_no_failover_enum[] = {{"no", CLUSTER_REPLICA_NO_FAILOVER_NO},
+                                                 {"yes", CLUSTER_REPLICA_NO_FAILOVER_YES},
+                                                 {"if-empty", CLUSTER_REPLICA_NO_FAILOVER_IF_EMPTY},
+                                                 {NULL, 0}};
+
+configEnum repl_compression_enum[] = {{"no", REPL_COMPRESSION_NO},
+                                      {"yes", REPL_COMPRESSION_YES},
+                                      {"lz4", REPL_COMPRESSION_LZ4},
+                                      {"zstd", REPL_COMPRESSION_ZSTD},
+                                      {NULL, 0}};
 
 /* Output buffer limits presets. */
 clientBufferLimitsConfig clientBufferLimitsDefaults[CLIENT_TYPE_OBUF_COUNT] = {
@@ -535,7 +547,7 @@ void loadServerConfigFromString(sds config) {
 
             if ((config->flags & MULTI_ARG_CONFIG) && argc == 2 && sdslen(argv[1])) {
                 /* For MULTI_ARG_CONFIGs, if we only have one argument, try to split it by spaces.
-                 * Only if the argument is not empty, otherwise something like --save "" will fail.
+                 * Only if the argument is not empty; otherwise, something like --save "" will fail.
                  * So that we can support something like --config "arg1 arg2 arg3". */
                 sds *new_argv;
                 int new_argc;
@@ -599,8 +611,16 @@ void loadServerConfigFromString(sds config) {
         } else if (!strcasecmp(argv[0], "user") && argc >= 2) {
             int argc_err;
             if (ACLAppendUserForLoading(argv, argc, &argc_err) == C_ERR) {
-                const char *errmsg = ACLSetUserStringError();
+                const char *errmsg = ACLSetStringError();
                 snprintf(buf, sizeof(buf), "Error in user declaration '%s': %s", argv[argc_err], errmsg);
+                err = buf;
+                goto loaderr;
+            }
+        } else if (!strcasecmp(argv[0], "role") && argc >= 2) {
+            int argc_err;
+            if (ACLAppendRoleForLoading(argv, argc, &argc_err) == C_ERR) {
+                const char *errmsg = ACLSetStringError();
+                snprintf(buf, sizeof(buf), "Error in role declaration '%s': %s", argv[argc_err], errmsg);
                 err = buf;
                 goto loaderr;
             }
@@ -651,8 +671,8 @@ void loadServerConfigFromString(sds config) {
         err = "replicaof directive not allowed in cluster mode";
         goto loaderr;
     }
-    if (server.bgsave_default_method == RDB_BGSAVE_TYPE_FORKLESS && !server.forkless_infrastructure_enabled) {
-        err = "'bgsave-default-method forkless' can only be selected when the server was started with "
+    if (server.forkless_policy != FORKLESS_POLICY_REQUIRE_FORK && !server.forkless_infrastructure_enabled) {
+        err = "'forkless-policy prefer-forkless' can only be selected when the server was started with "
               "'forkless-infrastructure-enabled yes'";
         goto loaderr;
     }
@@ -1215,7 +1235,9 @@ struct rewriteConfigState *rewriteConfigReadOldFile(char *path) {
 
     /* Load the file content */
     sds config = sdsnewlen(SDS_NOINIT, sb.st_size);
-    if (fread(config, 1, sb.st_size, fp) == 0) {
+    if (fread(config, 1, sb.st_size, fp) != (size_t)sb.st_size) {
+        /* A short read at EOF leaves errno untouched. */
+        if (!ferror(fp)) errno = EIO;
         sdsfree(config);
         rewriteConfigReleaseState(state);
         fclose(fp);
@@ -1249,7 +1271,7 @@ struct rewriteConfigState *rewriteConfigReadOldFile(char *path) {
              /* The following is a list of config features that are only supported in
               * config file parsing and are not recognized by lookupConfig */
              strcasecmp(argv[0], "include") && strcasecmp(argv[0], "rename-command") && strcasecmp(argv[0], "user") &&
-             strcasecmp(argv[0], "loadmodule") && strcasecmp(argv[0], "sentinel"))) {
+             strcasecmp(argv[0], "role") && strcasecmp(argv[0], "loadmodule") && strcasecmp(argv[0], "sentinel"))) {
             /* The line is either unparsable for some reason, for
              * instance it may have unbalanced quotes, may contain a
              * config that doesn't exist anymore, for instance a module that got
@@ -1514,36 +1536,36 @@ void rewriteConfigSaveOption(standardConfig *config, const char *name, struct re
     rewriteConfigMarkAsProcessed(state, name);
 }
 
-/* Rewrite the user option. */
-void rewriteConfigUserOption(struct rewriteConfigState *state) {
+/* Rewrite the user or role option. */
+static void rewriteConfigAclOption(struct rewriteConfigState *state, const char *directive, rax *table) {
     /* If there is a user file defined we just mark this configuration
      * directive as processed, so that all the lines containing users
      * inside the config file gets discarded. */
     if (server.acl_filename[0] != '\0') {
-        rewriteConfigMarkAsProcessed(state, "user");
+        rewriteConfigMarkAsProcessed(state, directive);
         return;
     }
 
-    /* Otherwise, scan the list of users and rewrite every line. Note that
-     * in case the list here is empty, the effect will just be to comment
-     * all the users directive inside the config file. */
+    /* Otherwise, scan the table and rewrite every line. Note that in case the
+     * table here is empty, the effect will just be to comment all the matching
+     * directives inside the config file. */
     raxIterator ri;
-    raxStart(&ri, Users);
+    raxStart(&ri, table);
     raxSeek(&ri, "^", NULL, 0);
     while (raxNext(&ri)) {
         user *u = ri.data;
-        sds line = sdsnew("user ");
+        sds line = sdscatfmt(sdsempty(), "%s ", directive);
         line = sdscatsds(line, u->name);
         line = sdscatlen(line, " ", 1);
         robj *descr = ACLDescribeUser(u);
         line = sdscatsds(line, objectGetVal(descr));
         decrRefCount(descr);
-        rewriteConfigRewriteLine(state, "user", line, 1);
+        rewriteConfigRewriteLine(state, directive, line, 1);
     }
     raxStop(&ri);
 
-    /* Mark "user" as processed in case there are no defined users. */
-    rewriteConfigMarkAsProcessed(state, "user");
+    /* Mark the directive as processed in case the table is empty. */
+    rewriteConfigMarkAsProcessed(state, directive);
 }
 
 /* Rewrite the dir option, always using absolute paths.*/
@@ -1570,7 +1592,9 @@ void rewriteConfigReplicaOfOption(standardConfig *config, const char *name, stru
         rewriteConfigMarkAsProcessed(state, name);
         return;
     }
-    line = sdscatprintf(sdsempty(), "%s %s %d", name, server.primary_host, server.primary_port);
+    line = sdscatfmt(sdsempty(), "%s ", name);
+    line = sdscatrepr(line, server.primary_host, strlen(server.primary_host));
+    line = sdscatfmt(line, " %i", server.primary_port);
     rewriteConfigRewriteLine(state, name, line, 1);
 }
 
@@ -1779,7 +1803,7 @@ sds getConfigDebugInfo(void) {
 /* This function replaces the old configuration file with the new content
  * in an atomic manner.
  *
- * The function returns 0 on success, otherwise -1 is returned and errno
+ * The function returns 0 on success; otherwise, -1 is returned and errno
  * is set accordingly. */
 int rewriteConfigOverwriteFile(char *configfile, sds content) {
     int fd = -1;
@@ -1849,7 +1873,7 @@ cleanup:
  * The force_write flag overrides this behavior and forces everything to be
  * written. This is currently only used for testing purposes.
  *
- * On error -1 is returned and errno is set accordingly, otherwise 0. */
+ * On error -1 is returned and errno is set accordingly; otherwise, 0. */
 int rewriteConfig(char *path, int force_write) {
     struct rewriteConfigState *state;
     sds newcontent;
@@ -1873,7 +1897,8 @@ int rewriteConfig(char *path, int force_write) {
     }
     dictReleaseIterator(di);
 
-    rewriteConfigUserOption(state);
+    rewriteConfigAclOption(state, "role", Roles);
+    rewriteConfigAclOption(state, "user", Users);
     rewriteConfigLoadmoduleOption(state);
 
     /* Rewrite Sentinel config if in Sentinel mode. */
@@ -2457,15 +2482,25 @@ static void numericConfigRewrite(standardConfig *config, const char *name, struc
     {.type = SPECIAL_CONFIG,                                                           \
      embedCommonConfig(name, alias, modifiable) embedConfigInterface(NULL, setfn, getfn, rewritefn, applyfn)}
 
-static int isValidBgsaveDefaultMethod(int val, const char **err) {
+static int isValidForklessPolicy(int val, const char **err) {
     /* During startup config parsing the directives are applied one by one, so
      * forkless-infrastructure-enabled may not have been read yet when this
      * value is set. We will check it when loading the config string */
     if (reading_config_file) return 1;
-    if (val == RDB_BGSAVE_TYPE_FORKLESS && !server.forkless_infrastructure_enabled) {
-        *err = "'forkless' can only be selected when the server was started with "
+    if (val != FORKLESS_POLICY_REQUIRE_FORK && !server.forkless_infrastructure_enabled) {
+        *err = "'prefer-forkless' can only be selected when the server was started with "
                "'forkless-infrastructure-enabled yes'";
         return 0;
+    }
+    return 1;
+}
+
+static int updateForklessPolicy(const char **err) {
+    UNUSED(err);
+    if (server.forkless_policy == FORKLESS_POLICY_PREFER_FORKLESS && !moduleAllModulesHandleForkless()) {
+        serverLog(LL_WARNING, "forkless-policy is 'prefer-forkless' but a loaded module does not declare "
+                              "VALKEYMODULE_OPTIONS_HANDLE_FORKLESS; forkless operations will fall "
+                              "back to fork.");
     }
     return 1;
 }
@@ -2483,6 +2518,24 @@ static int isValidActiveDefrag(int val, const char **err) {
     UNUSED(val);
     UNUSED(err);
 #endif
+    return 1;
+}
+
+static int isZstdCompressionAvailable(const char **err) {
+    if (!streamCodecIsSupported(ALGO_ZSTD)) {
+        *err = "Zstandard compression is not available in this build";
+        return 0;
+    }
+    return 1;
+}
+
+static int isValidRdbCompression(int val, const char **err) {
+    if (val == RDB_COMPRESSION_ZSTD) return isZstdCompressionAvailable(err);
+    return 1;
+}
+
+static int isValidReplCompression(int val, const char **err) {
+    if (val == REPL_COMPRESSION_ZSTD) return isZstdCompressionAvailable(err);
     return 1;
 }
 
@@ -2577,6 +2630,15 @@ static int isValidAnnouncedIp(char *val, const char **err) {
         return 0;
     }
     return 1;
+}
+
+static int isValidPrioritySubnets(char *val, const char **err) {
+    return validatePrioritySubnets(val, err) == C_OK;
+}
+
+static int updatePrioritySubnetsConfig(const char **err) {
+    UNUSED(err);
+    return updatePrioritySubnets(server.priority_subnets) == C_OK;
 }
 
 static int isValidAnnouncedHostname(char *val, const char **err) {
@@ -2677,6 +2739,16 @@ static int updateDefragConfiguration(const char **err) {
     return 1;
 }
 
+/* Dynamic configuration apply callback for priority-preemptive-poll-interval-us.
+ * Updates the preemption threshold on the active event loop. */
+static int updatePriorityPreemptivePollInterval(const char **err) {
+    UNUSED(err);
+    if (server.el) {
+        aeSetQoSPreemptCheckInterval(server.el, server.priority_preemptive_poll_interval_us);
+    }
+    return 1;
+}
+
 static int updateJemallocBgThread(const char **err) {
     UNUSED(err);
     set_jemalloc_bg_thread(server.jemalloc_bg_thread);
@@ -2702,6 +2774,9 @@ static int updateMaxmemory(const char **err) {
         }
         startEvictionTimeProc();
     }
+    /* maxmemory-scripts can be a percentage of maxmemory, in that case the
+     * scripts eviction limit changed together with maxmemory. */
+    if (server.maxmemory_scripts < 0) startScriptsEvictionTimeProc();
     return 1;
 }
 
@@ -3117,7 +3192,7 @@ static int setConfigNotifyKeyspaceEventsOption(standardConfig *config, sds *argv
     }
     int flags = keyspaceEventsStringToFlags(argv[0]);
     if (flags == -1) {
-        *err = "Invalid event class character. Use 'Ag$lshzxeKEtmdn'.";
+        *err = "Invalid event class character. Use 'Ag$lshzxeKEtmdnp'.";
         return 0;
     }
     server.notify_keyspace_events = flags;
@@ -3363,6 +3438,12 @@ static int applyClientMaxMemoryUsage(const char **err) {
     return 1;
 }
 
+static int updateMaxmemoryScripts(const char **err) {
+    UNUSED(err);
+    startScriptsEvictionTimeProc();
+    return 1;
+}
+
 #define HASH_SEED_MAX_LEN 256
 static int isValidDbHashSeed(sds val, const char **err) {
     if (sdslen(val) > HASH_SEED_MAX_LEN) {
@@ -3381,7 +3462,6 @@ standardConfig static_configs[] = {
     createBoolConfig("rdb-del-sync-files", NULL, MODIFIABLE_CONFIG, server.rdb_del_sync_files, 0, NULL, NULL),
     createBoolConfig("activerehashing", NULL, MODIFIABLE_CONFIG, server.activerehashing, 1, NULL, NULL),
     createBoolConfig("stop-writes-on-bgsave-error", NULL, MODIFIABLE_CONFIG, server.stop_writes_on_bgsave_err, 1, NULL, NULL),
-    createEnumConfig("bgsave-default-method", NULL, MODIFIABLE_CONFIG, bgsave_method_enum, server.bgsave_default_method, RDB_BGSAVE_TYPE_FORK, isValidBgsaveDefaultMethod, NULL),
     createBoolConfig("set-proc-title", NULL, IMMUTABLE_CONFIG, server.set_proc_title, 1, NULL, NULL), /* Should setproctitle be used? */
     createBoolConfig("lazyfree-lazy-eviction", NULL, DEBUG_CONFIG | MODIFIABLE_CONFIG, server.lazyfree_lazy_eviction, 1, NULL, NULL),
     createBoolConfig("lazyfree-lazy-expire", NULL, DEBUG_CONFIG | MODIFIABLE_CONFIG, server.lazyfree_lazy_expire, 1, NULL, NULL),
@@ -3400,7 +3480,6 @@ standardConfig static_configs[] = {
     createBoolConfig("aof-load-truncated", NULL, MODIFIABLE_CONFIG, server.aof_load_truncated, 1, NULL, NULL),
     createBoolConfig("aof-use-rdb-preamble", NULL, MODIFIABLE_CONFIG, server.aof_use_rdb_preamble, 1, NULL, NULL),
     createBoolConfig("aof-timestamp-enabled", NULL, MODIFIABLE_CONFIG, server.aof_timestamp_enabled, 0, NULL, NULL),
-    createBoolConfig("cluster-replica-no-failover", "cluster-slave-no-failover", MODIFIABLE_CONFIG, server.cluster_replica_no_failover, 0, NULL, updateClusterFlags), /* Failover by default. */
     createBoolConfig("replica-lazy-flush", "slave-lazy-flush", MODIFIABLE_CONFIG, server.repl_replica_lazy_flush, 1, NULL, NULL),
     createBoolConfig("replica-serve-stale-data", "slave-serve-stale-data", MODIFIABLE_CONFIG, server.repl_serve_stale_data, 1, NULL, NULL),
     createBoolConfig("replica-read-only", "slave-read-only", DEBUG_CONFIG | MODIFIABLE_CONFIG, server.repl_replica_ro, 1, NULL, NULL),
@@ -3455,6 +3534,8 @@ standardConfig static_configs[] = {
     createStringConfig("proc-title-template", NULL, MODIFIABLE_CONFIG, ALLOW_EMPTY_STRING, server.proc_title_template, CONFIG_DEFAULT_PROC_TITLE_TEMPLATE, isValidProcTitleTemplate, updateProcTitleTemplate),
     createStringConfig("bind-source-addr", NULL, MODIFIABLE_CONFIG, EMPTY_STRING_IS_NULL, server.bind_source_addr, NULL, NULL, NULL),
     createStringConfig("logfile", NULL, IMMUTABLE_CONFIG, ALLOW_EMPTY_STRING, server.logfile, "", NULL, NULL),
+    createStringConfig("priority-subnets", NULL, MODIFIABLE_CONFIG, EMPTY_STRING_IS_NULL, server.priority_subnets, NULL, isValidPrioritySubnets, updatePrioritySubnetsConfig),
+
 #ifdef LOG_REQ_RES
     createStringConfig("req-res-logfile", NULL, IMMUTABLE_CONFIG | HIDDEN_CONFIG, EMPTY_STRING_IS_NULL, server.req_res_logfile, NULL, NULL, NULL),
 #endif
@@ -3487,7 +3568,10 @@ standardConfig static_configs[] = {
     createEnumConfig("log-format", NULL, MODIFIABLE_CONFIG, log_format_enum, server.log_format, LOG_FORMAT_LEGACY, NULL, NULL),
     createEnumConfig("log-timestamp-format", NULL, MODIFIABLE_CONFIG, log_timestamp_format_enum, server.log_timestamp_format, LOG_TIMESTAMP_LEGACY, NULL, NULL),
     createEnumConfig("rdb-version-check", NULL, MODIFIABLE_CONFIG, rdb_version_check_enum, server.rdb_version_check, RDB_VERSION_CHECK_STRICT, NULL, NULL),
-    createEnumConfig("rdbcompression", NULL, MODIFIABLE_CONFIG, rdb_compression_enum, server.rdb_compression, RDB_COMPRESSION_YES, NULL, NULL),
+    createEnumConfig("rdbcompression", NULL, MODIFIABLE_CONFIG, rdb_compression_enum, server.rdb_compression, RDB_COMPRESSION_YES, isValidRdbCompression, NULL),
+    createEnumConfig("cluster-replica-no-failover", "cluster-slave-no-failover", MODIFIABLE_CONFIG, cluster_replica_no_failover_enum, server.cluster_replica_no_failover, CLUSTER_REPLICA_NO_FAILOVER_NO, NULL, updateClusterFlags), /* Failover by default. */
+    createEnumConfig("repl-compression", NULL, MODIFIABLE_CONFIG, repl_compression_enum, server.repl_compression, REPL_COMPRESSION_NO, isValidReplCompression, NULL),
+    createEnumConfig("forkless-policy", NULL, MODIFIABLE_CONFIG, forkless_policy_enum, server.forkless_policy, FORKLESS_POLICY_REQUIRE_FORK, isValidForklessPolicy, updateForklessPolicy),
 
     /* Integer configs */
     createIntConfig("databases", NULL, IMMUTABLE_CONFIG, 1, INT_MAX, server.config_databases, 16, INTEGER_CONFIG, NULL, NULL),
@@ -3508,6 +3592,7 @@ standardConfig static_configs[] = {
     createIntConfig("active-defrag-threshold-lower", NULL, MODIFIABLE_CONFIG, 0, 1000, server.active_defrag_threshold_lower, 10, INTEGER_CONFIG, NULL, NULL),                       /* Default: don't defrag when fragmentation is below 10% */
     createIntConfig("active-defrag-threshold-upper", NULL, MODIFIABLE_CONFIG, 0, 1000, server.active_defrag_threshold_upper, 100, INTEGER_CONFIG, NULL, updateDefragConfiguration), /* Default: maximum defrag force at 100% fragmentation */
     createIntConfig("active-defrag-cycle-us", NULL, MODIFIABLE_CONFIG, 0, 100000, server.active_defrag_cycle_us, 500, INTEGER_CONFIG, NULL, updateDefragConfiguration),
+    createIntConfig("priority-preemptive-poll-interval-us", NULL, MODIFIABLE_CONFIG, 0, INT_MAX, server.priority_preemptive_poll_interval_us, 2000, INTEGER_CONFIG, NULL, updatePriorityPreemptivePollInterval),
     createIntConfig("lfu-log-factor", NULL, MODIFIABLE_CONFIG, 0, INT_MAX, lfu_config_log_factor, 10, INTEGER_CONFIG, NULL, NULL),
     createIntConfig("lfu-decay-time", NULL, MODIFIABLE_CONFIG, 0, INT_MAX, lfu_config_decay_time, 1, INTEGER_CONFIG, NULL, NULL),
     createIntConfig("replica-priority", "slave-priority", MODIFIABLE_CONFIG, 0, INT_MAX, server.replica_priority, 100, INTEGER_CONFIG, NULL, NULL),
@@ -3546,6 +3631,7 @@ standardConfig static_configs[] = {
 
     /* Unsigned int configs */
     createUIntConfig("maxclients", NULL, MODIFIABLE_CONFIG, 1, UINT_MAX, server.maxclients, 10000, INTEGER_CONFIG, NULL, updateMaxclients),
+    createUIntConfig("maxclients-reserved", NULL, MODIFIABLE_CONFIG, 0, UINT_MAX, server.maxclients_reserved, 0, INTEGER_CONFIG, NULL, NULL),
     createUIntConfig("unixsocketperm", NULL, IMMUTABLE_CONFIG, 0, 0777, server.unix_ctx_config.perm, 0, OCTAL_CONFIG, NULL, NULL),
     createUIntConfig("socket-mark-id", NULL, IMMUTABLE_CONFIG, 0, UINT_MAX, server.socket_mark_id, 0, INTEGER_CONFIG, NULL, NULL),
     createUIntConfig("max-new-connections-per-cycle", NULL, MODIFIABLE_CONFIG, 1, 1000, server.max_new_conns_per_cycle, 10, INTEGER_CONFIG, NULL, NULL),
@@ -3596,6 +3682,7 @@ standardConfig static_configs[] = {
     createSizeTConfig("tracking-table-max-keys", NULL, MODIFIABLE_CONFIG, 0, LONG_MAX, server.tracking_table_max_keys, 1000000, INTEGER_CONFIG, NULL, NULL),                                      /* Default: 1 million keys max. */
     createSizeTConfig("client-query-buffer-limit", NULL, DEBUG_CONFIG | MODIFIABLE_CONFIG, 1024 * 1024, LONG_MAX, server.client_max_querybuf_len, 1024 * 1024 * 1024, MEMORY_CONFIG, NULL, NULL), /* Default: 1GB max query buffer. */
     createSSizeTConfig("maxmemory-clients", NULL, MODIFIABLE_CONFIG, -100, SSIZE_MAX, server.maxmemory_clients, 0, MEMORY_CONFIG | PERCENT_CONFIG, NULL, applyClientMaxMemoryUsage),
+    createSSizeTConfig("maxmemory-scripts", NULL, MODIFIABLE_CONFIG, -100, SSIZE_MAX, server.maxmemory_scripts, 0, MEMORY_CONFIG | PERCENT_CONFIG, NULL, updateMaxmemoryScripts),
     createSSizeTConfig("slot-migration-max-failover-repl-bytes", NULL, MODIFIABLE_CONFIG, -1, SSIZE_MAX, server.slot_migration_max_failover_repl_bytes, 0, MEMORY_CONFIG | SIGNED_MEMORY_CONFIG, NULL, NULL),
 
     /* Other configs */
@@ -3620,6 +3707,9 @@ standardConfig static_configs[] = {
     createStringConfig("tls-client-cert-file", NULL, VOLATILE_CONFIG | MODIFIABLE_CONFIG, EMPTY_STRING_IS_NULL, server.tls_ctx_config.client_cert_file, NULL, NULL, applyTlsCfg),
     createStringConfig("tls-client-key-file", NULL, VOLATILE_CONFIG | MODIFIABLE_CONFIG, EMPTY_STRING_IS_NULL, server.tls_ctx_config.client_key_file, NULL, NULL, applyTlsCfg),
     createStringConfig("tls-client-key-file-pass", NULL, MODIFIABLE_CONFIG | SENSITIVE_CONFIG, EMPTY_STRING_IS_NULL, server.tls_ctx_config.client_key_file_pass, NULL, NULL, applyTlsCfg),
+    createStringConfig("tls-alt-cert-file", NULL, VOLATILE_CONFIG | MODIFIABLE_CONFIG, EMPTY_STRING_IS_NULL, server.tls_ctx_config.alt_cert_file, NULL, NULL, applyTlsCfg),
+    createStringConfig("tls-alt-key-file", NULL, VOLATILE_CONFIG | MODIFIABLE_CONFIG, EMPTY_STRING_IS_NULL, server.tls_ctx_config.alt_key_file, NULL, NULL, applyTlsCfg),
+    createStringConfig("tls-alt-key-file-pass", NULL, MODIFIABLE_CONFIG | SENSITIVE_CONFIG, EMPTY_STRING_IS_NULL, server.tls_ctx_config.alt_key_file_pass, NULL, NULL, applyTlsCfg),
     createStringConfig("tls-dh-params-file", NULL, VOLATILE_CONFIG | MODIFIABLE_CONFIG, EMPTY_STRING_IS_NULL, server.tls_ctx_config.dh_params_file, NULL, NULL, applyTlsCfg),
     createStringConfig("tls-ca-cert-file", NULL, VOLATILE_CONFIG | MODIFIABLE_CONFIG, EMPTY_STRING_IS_NULL, server.tls_ctx_config.ca_cert_file, NULL, NULL, applyTlsCfg),
     createStringConfig("tls-ca-cert-dir", NULL, VOLATILE_CONFIG | MODIFIABLE_CONFIG, EMPTY_STRING_IS_NULL, server.tls_ctx_config.ca_cert_dir, NULL, NULL, applyTlsCfg),

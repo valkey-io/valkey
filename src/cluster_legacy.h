@@ -2,7 +2,12 @@
 #define CLUSTER_LEGACY_H
 
 #include <stdint.h>
+
 #define CLUSTER_PORT_INCR 10000 /* Cluster port = baseport + PORT_INCR */
+
+/* Receive buffer sizing for a cluster link. */
+#define RCVBUF_INIT_LEN 1024
+#define RCVBUF_MAX_PREALLOC (1 << 20) /* 1MB */
 
 /* The following defines are amount of time, sometimes expressed as
  * multipliers of the node timeout value (when ending with MULT). */
@@ -17,6 +22,7 @@
 #define CLUSTER_CANT_FAILOVER_WAITING_DELAY 2
 #define CLUSTER_CANT_FAILOVER_EXPIRED 3
 #define CLUSTER_CANT_FAILOVER_WAITING_VOTES 4
+#define CLUSTER_CANT_FAILOVER_NO_DATA 5
 #define CLUSTER_CANT_FAILOVER_RELOG_PERIOD 1 /* seconds. */
 
 /* clusterState todo_before_sleep flags. */
@@ -27,6 +33,22 @@
 #define CLUSTER_TODO_HANDLE_MANUALFAILOVER (1 << 4)
 #define CLUSTER_TODO_BROADCAST_ALL (1 << 5)
 #define CLUSTER_TODO_HANDLE_SLOT_MIGRATION (1 << 6)
+
+/* I/O state for threaded cluster bus offload. */
+typedef enum {
+    CLUSTER_LINK_IO_IDLE = 0,
+    CLUSTER_LINK_IO_PENDING,
+} clusterLinkIOState;
+
+/* Result codes for cluster I/O jobs. */
+typedef enum {
+    CLUSTER_IO_OK = 0,
+    CLUSTER_IO_BAD_HEADER,
+    CLUSTER_IO_BAD_LENGTH,
+    CLUSTER_IO_READ_ERROR,
+    CLUSTER_IO_EOF,
+    CLUSTER_IO_WRITE_ERROR,
+} clusterIOResult;
 
 /* clusterLink encapsulates everything needed to talk with a remote node. */
 typedef struct clusterLink {
@@ -41,6 +63,29 @@ typedef struct clusterLink {
     clusterNode *node;                     /* Node related to this link. Initialized to NULL when unknown */
     int inbound;                           /* 1 if this link is an inbound link accepted from the related node */
     int flags;                             /* CLUSTER_LINK_... */
+
+    /* Threaded I/O state (main-thread owned, except where noted) */
+    int io_read_state;         /* clusterLinkIOState: read job state */
+    int io_write_state;        /* clusterLinkIOState: write job state */
+    int async_close;           /* 1 if teardown requested while jobs in flight */
+    int io_refs;               /* Count of in-flight I/O jobs */
+    clusterIOResult io_result; /* Result code from last I/O job (written by I/O thread).
+                                * Shared by read/write jobs because they are mutually exclusive per link. */
+
+    /* Async write snapshot/result */
+    listNode *io_last_send_block; /* Last queue node visible to current write job */
+    size_t io_head_offset;        /* Snapshot/result offset into queue head */
+    int io_nodes_sent;            /* Number of fully-sent head nodes (set by I/O thread) */
+
+    /* Pre-dispatch rcvbuf_alloc for memory accounting on completion */
+    size_t rcvbuf_alloc_at_dispatch; /* rcvbuf_alloc when read job was dispatched */
+
+    /* Async read framing/result */
+    size_t io_complete_bytes;   /* Bytes at the start of rcvbuf framed as complete packets */
+    size_t io_complete_packets; /* Number of complete packets in io_complete_bytes */
+
+    /* Read/write fairness */
+    int io_read_deferred; /* Read skipped while a write was in flight; next write dispatch yields */
 } clusterLink;
 
 /* Cluster link flags and macros. */
@@ -93,6 +138,18 @@ static_assert(CLUSTER_NODE_MAX <= UINT16_MAX, "cluster node flags must fit in 16
 #define nodeInNormalState(n) (!((n)->flags & (CLUSTER_NODE_HANDSHAKE | CLUSTER_NODE_MEET | CLUSTER_NODE_PFAIL | CLUSTER_NODE_FAIL)))
 #define nodePrimaryIsFail(n) ((n)->flags & CLUSTER_NODE_MY_PRIMARY_FAIL)
 #define nodeSupportsFailoverAuthNack(n) ((n)->flags & CLUSTER_NODE_FAILOVER_AUTH_NACK_SUPPORTED)
+
+/* While our FAILOVER_AUTH_REQUEST is outstanding, every node is in exactly one
+ * of these states; only voting primaries are counted. A voter that responded
+ * keeps its state if it is later marked FAIL, so no voter is counted twice. A
+ * FAILED_WITHOUT_RESPONSE voter that still reaches us with an ACK moves to
+ * ACKED. */
+typedef enum {
+    VOTER_CAN_RESPOND,            /* Has not responded and may still ACK or NACK. */
+    VOTER_ACKED,                  /* Counted in failover_auth_count. */
+    VOTER_NACKED,                 /* Will not vote for us in this election. */
+    VOTER_FAILED_WITHOUT_RESPONSE /* Will never respond. */
+} voterElectionState;
 
 /* Cluster messages header */
 
@@ -150,8 +207,15 @@ typedef struct {
 } clusterMsgDataFail;
 
 typedef struct {
-    uint8_t reason;
+    uint64_t epoch;      /* currentEpoch of the rejected FAILOVER_AUTH_REQUEST, so the
+                          * candidate can match the NACK to the election it actually
+                          * answers rather than to whatever election it is running when
+                          * the NACK arrives. Network byte order. */
+    uint8_t reason;      /* One of CLUSTERMSG_FAILOVER_AUTH_NACK_REASON_*. */
+    uint8_t reserved[7]; /* Explicit padding, always zero. */
 } clusterMsgDataFailoverNack;
+
+static_assert(sizeof(clusterMsgDataFailoverNack) == 16, "unexpected FAILOVER_AUTH_NACK payload size");
 
 typedef struct {
     uint32_t channel_len;
@@ -405,49 +469,50 @@ static_assert(offsetof(clusterMsgHeader, notused1) == offsetof(clusterMsg, port)
 static_assert(offsetof(clusterMsgHeader, notused2) == offsetof(clusterMsg, count), "unexpected field offset");
 
 struct _clusterNode {
-    mstime_t ctime;                         /* Node object creation time. */
-    char name[CLUSTER_NAMELEN];             /* Node name, hex string, sha1-size */
-    char shard_id[CLUSTER_NAMELEN];         /* shard id, hex string, sha1-size */
-    int flags;                              /* CLUSTER_NODE_... */
-    uint64_t configEpoch;                   /* Last configEpoch observed for this node */
-    unsigned char slots[CLUSTER_SLOTS / 8]; /* slots handled by this node */
-    uint16_t *slot_info_pairs;              /* Slots info represented as (start/end) pair (consecutive index). */
-    int slot_info_pairs_count;              /* Used number of slots in slot_info_pairs */
-    int numslots;                           /* Number of slots handled by this node */
-    int num_replicas;                       /* Number of replica nodes, if this is a primary */
-    clusterNode **replicas;                 /* pointers to replica nodes */
-    clusterNode *replicaof;                 /* pointer to the primary node. Note that it
-                                             may be NULL even if the node is a replica
-                                             if we don't have the primary node in our
-                                             tables. */
-    unsigned long long last_in_ping_gossip; /* The number of the last carried in the ping gossip section */
-    mstime_t ping_sent;                     /* Unix time we sent latest ping */
-    mstime_t pong_received;                 /* Unix time we received the pong */
-    mstime_t data_received;                 /* Unix time we received any data */
-    mstime_t meet_sent;                     /* Unix time we sent latest meet packet */
-    mstime_t fail_time;                     /* Unix time when FAIL flag was set */
-    mstime_t orphaned_time;                 /* Starting time of orphaned primary condition */
-    mstime_t outbound_link_attempt_time;    /* Unix time we last tried to establish an outgoing link */
-    mstime_t inbound_link_freed_time;       /* Last time we freed the inbound link for this node.
-                                               If it was never freed, it is the same as ctime */
-    long long repl_offset;                  /* Last known repl offset for this node. */
-    char ip[NET_IP_STR_LEN];                /* Latest known IP address of this node */
-    sds announce_client_ipv4;               /* IPv4 for clients only. */
-    sds announce_client_ipv6;               /* IPv6 for clients only. */
-    sds hostname;                           /* The known hostname for this node */
-    sds human_nodename;                     /* The known human readable nodename for this node */
-    sds availability_zone;                  /* The known availability zone for this node */
-    int tcp_port;                           /* Latest known clients TCP port. */
-    int tls_port;                           /* Latest known clients TLS port */
-    int cport;                              /* Latest known cluster port of this node. */
-    int announce_client_tcp_port;           /* Port for clients only. */
-    int announce_client_tls_port;           /* TLS port for clients only. */
-    clusterLink *link;                      /* TCP/IP link established toward this node */
-    clusterLink *inbound_link;              /* TCP/IP link accepted from this node */
-    rax *fail_reports;                      /* Radix tree for failure reports with sorted order by timestamp */
-    int is_node_healthy;                    /* Boolean indicating the cached node health.
-                                               Update with updateAndCountChangedNodeHealth(). */
-    unsigned int replica_priority;          /* Replica priority used for auto failover ranking. */
+    mstime_t ctime;                          /* Node object creation time. */
+    char name[CLUSTER_NAMELEN];              /* Node name, hex string, sha1-size */
+    char shard_id[CLUSTER_NAMELEN];          /* shard id, hex string, sha1-size */
+    int flags;                               /* CLUSTER_NODE_... */
+    uint64_t configEpoch;                    /* Last configEpoch observed for this node */
+    unsigned char slots[CLUSTER_SLOTS / 8];  /* slots handled by this node */
+    uint16_t *slot_info_pairs;               /* Slots info represented as (start/end) pair (consecutive index). */
+    int slot_info_pairs_count;               /* Used number of slots in slot_info_pairs */
+    int numslots;                            /* Number of slots handled by this node */
+    int num_replicas;                        /* Number of replica nodes, if this is a primary */
+    clusterNode **replicas;                  /* pointers to replica nodes */
+    clusterNode *replicaof;                  /* pointer to the primary node. Note that it
+                                              may be NULL even if the node is a replica
+                                              if we don't have the primary node in our
+                                              tables. */
+    unsigned long long last_in_ping_gossip;  /* The number of the last carried in the ping gossip section */
+    mstime_t ping_sent;                      /* Unix time we sent latest ping */
+    mstime_t pong_received;                  /* Unix time we received the pong */
+    mstime_t data_received;                  /* Unix time we received any data */
+    mstime_t meet_sent;                      /* Unix time we sent latest meet packet */
+    mstime_t fail_time;                      /* Unix time when FAIL flag was set */
+    mstime_t orphaned_time;                  /* Starting time of orphaned primary condition */
+    mstime_t outbound_link_attempt_time;     /* Unix time we last tried to establish an outgoing link */
+    mstime_t inbound_link_freed_time;        /* Last time we freed the inbound link for this node.
+                                                If it was never freed, it is the same as ctime */
+    long long repl_offset;                   /* Last known repl offset for this node. */
+    char ip[NET_IP_STR_LEN];                 /* Latest known IP address of this node */
+    sds announce_client_ipv4;                /* IPv4 for clients only. */
+    sds announce_client_ipv6;                /* IPv6 for clients only. */
+    sds hostname;                            /* The known hostname for this node */
+    sds human_nodename;                      /* The known human readable nodename for this node */
+    sds availability_zone;                   /* The known availability zone for this node */
+    int tcp_port;                            /* Latest known clients TCP port. */
+    int tls_port;                            /* Latest known clients TLS port */
+    int cport;                               /* Latest known cluster port of this node. */
+    int announce_client_tcp_port;            /* Port for clients only. */
+    int announce_client_tls_port;            /* TLS port for clients only. */
+    clusterLink *link;                       /* TCP/IP link established toward this node */
+    clusterLink *inbound_link;               /* TCP/IP link accepted from this node */
+    rax *fail_reports;                       /* Radix tree for failure reports with sorted order by timestamp */
+    int is_node_healthy;                     /* Boolean indicating the cached node health.
+                                                Update with updateAndCountChangedNodeHealth(). */
+    unsigned int replica_priority;           /* Replica priority used for auto failover ranking. */
+    voterElectionState voter_election_state; /* The state of the node in the current failover election. */
 };
 
 /* Struct used for storing slot statistics. */
@@ -469,7 +534,6 @@ struct clusterState {
     int fail_reason;        /* Why the cluster state changes to fail. */
     int safe_to_join;       /* Can the restarted node safely join the cluster? */
     int size;               /* Num of primary nodes with at least one slot */
-    int size_fail;          /* Num of voting primaries currently in FAIL state (subset of size). */
     dict *nodes;            /* Hash table of name -> clusterNode structures */
     dict *shards;           /* Hash table of shard_id -> list (of nodes) structures */
     dict *nodes_black_list; /* Nodes we don't re-add for a few seconds. */
@@ -482,7 +546,6 @@ struct clusterState {
     /* The following fields are used to take the replica state on elections. */
     mstime_t failover_auth_time;      /* Time of previous or next election. */
     int failover_auth_count;          /* Number of votes received so far. */
-    int failover_auth_nack_count;     /* Number of rejected votes received so far. */
     int failover_auth_sent;           /* True if we already asked for votes. */
     int failover_auth_rank;           /* This replica rank for current auth request. */
     int failover_failed_primary_rank; /* The rank of this instance in the context of all failed primary list. */
@@ -530,5 +593,19 @@ struct clusterState {
     /* Struct used for storing slot statistics, for all slots owned by the current shard. */
     slotStat slot_stats[CLUSTER_SLOTS];
 };
+
+/* Cluster I/O completion handlers called from processIOThreadsResponses().
+ * For read/write, the tagged pointer is the clusterLink* itself.
+ * For accept, the tagged pointer is the connection* (no clusterLink exists yet).
+ * Implemented in cluster_legacy.c. */
+void clusterHandleReadCompletion(clusterLink *link);
+void clusterHandleWriteCompletion(clusterLink *link);
+void clusterHandleAcceptCompletion(connection *conn);
+void clusterConnAcceptHandler(connection *conn);
+void clusterReadJob(clusterLink *link);
+void clusterWriteJob(clusterLink *link);
+
+void testOnlyFreeClusterLinkOnBufferLimitReached(clusterLink *link);
+void clusterAcceptJob(connection *conn);
 
 #endif // CLUSTER_LEGACY_H

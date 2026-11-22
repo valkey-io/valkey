@@ -33,6 +33,7 @@ ifneq ($(OPTIMIZATION),-O0)
 endif
 DEPENDENCY_TARGETS=libvalkey linenoise hdr_histogram fpconv lz4
 NODEPS:=clean distclean
+CLEAN_ONLY := $(if $(MAKECMDGOALS),$(if $(filter-out $(NODEPS),$(MAKECMDGOALS)),,yes))
 
 # Default settings
 STD=-pedantic
@@ -258,6 +259,46 @@ endif
 # Include paths to dependencies
 FINAL_CFLAGS+= -I../deps/libvalkey/include -I../deps/linenoise -I../deps/hdr_histogram -I../deps/fpconv -I../deps/fast_float -I../deps/lz4
 
+# Zstandard support is disabled by default.
+BUILD_ZSTD ?= no
+
+ifneq ($(CLEAN_ONLY),yes)
+ifneq ($(filter $(BUILD_ZSTD),yes no),$(BUILD_ZSTD))
+$(error BUILD_ZSTD must be yes or no)
+endif
+endif
+
+ifeq ($(BUILD_ZSTD),yes)
+ifneq ($(CLEAN_ONLY),yes)
+ifdef ZSTD_PREFIX
+ZSTD_STATIC_ARCHIVE := $(firstword $(wildcard \
+    $(ZSTD_PREFIX)/lib/libzstd.a \
+    $(ZSTD_PREFIX)/lib64/libzstd.a))
+	ZSTD_CFLAGS := -I$(ZSTD_PREFIX)/include
+	ZSTD_LIBS := $(ZSTD_STATIC_ARCHIVE)
+else
+ZSTD_PKGCONFIG_LIBDIR := $(shell $(PKG_CONFIG) --variable=libdir libzstd 2>/dev/null)
+ZSTD_PKGCONFIG_PCFILEDIR := $(shell $(PKG_CONFIG) --variable=pcfiledir libzstd 2>/dev/null)
+# Debian and Ubuntu ship libzstd.pc with libdir=/usr/lib while installing the
+# archive to the multiarch directory, so also probe next to the .pc file.
+ZSTD_STATIC_ARCHIVE := $(firstword $(wildcard \
+    $(if $(ZSTD_PKGCONFIG_LIBDIR),$(ZSTD_PKGCONFIG_LIBDIR)/libzstd.a) \
+    $(if $(ZSTD_PKGCONFIG_PCFILEDIR),$(abspath $(ZSTD_PKGCONFIG_PCFILEDIR)/..)/libzstd.a)))
+ZSTD_PKGCONFIG := $(shell $(PKG_CONFIG) --atleast-version=1.4.7 libzstd >/dev/null 2>&1 && test -n "$(ZSTD_STATIC_ARCHIVE)" && echo $$?)
+ifneq ($(ZSTD_PKGCONFIG),0)
+$(error BUILD_ZSTD=yes requires static Zstandard 1.4.7 or newer)
+endif
+	ZSTD_CFLAGS := $(shell $(PKG_CONFIG) --cflags libzstd)
+	ZSTD_LIBS := $(ZSTD_STATIC_ARCHIVE) $(filter-out -lzstd,$(shell $(PKG_CONFIG) --libs --static libzstd))
+endif
+ifeq ($(ZSTD_STATIC_ARCHIVE),)
+$(error BUILD_ZSTD=yes requires a static Zstandard library)
+endif
+	FINAL_CFLAGS += -DHAVE_ZSTD $(ZSTD_CFLAGS)
+	FINAL_LIBS += $(ZSTD_LIBS)
+endif
+endif
+
 # Lua scripting engine module
 ifeq ($(BUILD_LUA),no)
 	LUA_MODULE_NAME=
@@ -333,6 +374,14 @@ ifeq ($(MALLOC),jemalloc)
 	DEPENDENCY_TARGETS+= jemalloc
 	FINAL_CFLAGS+= -DUSE_JEMALLOC -I../deps/jemalloc/include
 	FINAL_LIBS := ../deps/jemalloc/lib/libjemalloc.a $(FINAL_LIBS)
+endif
+
+# The jemalloc installed on the system, built without the je_ prefix.
+# JEMALLOC_NO_DEMANGLE keeps the je_* names that jemalloc.h maps to the
+# unprefixed functions, so the call sites stay unchanged.
+ifeq ($(MALLOC),system-jemalloc)
+	FINAL_CFLAGS+= -DUSE_JEMALLOC -DJEMALLOC_NO_DEMANGLE
+	FINAL_LIBS := -ljemalloc $(FINAL_LIBS)
 endif
 
 ifeq ($(USE_LTTNG),yes)
@@ -491,6 +540,7 @@ ENGINE_SERVER_OBJ = \
     commands.o \
     compression.o \
     compression_lz4.o \
+    compression_zstd.o \
     compression_stream.o \
     config.o \
     connection.o \
@@ -549,6 +599,7 @@ ENGINE_SERVER_OBJ = \
     rand.o \
     rax.o \
     rdb.o \
+    rdb_transcoder.o \
     rdma.o \
     release.o \
     replication.o \
@@ -572,6 +623,7 @@ ENGINE_SERVER_OBJ = \
     syscheck.o \
     t_hash.o \
     t_list.o \
+    t_path_hash.o \
     t_set.o \
     t_stream.o \
     t_string.o \
@@ -691,7 +743,10 @@ persist-settings: distclean
 	echo PROG_SUFFIX=$(PROG_SUFFIX) >> .make-settings
 	echo MALLOC=$(MALLOC) >> .make-settings
 	echo BUILD_TLS=$(BUILD_TLS) >> .make-settings
+	echo OPENSSL_PREFIX=$(OPENSSL_PREFIX) >> .make-settings
 	echo BUILD_RDMA=$(BUILD_RDMA) >> .make-settings
+	echo BUILD_ZSTD=$(BUILD_ZSTD) >> .make-settings
+	echo ZSTD_PREFIX=$(ZSTD_PREFIX) >> .make-settings
 	echo USE_SYSTEMD=$(USE_SYSTEMD) >> .make-settings
 	echo BUILD_LUA=$(BUILD_LUA) >> .make-settings
 	echo USE_LIBBACKTRACE=$(USE_LIBBACKTRACE) >> .make-settings
@@ -751,8 +806,12 @@ $(RDMA_MODULE_NAME): $(SERVER_NAME)
 	$(QUIET_CC)$(CC) $(LDFLAGS) -o $@ rdma.c -shared -fPIC $(RDMA_MODULE_CFLAGS)
 
 # engine_lua.so
-$(LUA_MODULE_NAME): .make-prerequisites
+# FORCE runs the sub-make on every build so it can rebuild changed Lua sources.
+$(LUA_MODULE_NAME): .make-prerequisites FORCE
 	$(MAKE) -C modules/lua OPTIMIZATION="$(OPTIMIZATION)" BUILD_LUA="$(BUILD_LUA)"
+
+.PHONY: FORCE
+FORCE:
 
 # valkey-cli
 $(ENGINE_CLI_NAME): $(ENGINE_CLI_OBJ)
@@ -806,7 +865,7 @@ distclean: clean
 .PHONY: distclean
 
 test: $(ALL_BUILD_PREREQUISITES)
-	@(cd ..; VALKEY_PROG_SUFFIX="$(PROG_SUFFIX)" ./runtest)
+	@(cd ..; VALKEY_PROG_SUFFIX="$(PROG_SUFFIX)" ./runtest $(TEST_OPTIONS))
 
 test-unit:
 	@(cd unit && $(MAKE) test-unit)
@@ -816,20 +875,20 @@ $(ENGINE_UNIT_GTESTS): $(ENGINE_LIB_NAME)
 	@(cd unit && $(MAKE) $(ENGINE_UNIT_GTESTS))
 
 test-modules: $(SERVER_NAME)
-	@(cd ..; ./runtest-moduleapi)
+	@(cd ..; ./runtest-moduleapi $(TEST_OPTIONS))
 
 test-sentinel: $(ENGINE_SENTINEL_NAME) $(ENGINE_CLI_NAME)
-	@(cd ..; ./runtest-sentinel)
+	@(cd ..; ./runtest-sentinel $(TEST_OPTIONS))
 
 test-cluster: $(SERVER_NAME) $(ENGINE_CLI_NAME)
-	@(cd ..; ./runtest-cluster)
+	@(cd ..; ./runtest-cluster $(TEST_OPTIONS))
 
 check: test
 
 lcov:
 	@lcov --version
 	$(MAKE) gcov
-	@(set -e; cd ..; ./runtest)
+	@(set -e; cd ..; ./runtest $(TEST_OPTIONS))
 	$(MAKE) test-unit COVERAGE=1 COVERAGE_CFLAGS="-fprofile-arcs -ftest-coverage"
 	@geninfo -o valkey.info .
 	@genhtml --legend -o lcov-html valkey.info

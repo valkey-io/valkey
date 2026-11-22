@@ -12,7 +12,7 @@ start_cluster 3 4 {tags {external:skip cluster} overrides {cluster-ping-interval
 
     set paused_pid [srv 0 pid]
     test "Killing one primary node" {
-        pause_process $paused_pid
+        pause_process_persistent $paused_pid
     }
 
     test "Wait for failover" {
@@ -31,7 +31,7 @@ start_cluster 3 4 {tags {external:skip cluster} overrides {cluster-ping-interval
             set replica_to_be_primary -3
             set paused_pid2 [srv -6 pid]
         }
-        pause_process $paused_pid2
+        pause_process_persistent $paused_pid2
     }
 
     test "Cluster should eventually be up again" {

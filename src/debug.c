@@ -273,6 +273,8 @@ void xorObjectDigest(serverDb *db, robj *keyobj, unsigned char *digest, robj *o)
             }
         }
         streamIteratorStop(&si);
+    } else if (objectGetType(o) == OBJ_PATH_HASH) {
+        pathHashTypeDigest(digest, o);
     } else if (objectGetType(o) == OBJ_MODULE) {
         ValkeyModuleDigest md = {{0}, {0}, keyobj, db->id};
         moduleValue *mv = objectGetVal(o);
@@ -499,6 +501,9 @@ void debugCommand(client *c) {
             "    Setting it to 0 disables expiring keys in background when they are not",
             "    accessed (otherwise the behavior). Setting it to 1 reenables back the",
             "    default.",
+            "SWEEP-TRACKING-TABLE",
+            "    Synchronously sweep the whole tracking table until every ID left in it",
+            "    references a connected client.",
             "SET-DISABLE-DENY-SCRIPTS <0|1>",
             "    Setting it to 1 allows scripts to run commands marked with the NOSCRIPT",
             "    flag, which are normally not allowed from scripts. Setting it to 0",
@@ -588,6 +593,11 @@ void debugCommand(client *c) {
         sdsdup(objectGetVal(c->argv[2]));
         addReply(c, shared.ok);
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "reload")) {
+        if (server.loading || server.async_loading) {
+            addReplyErrorObject(c, shared.loadingerr);
+            return;
+        }
+
         int flush = 1, save = 1;
         int flags = RDBFLAGS_NONE;
 
@@ -634,6 +644,11 @@ void debugCommand(client *c) {
         serverLog(LL_NOTICE, "DB reloaded by DEBUG RELOAD");
         addReply(c, shared.ok);
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "loadaof")) {
+        if (server.loading || server.async_loading) {
+            addReplyErrorObject(c, shared.loadingerr);
+            return;
+        }
+
         if (server.aof_state != AOF_OFF) flushAppendOnlyFile(1);
         emptyData(-1, EMPTYDB_NO_FLAGS, NULL);
         protectClient(c);
@@ -683,7 +698,7 @@ void debugCommand(client *c) {
         }
         server.debug_cluster_failover_epoch = epoch;
         addReply(c, shared.ok);
-    } else if (!strcasecmp(objectGetVal(c->argv[1]), "slotmigration")) {
+    } else if (!strcasecmp(objectGetVal(c->argv[1]), "slotmigration") && c->argc == 4) {
         if (!strcasecmp(objectGetVal(c->argv[2]), "prevent-pause")) {
             server.debug_slot_migration_prevent_pause = (atoi(objectGetVal(c->argv[3])) != 0);
         } else if (!strcasecmp(objectGetVal(c->argv[2]), "prevent-failover")) {
@@ -739,6 +754,11 @@ void debugCommand(client *c) {
                 nextra += used;
                 remaining -= used;
             }
+        } else if (val->encoding == OBJ_ENCODING_BTREE) {
+            /* Leaf count of the B+tree index, read by tests that check leaf
+             * compaction. */
+            zset *zs = objectGetVal(val);
+            snprintf(extra, sizeof(extra), " btree_leaves:%lu", orderedIndexGetNumLeaves(zs->oi));
         }
 
         sds s = sdsempty();
@@ -939,6 +959,9 @@ void debugCommand(client *c) {
         addReply(c, shared.ok);
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "set-active-expire") && c->argc == 3) {
         server.active_expire_enabled = atoi(objectGetVal(c->argv[2]));
+        addReply(c, shared.ok);
+    } else if (!strcasecmp(objectGetVal(c->argv[1]), "sweep-tracking-table") && c->argc == 2) {
+        trackingSweepFull();
         addReply(c, shared.ok);
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "quicklist-packed-threshold") && c->argc == 3) {
         int memerr;
@@ -1262,6 +1285,9 @@ void serverLogObjectDebugInfo(const robj *o) {
         }
     } else if (objectGetType(o) == OBJ_STREAM) {
         serverLog(LL_WARNING, "Stream size: %d", (int)streamLength(o));
+    } else if (objectGetType(o) == OBJ_PATH_HASH) {
+        serverLog(LL_WARNING, "Path hash path count: %llu",
+                  (unsigned long long)raxSize(((pathHashObject *)objectGetVal(o))->index));
     }
 #endif
 }
@@ -2280,7 +2306,7 @@ int memtest_test_linux_anonymous_maps(void) {
                  (unsigned long)start_vect[regions], (unsigned long)size_vect[regions]);
         if (write(fd, logbuf, strlen(logbuf)) == -1) { /* Nothing to do. */
         }
-        regions++;
+        if (++regions == MEMTEST_MAX_REGIONS) break;
     }
 
     int errors = 0;
@@ -2307,7 +2333,7 @@ static void killMainThread(void) {
     int err;
     if (pthread_self() != server.main_thread_id && pthread_cancel(server.main_thread_id) == 0) {
         if ((err = pthread_join(server.main_thread_id, NULL)) != 0) {
-            serverLog(LL_WARNING, "main thread can not be joined: %s", strerror(err));
+            serverLog(LL_WARNING, "main thread cannot be joined: %s", strerror(err));
         } else {
             serverLog(LL_WARNING, "main thread terminated");
         }

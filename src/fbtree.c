@@ -1,5 +1,5 @@
 /* Feature B-Tree: a cache-optimized B+tree for sorted binary strings.
- * This is a general-purpose data structure - zset-specific logic is in zset_fbtree_adapter.c */
+ * This is a general-purpose data structure - zset-specific logic is in ordered_index.c */
 
 #include <stddef.h>
 #include <stdarg.h>
@@ -129,14 +129,15 @@ static innerNode *innerNodeCreate(void) {
     return zcalloc(sizeof(innerNode));
 }
 
-static leafNode *leafNodeCreate(void) {
+static leafNode *leafNodeCreate(fbtreeIndex *fbt) {
     leafNode *node = zcalloc(sizeof(*node));
     node->header.is_leaf = true;
+    fbt->num_leaves++;
     return node;
 }
 
-static leafNode *leafNodeCreateWithItem(sds item) {
-    leafNode *leaf = leafNodeCreate();
+static leafNode *leafNodeCreateWithItem(fbtreeIndex *fbt, sds item) {
+    leafNode *leaf = leafNodeCreate(fbt);
     leaf->values[0] = item;
     leaf->header.num_items = 1;
     return leaf;
@@ -147,6 +148,7 @@ fbtreeIndex *fbtreeCreate(void) {
     fbt->root = NULL;
     fbt->leftmost_leaf = NULL;
     fbt->rightmost_leaf = NULL;
+    fbt->num_leaves = 0;
     return fbt;
 }
 
@@ -154,7 +156,13 @@ fbtreeIndex *fbtreeCreate(void) {
  * Allows callers to perform side effects (e.g., hashtable removal). */
 typedef void (*fbtreeItemCallback)(sds item, void *ctx);
 
-static void freeNodeRecursive(node *n, fbtreeItemCallback callback, void *ctx) {
+/* Free a single, already-detached node, maintaining the leaf counter. */
+static void freeNode(fbtreeIndex *fbt, node *n) {
+    if (n->is_leaf) fbt->num_leaves--;
+    zfree(n);
+}
+
+static void freeNodeRecursive(fbtreeIndex *fbt, node *n, fbtreeItemCallback callback, void *ctx) {
     if (!n) return;
 
     if (n->is_leaf) {
@@ -163,26 +171,27 @@ static void freeNodeRecursive(node *n, fbtreeItemCallback callback, void *ctx) {
             if (callback) callback(leaf->values[i], ctx);
             sdsfree(leaf->values[i]);
         }
-        zfree(leaf);
+        freeNode(fbt, n);
     } else {
         innerNode *inner = (innerNode *)n;
         innerNodeFreePrefix(inner);
         for (int i = 0; i < inner->header.num_items; i++) {
             if (inner->children[i] != NULL) {
-                freeNodeRecursive(inner->children[i], callback, ctx);
+                freeNodeRecursive(fbt, inner->children[i], callback, ctx);
             }
         }
-        zfree(inner);
+        freeNode(fbt, n);
     }
 }
 
 /* Free all nodes and reset to empty. If callback is non-NULL, it is invoked
  * for each item before freeing. */
 static void fbtreeDeleteAll(fbtreeIndex *fbt, fbtreeItemCallback callback, void *callback_ctx) {
-    freeNodeRecursive(fbt->root, callback, callback_ctx);
+    freeNodeRecursive(fbt, fbt->root, callback, callback_ctx);
     fbt->root = NULL;
     fbt->leftmost_leaf = NULL;
     fbt->rightmost_leaf = NULL;
+    fbt->num_leaves = 0;
 }
 
 void fbtreeEmpty(fbtreeIndex *fbt) {
@@ -226,7 +235,21 @@ static inline void innerNodeMoveChildren(innerNode *node, int dst_idx, int src_i
 }
 
 static bool updateCommonPrefix(innerNode *inner) {
-    if (inner->header.num_items < 2) return false;
+    if (inner->header.num_items < 2) {
+        /* A node reduced to one child (by a range delete removing all its
+         * siblings) can still be holding the prefix it derived when it had
+         * >= 2 anchors. The surviving child is child 0, whose key range
+         * extends BELOW its own high key, so when the range delete truncates
+         * it innerNodeRefreshChildMeta() installs a smaller anchor that need
+         * not start with the retained prefix. Drop compression here:
+         * prefix_len 0 is trivially a prefix of every anchor. */
+        if (inner->prefix_len != 0) {
+            innerNodeSetPrefix(inner, "", 0);
+            recomputeFeatures(inner);
+            return true;
+        }
+        return false;
+    }
 
     /* Compute the common prefix of this node's first and last anchors.
      * Anchors are high keys of children, so this is the common prefix among
@@ -410,26 +433,26 @@ static void unlinkLeaf(leafNode *leaf) {
     if (leaf->next) leaf->next->prev = leaf->prev;
 }
 
-/* Free a node that has been emptied by deletion: unlink leaves from the leaf
- * chain, release any spilled prefix buffer on inner nodes, then free the
- * node itself. */
-static void freeEmptyNode(node *n) {
+/* Free a detached, emptied node already removed from the leaf chain. An emptied
+ * inner node still owns its spilled prefix buffer; release it before freeing.
+ * Maintains the leaf counter. */
+static void freeEmptyNodeAlreadyUnlinked(fbtreeIndex *fbt, node *n) {
+    if (!n->is_leaf) innerNodeFreePrefix((innerNode *)n);
+    freeNode(fbt, n);
+}
+
+/* Free an emptied node that is still in the leaf chain: unlink a leaf, or
+ * release an inner node's spilled prefix buffer, then free. Maintains the
+ * leaf counter. */
+static void freeEmptyNode(fbtreeIndex *fbt, node *n) {
     if (n->is_leaf)
         unlinkLeaf((leafNode *)n);
     else
         innerNodeFreePrefix((innerNode *)n);
-    zfree(n);
+    freeNode(fbt, n);
 }
 
-/* Variant for emptied nodes whose leaves have already been removed from the
- * leaf chain (range deletion splices the chain before trimming boundary
- * subtrees): only the spilled prefix release applies. */
-static void freeEmptyNodeAlreadyUnlinked(node *n) {
-    if (!n->is_leaf) innerNodeFreePrefix((innerNode *)n);
-    zfree(n);
-}
-
-static insertResult leafNodeSplit(leafNode *left_leaf, sds string, TraversalHint hint) {
+static insertResult leafNodeSplit(fbtreeIndex *fbt, leafNode *left_leaf, sds string, TraversalHint hint) {
     assert(left_leaf->header.num_items == NODE_SIZE);
 
     /* Binary search to find insertion point - reuse for pattern detection */
@@ -437,7 +460,7 @@ static insertResult leafNodeSplit(leafNode *left_leaf, sds string, TraversalHint
 
     if (insert_index == NODE_SIZE && hint == HINT_RIGHTMOST) {
         /* Append at tree edge: create new node with just the new item, left unchanged */
-        leafNode *right_leaf = leafNodeCreateWithItem(string);
+        leafNode *right_leaf = leafNodeCreateWithItem(fbt, string);
         linkLeafRight(left_leaf, right_leaf);
         return (insertResult){
             .new_node = (node *)right_leaf,
@@ -447,7 +470,7 @@ static insertResult leafNodeSplit(leafNode *left_leaf, sds string, TraversalHint
 
     if (insert_index == 0 && hint == HINT_LEFTMOST) {
         /* Prepend at tree edge: move all items to new right node, left gets just new item */
-        leafNode *right_leaf = leafNodeCreate();
+        leafNode *right_leaf = leafNodeCreate(fbt);
         memcpy(right_leaf->values, left_leaf->values, NODE_SIZE * sizeof(sds));
         right_leaf->header.num_items = NODE_SIZE;
         left_leaf->values[0] = string;
@@ -461,7 +484,7 @@ static insertResult leafNodeSplit(leafNode *left_leaf, sds string, TraversalHint
     }
 
     /* Middle insert: standard 50/50 split */
-    leafNode *right_leaf = leafNodeCreate();
+    leafNode *right_leaf = leafNodeCreate(fbt);
     size_t num_left = NODE_SIZE / 2;
     size_t num_right = NODE_SIZE - num_left;
 
@@ -792,12 +815,12 @@ static insertResult innerNodeHandleChildSplit(innerNode *parent, node *new_child
     }
 }
 
-static insertResult subtreeInsert(node *n, sds string, TraversalHint hint) {
+static insertResult subtreeInsert(fbtreeIndex *fbt, node *n, sds string, TraversalHint hint) {
     assert(n);
     if (n->is_leaf) {
         leafNode *leaf = (leafNode *)n;
         if (leaf->header.num_items == NODE_SIZE) {
-            return leafNodeSplit(leaf, string, hint);
+            return leafNodeSplit(fbt, leaf, string, hint);
         } else {
             return leafNodeInsert(leaf, string);
         }
@@ -817,7 +840,7 @@ static insertResult subtreeInsert(node *n, sds string, TraversalHint hint) {
             if (child_idx == parent->header.num_items) child_idx--;
         }
 
-        insertResult child_insert_result = subtreeInsert(parent->children[child_idx], string, hint);
+        insertResult child_insert_result = subtreeInsert(fbt, parent->children[child_idx], string, hint);
 
         if (child_insert_result.updated_anchor) {
             parent->anchors[child_idx] = child_insert_result.updated_anchor;
@@ -854,7 +877,7 @@ static insertResult subtreeInsert(node *n, sds string, TraversalHint hint) {
 
 sds fbtreeInsert(fbtreeIndex *fbt, sds string) {
     if (fbt->root == NULL) {
-        leafNode *leaf = leafNodeCreateWithItem(string);
+        leafNode *leaf = leafNodeCreateWithItem(fbt, string);
         fbt->root = (node *)leaf;
         fbt->leftmost_leaf = leaf;
         fbt->rightmost_leaf = leaf;
@@ -873,7 +896,7 @@ sds fbtreeInsert(fbtreeIndex *fbt, sds string) {
     }
 
     /* Insert with hint - skips inner node searches for append/prepend */
-    insertResult result = subtreeInsert(fbt->root, string, hint);
+    insertResult result = subtreeInsert(fbt, fbt->root, string, hint);
 
     if (result.new_node) {
         innerNode *new_root = innerNodeCreate();
@@ -952,6 +975,147 @@ static deleteResult leafNodeDelete(fbtreeIndex *fbt, leafNode *leaf, const_sds i
         .updated_anchor = (delete_index == leaf->header.num_items) ? leafNodeHighKey(leaf) : NULL};
 }
 
+/* ============================================================
+ * Leaf compaction
+ *
+ * Deletes never merge leaves: a leaf is freed only when its last item goes.
+ * Scattered deletes therefore leave leaves under-full and the tree holding far
+ * more leaves than its item count needs. Compaction reclaims that slack on the
+ * delete path itself, one bottom inner node at a time, in the same spirit as a
+ * leaf split on insert: a local, amortized O(1) rewrite.
+ *
+ * UNIT OF WORK. The unit is one "bottom" inner node `p`, an inner node whose
+ * children are all leaves. After a delete under `p` has been applied and p's
+ * cached child metadata refreshed, p's fill (items / (k leaves * NODE_SIZE))
+ * is checked against COMPACT_TRIGGER_PCT. Below it, p's leaves are re-packed
+ * to COMPACT_TARGET_PCT of NODE_SIZE each. Items never cross between different
+ * bottom inner nodes; that locality is what keeps the upward fixup cheap.
+ *
+ * WHAT MOVES. Only the sds POINTERS in the leaves' values[] move. Items are
+ * never copied or reallocated, so companion-hashtable entries that point at
+ * them stay valid. The gather/scatter writes p's `total` items back into the
+ * FIRST `needed` leaves at even fill (needed = ceil(total / target)) and frees
+ * children[needed .. k-1]. The leaf chain is spliced around the freed run and
+ * the rightmost_leaf cache is repaired if it pointed into it. children[0]
+ * always survives, so the leftmost_leaf cache is never affected.
+ *
+ * PROPAGATION. Items are conserved and order is preserved, so p's subtree
+ * size and its high-key anchor are unchanged: the parent's child_sizes,
+ * anchors and feature bytes stay valid. The only quantity that changes above
+ * p is p's direct child count, cached in the parent as child_num_items. Every
+ * delete path already refreshes that field on the way back up (it is how an
+ * emptied leaf's removal is reported), so compaction needs no fixup of its
+ * own: it runs at p before p's parent refreshes its view of p.
+ *
+ * HYSTERESIS. Trigger 50% and target 80% mean a node loses roughly a third of
+ * its items between compactions, and a compaction only ever runs when it
+ * strictly reduces the leaf count (needed < k), so a node that cannot be
+ * tightened is a cheap no-op check. Leaves left at 80% also leave room for
+ * inserts before the next split, so an insert/delete churn does not
+ * alternate between splitting and compacting the same leaf.
+ *
+ * COST. A bottom inner node holds at most NODE_SIZE leaves of NODE_SIZE
+ * items, so one compaction moves at most NODE_SIZE^2 pointers and frees at
+ * most NODE_SIZE-1 leaves, and it fires only after a proportional number of
+ * deletes under that node. The per-delete check is one O(k) sum of cached
+ * child sizes.
+ *
+ * FLOOR. Compaction packs leaves under one bottom inner node; it does not
+ * merge bottom inner nodes. A tree whittled down to a few items per bottom
+ * node keeps one leaf per bottom node, however sparse. Reclaiming that level
+ * would mean re-packing the inner level the same way and is left for later.
+ *
+ * FORK. While a fork child shares this process's pages, re-packing leaves is
+ * pure copy-on-write cost (up to NODE_SIZE-1 leaf pages dirtied per event
+ * instead of one). fbtreeSetCompactionAllowed(false) parks compaction for
+ * that window, mirroring hashtableSetResizePolicy(); deletes still free
+ * emptied leaves, and the first delete after the window re-enables it.
+ * ============================================================ */
+
+#define COMPACT_TRIGGER_PCT 50
+#define COMPACT_TARGET_PCT 80
+
+static bool compaction_allowed = true;
+
+void fbtreeSetCompactionAllowed(bool allowed) {
+    compaction_allowed = allowed;
+}
+
+/* Re-pack the `total` items under bottom inner node `p` into the fewest leaves
+ * that hold them at COMPACT_TARGET_PCT fill, freeing the surplus leaves. The
+ * caller has already decided that the node is sparse enough to be worth it. */
+static void compactBottomInnerLeaves(fbtreeIndex *fbt, innerNode *p, size_t total) {
+    int k = p->header.num_items;
+    const size_t target = (size_t)NODE_SIZE * COMPACT_TARGET_PCT / 100;
+
+    /* Leaves needed to hold `total` items at `target` per leaf. Only compact
+     * when this strictly reduces the leaf count. */
+    size_t needed = (total + target - 1) / target;
+    if (needed >= (size_t)k) return;
+
+    /* Gather all item pointers in order. Only pointers move: no item is
+     * copied or reallocated, so external references remain valid. */
+    sds *buf = zmalloc(total * sizeof(sds));
+    size_t t = 0;
+    for (int i = 0; i < k; i++) {
+        leafNode *leaf = (leafNode *)p->children[i];
+        memcpy(buf + t, leaf->values, leaf->header.num_items * sizeof(sds));
+        t += leaf->header.num_items;
+    }
+    assert(t == total);
+
+    /* Capture the leaf-chain boundary before freeing surplus leaves. */
+    leafNode *last_survivor = (leafNode *)p->children[needed - 1];
+    leafNode *after = ((leafNode *)p->children[k - 1])->next;
+    bool last_was_rightmost = (fbt->rightmost_leaf == (leafNode *)p->children[k - 1]);
+
+    /* Scatter back into the first `needed` leaves with even fill. */
+    size_t base = total / needed;
+    size_t extra = total % needed;
+    size_t pos = 0;
+    for (size_t j = 0; j < needed; j++) {
+        leafNode *leaf = (leafNode *)p->children[j];
+        size_t cnt = base + (j < extra ? 1 : 0);
+        memcpy(leaf->values, buf + pos, cnt * sizeof(sds));
+        leaf->header.num_items = (uint8_t)cnt;
+        pos += cnt;
+    }
+    assert(pos == total);
+    zfree(buf);
+
+    /* Free the surplus leaf NODES (their items were relocated, not freed),
+     * then splice the leaf chain around them in one step. */
+    for (int j = (int)needed; j < k; j++) {
+        freeNode(fbt, p->children[j]);
+    }
+    last_survivor->next = after;
+    if (after) after->prev = last_survivor;
+    if (last_was_rightmost) fbt->rightmost_leaf = last_survivor;
+
+    /* Drop the unused child slots and refresh survivor metadata. Items
+     * conserved and order preserved => p's own subtree size and high-key
+     * anchor are unchanged, so nothing above p needs more than the
+     * child_num_items refresh its caller already performs. */
+    innerNodeRemoveChildrenRange(p, (int)needed, k - 1);
+    for (size_t j = 0; j < needed; j++) {
+        innerNodeRefreshChildMeta(p, (int)j);
+    }
+    updateCommonPrefix(p);
+}
+
+/* Delete-path hook: if `inner` is a bottom inner node whose leaves have fallen
+ * below the compaction trigger, re-pack them. Call after the delete under
+ * `inner` has been applied and inner's own child metadata is current, and
+ * before inner's parent refreshes child_num_items for it. */
+static void maybeCompactLeaves(fbtreeIndex *fbt, innerNode *inner) {
+    if (!compaction_allowed) return;
+    int k = inner->header.num_items;
+    if (k < 2 || !inner->children[0]->is_leaf) return;
+    size_t total = getSubtreeSize((node *)inner);
+    if (total * 100 >= (size_t)k * NODE_SIZE * COMPACT_TRIGGER_PCT) return;
+    compactBottomInnerLeaves(fbt, inner, total);
+}
+
 static deleteResult subtreeDeleteItem(fbtreeIndex *fbt, node *n, const_sds item) {
     if (n->is_leaf)
         return leafNodeDelete(fbt, (leafNode *)n, item);
@@ -987,12 +1151,15 @@ static deleteResult subtreeDeleteItem(fbtreeIndex *fbt, node *n, const_sds item)
 
     /* Remove empty child */
     if (inner->child_sizes[index] == 0) {
-        freeEmptyNode(inner->children[index]);
+        freeEmptyNode(fbt, inner->children[index]);
         innerNodeRemoveChild(inner, index);
         /* Anchor update: if we removed last child, new last child's anchor bubbles up */
         sds new_anchor = (inner->header.num_items > 0 && index == inner->header.num_items)
                              ? inner->anchors[inner->header.num_items - 1]
                              : NULL;
+        /* Compaction conserves items and the high-key anchor, so new_anchor,
+         * captured above, stays valid across it. */
+        maybeCompactLeaves(fbt, inner);
         return (deleteResult){
             .updated_anchor = new_anchor,
             .delete_executed = true};
@@ -1004,6 +1171,7 @@ static deleteResult subtreeDeleteItem(fbtreeIndex *fbt, node *n, const_sds item)
     if (child_result.updated_anchor || index >= inner->header.num_items) {
         updated_anchor = inner->anchors[inner->header.num_items - 1];
     }
+    maybeCompactLeaves(fbt, inner);
 
     return (deleteResult){
         .updated_anchor = updated_anchor,
@@ -1013,15 +1181,16 @@ static deleteResult subtreeDeleteItem(fbtreeIndex *fbt, node *n, const_sds item)
 /* Helper to handle root cleanup after delete */
 static void fbtreePostDeleteCleanup(fbtreeIndex *fbt) {
     if (getSubtreeSize(fbt->root) == 0) {
-        zfree(fbt->root);
+        /* The emptied root may be a leaf or an inner node; the helper frees any
+         * spilled prefix buffer and maintains the leaf counter either way. */
+        freeEmptyNodeAlreadyUnlinked(fbt, fbt->root);
         fbt->root = NULL;
         fbt->leftmost_leaf = NULL;
         fbt->rightmost_leaf = NULL;
     } else if (!fbt->root->is_leaf && fbt->root->num_items == 1) {
-        innerNode *old_root = (innerNode *)fbt->root;
-        fbt->root = old_root->children[0];
-        innerNodeFreePrefix(old_root);
-        zfree(old_root);
+        node *old_root = fbt->root;
+        fbt->root = ((innerNode *)old_root)->children[0];
+        freeEmptyNodeAlreadyUnlinked(fbt, old_root);
     }
 }
 
@@ -1067,11 +1236,12 @@ static deleteResult subtreePop(fbtreeIndex *fbt, node *n, TraversalHint hint, bo
 
     /* Remove empty child */
     if (inner->child_sizes[index] == 0) {
-        freeEmptyNode(inner->children[index]);
+        freeEmptyNode(fbt, inner->children[index]);
         innerNodeRemoveChild(inner, index);
         sds new_anchor = (inner->header.num_items > 0 && index == inner->header.num_items)
                              ? inner->anchors[inner->header.num_items - 1]
                              : NULL;
+        maybeCompactLeaves(fbt, inner);
         return (deleteResult){
             .updated_anchor = new_anchor,
             .delete_executed = true};
@@ -1083,6 +1253,7 @@ static deleteResult subtreePop(fbtreeIndex *fbt, node *n, TraversalHint hint, bo
     if (child_result.updated_anchor || index >= inner->header.num_items) {
         updated_anchor = inner->anchors[inner->header.num_items - 1];
     }
+    maybeCompactLeaves(fbt, inner);
 
     return (deleteResult){
         .updated_anchor = updated_anchor,
@@ -1212,6 +1383,10 @@ unsigned long fbtreeHeight(const fbtreeIndex *fbt) {
     return height;
 }
 
+unsigned long fbtreeNumLeaves(const fbtreeIndex *fbt) {
+    return fbt->num_leaves;
+}
+
 void fbtreeResetIterator(fbtreeIterator *iterator) {
     iter *it = iteratorFromOpaque(iterator);
     it->fbt = NULL;
@@ -1289,6 +1464,34 @@ const_sds fbtreePrev(fbtreeIterator *iterator) {
         it->current_index = it->leaf_count;
     }
     it->state = ITER_BEFORE_START;
+    return NULL;
+}
+
+const_sds fbtreePeekNext(fbtreeIterator *iterator) {
+    iter *it = iteratorFromOpaque(iterator);
+    if (!it->fbt || it->state == ITER_PAST_END) return NULL;
+
+    leafNode *leaf = it->current_leaf ? it->current_leaf : it->fbt->leftmost_leaf;
+    int index = it->current_leaf ? it->current_index : 0;
+    while (leaf) {
+        if (index < leaf->header.num_items) return leaf->values[index];
+        leaf = leaf->next;
+        index = 0;
+    }
+    return NULL;
+}
+
+const_sds fbtreePeekPrev(fbtreeIterator *iterator) {
+    iter *it = iteratorFromOpaque(iterator);
+    if (!it->fbt || it->state == ITER_BEFORE_START) return NULL;
+
+    leafNode *leaf = it->current_leaf ? it->current_leaf : it->fbt->rightmost_leaf;
+    int index = it->current_leaf ? it->current_index : (leaf ? leaf->header.num_items : 0);
+    while (leaf) {
+        if (index > 0) return leaf->values[index - 1];
+        leaf = leaf->prev;
+        index = leaf ? leaf->header.num_items : 0;
+    }
     return NULL;
 }
 
@@ -1524,7 +1727,7 @@ typedef struct {
  * Returns the leaf node reached.
  *
  * When called with a compile-time-constant function pointer (e.g.,
- * findChildByScoreWrapper), the compiler can inline both this helper and the
+ * findChildByValueWrapper), the compiler can inline both this helper and the
  * callback at -O2, producing specialized code with no indirect calls. */
 typedef int (*findChildFn)(innerNode *inner, const void *key);
 
@@ -1559,10 +1762,6 @@ static int findChildByValueWrapper(innerNode *inner, const void *key) {
 /* Comparison function for leaf-level index resolution.
  * Returns <0, 0, or >0 like memcmp/sdscmp. */
 typedef int (*leafCmpFn)(const_sds element, const void *key);
-
-static int leafCmpByScore(const_sds element, const void *key) {
-    return memcmp(element, key, SCORE_SIZE);
-}
 
 static int leafCmpByValue(const_sds element, const void *key) {
     return sdscmp(element, (const_sds)key);
@@ -1774,19 +1973,21 @@ static unsigned long deleteRangeSameLeaf(fbtreeIndex *fbt,
 
     leafNodeRemoveRange(leaf, start_idx, end_idx);
 
-    /* Walk back up shared path: fix sizes and anchors */
+    /* Walk back up shared path: fix sizes and anchors. Each level's child
+     * refresh sees the level below after its compaction, if any. */
     for (int d = bp->shared_depth - 1; d >= 0; d--) {
         innerNode *inner = (innerNode *)bp->shared_path[d];
         int ci = bp->shared_left_idx[d];
         inner->child_sizes[ci] -= deleted;
 
         if (inner->child_sizes[ci] == 0) {
-            freeEmptyNode(inner->children[ci]);
+            freeEmptyNode(fbt, inner->children[ci]);
             innerNodeRemoveChild(inner, ci);
         } else {
             innerNodeRefreshChildMeta(inner, ci);
             if (ci == 0 || ci == inner->header.num_items - 1) updateCommonPrefix(inner);
         }
+        maybeCompactLeaves(fbt, inner);
     }
 
 
@@ -1800,14 +2001,25 @@ static unsigned long deleteRangeSameLeaf(fbtreeIndex *fbt,
  * If callback is non-NULL, it is invoked for each deleted item before sdsfree.
  * Returns the number of elements deleted. */
 static unsigned long deleteRangeCore(fbtreeIndex *fbt, BoundaryPaths *bp, fbtreeItemCallback callback, void *callback_ctx) {
-    /* Empty range check: score/value path builders can produce boundary
-     * indices that fall outside the leaf (no matching elements in that leaf).
-     * Rank paths never hit this since ranks are pre-validated. */
-    if (bp->start_idx >= bp->start_leaf->header.num_items && bp->end_idx < 0) return 0;
+    /* No whole-range empty short-circuit is needed here for the
+     * leaf-untouched-on-both-sides case: unlike deleteRangeSameLeaf (where
+     * an out-of-range boundary index unambiguously means nothing to delete
+     * within that single leaf), a diverged-path range can still be
+     * non-empty even when both boundary leaves are untouched, because
+     * whole subtrees strictly between the two descent paths -- at the split
+     * node's own children, or at any level below either boundary's descent
+     * path -- may lie wholly inside [min_key, max_key]. Checking only the
+     * split node's immediate children (as an adjacency test) misses middle
+     * subtrees that appear one or more levels further down, so no local
+     * check here can be both cheap and correct. The splice and fixup below
+     * handle the truly-empty case naturally: when there is really nothing
+     * in range, every per-level loop below finds no boundary-untouched
+     * work and no middle children to free, and the function falls through
+     * having deleted (and returned) zero elements. */
+    int split_depth = bp->shared_depth - 1;
     if (bp->end_idx < 0 && bp->start_leaf == bp->end_leaf) return 0;
 
     /* --- Phase 1: Boundaries diverged. Process the split. --- */
-    int split_depth = bp->shared_depth - 1;
     innerNode *split_node = (innerNode *)bp->shared_path[split_depth];
     int li = bp->shared_left_idx[split_depth];
     int ri = bp->shared_right_idx[split_depth];
@@ -1905,18 +2117,21 @@ static unsigned long deleteRangeCore(fbtreeIndex *fbt, BoundaryPaths *bp, fbtree
 
         for (int i = ci + 1; i < inner->header.num_items; i++) {
             deleted += getSubtreeSize(inner->children[i]);
-            freeNodeRecursive(inner->children[i], callback, callback_ctx);
+            freeNodeRecursive(fbt, inner->children[i], callback, callback_ctx);
         }
         inner->header.num_items = ci + 1;
 
         /* Update or remove the boundary child */
         if (getSubtreeSize(inner->children[ci]) == 0) {
-            freeEmptyNodeAlreadyUnlinked(inner->children[ci]);
+            freeEmptyNodeAlreadyUnlinked(fbt, inner->children[ci]);
             inner->header.num_items = ci;
         } else {
             innerNodeRefreshChildMeta(inner, ci);
         }
         updateCommonPrefix(inner);
+        /* The boundary leaf under a bottom node may now be sparse; its parent
+         * (next level up, or the split node) refreshes child_num_items after. */
+        maybeCompactLeaves(fbt, inner);
     }
 
     /* Fix right subtree: remove children to the left of the right boundary child */
@@ -1926,7 +2141,7 @@ static unsigned long deleteRangeCore(fbtreeIndex *fbt, BoundaryPaths *bp, fbtree
 
         for (int i = 0; i < ci; i++) {
             deleted += getSubtreeSize(inner->children[i]);
-            freeNodeRecursive(inner->children[i], callback, callback_ctx);
+            freeNodeRecursive(fbt, inner->children[i], callback, callback_ctx);
         }
         if (ci > 0) {
             innerNodeRemoveChildrenRange(inner, 0, ci - 1);
@@ -1937,12 +2152,13 @@ static unsigned long deleteRangeCore(fbtreeIndex *fbt, BoundaryPaths *bp, fbtree
         bp->right_sub_idx[d] = 0;
         int new_ci = 0;
         if (getSubtreeSize(inner->children[new_ci]) == 0) {
-            freeEmptyNodeAlreadyUnlinked(inner->children[new_ci]);
+            freeEmptyNodeAlreadyUnlinked(fbt, inner->children[new_ci]);
             innerNodeRemoveChildrenRange(inner, 0, 0);
         } else {
             innerNodeRefreshChildMeta(inner, new_ci);
         }
         updateCommonPrefix(inner);
+        maybeCompactLeaves(fbt, inner);
     }
 
     /* Fix the split node: remove fully-deleted middle children, update boundary children */
@@ -1950,7 +2166,7 @@ static unsigned long deleteRangeCore(fbtreeIndex *fbt, BoundaryPaths *bp, fbtree
         /* Free middle children subtrees (fully inside the range) */
         for (int i = li + 1; i < ri; i++) {
             deleted += getSubtreeSize(split_node->children[i]);
-            freeNodeRecursive(split_node->children[i], callback, callback_ctx);
+            freeNodeRecursive(fbt, split_node->children[i], callback, callback_ctx);
         }
 
         /* Check if boundary subtrees are now empty */
@@ -1961,11 +2177,11 @@ static unsigned long deleteRangeCore(fbtreeIndex *fbt, BoundaryPaths *bp, fbtree
         int remove_end = ri - 1;
 
         if (left_size == 0) {
-            freeNodeRecursive(split_node->children[li], callback, callback_ctx);
+            freeNodeRecursive(fbt, split_node->children[li], callback, callback_ctx);
             remove_start = li;
         }
         if (right_size == 0) {
-            freeNodeRecursive(split_node->children[ri], callback, callback_ctx);
+            freeNodeRecursive(fbt, split_node->children[ri], callback, callback_ctx);
             remove_end = ri;
         }
 
@@ -1980,6 +2196,9 @@ static unsigned long deleteRangeCore(fbtreeIndex *fbt, BoundaryPaths *bp, fbtree
             innerNodeRefreshChildMeta(split_node, i);
         }
         updateCommonPrefix(split_node);
+        /* When both boundary leaves hang off the split node itself, it is the
+         * bottom node that just lost items. */
+        maybeCompactLeaves(fbt, split_node);
     }
 
     /* Fix ancestors above the split node */
@@ -1988,7 +2207,7 @@ static unsigned long deleteRangeCore(fbtreeIndex *fbt, BoundaryPaths *bp, fbtree
         int ci = bp->shared_left_idx[d];
 
         if (getSubtreeSize(inner->children[ci]) == 0) {
-            freeEmptyNodeAlreadyUnlinked(inner->children[ci]);
+            freeEmptyNodeAlreadyUnlinked(fbt, inner->children[ci]);
             innerNodeRemoveChild(inner, ci);
         } else {
             innerNodeRefreshChildMeta(inner, ci);
@@ -2110,6 +2329,141 @@ unsigned long fbtreeDeleteRangeByRank(fbtreeIndex *fbt,
     return deleteRangeSameLeaf(fbt, &bp, callback, callback_ctx);
 }
 
+/* Lexicographically next 8-byte score prefix. Returns false when `in` is all
+ * 0xFF, i.e. no score prefix sorts above it. Incrementing the big-endian
+ * 8-byte value yields the next possible prefix in memcmp order, so an
+ * exclusive score bound can be rewritten as an inclusive bound on the next
+ * prefix. This is pure byte-string reasoning; it does not assume anything
+ * about how scores are normalized. */
+static bool scorePrefixNext(const char in[static SCORE_SIZE], char out[static SCORE_SIZE]) {
+    memcpy(out, in, SCORE_SIZE);
+    for (int i = SCORE_SIZE - 1; i >= 0; i--) {
+        unsigned char c = (unsigned char)out[i];
+        if (c != 0xFF) {
+            out[i] = (char)(c + 1);
+            return true;
+        }
+        out[i] = 0;
+    }
+    return false;
+}
+
+/* Rank of the first element whose score prefix is >= `score`, or the tree
+ * length when no such element exists. This is a whole-tree lower bound: it
+ * stays correct when a run of elements sharing `score` spans several leaves.
+ * Used for the rare unbounded-upper edge (the upper bound reaches past the
+ * largest representable score prefix) where a shared two-boundary descent has
+ * no finite hi key. */
+static unsigned long lowerBoundRankByScore(fbtreeIndex *fbt, const char *score) {
+    fbtreeIterator iterator;
+    fbtreeInitIterator(&iterator, fbt);
+    long rank = fbtreeSeekToScore(score, &iterator);
+    /* fbtreeSeekToScore returns the count of elements before the position, so
+     * it is never negative (0 for an empty tree). */
+    assert(rank >= 0);
+    return (unsigned long)rank;
+}
+
+/* Turn a score range with inclusive/exclusive bounds into the half-open
+ * score-prefix window [lo, hi): every element with lo <= score(e) < hi is in
+ * range. Returns false when the window is provably empty. When the upper edge
+ * would exceed the largest representable prefix, *hi_unbounded is set (the
+ * window runs to the tree end) and hi is left unset.
+ *
+ * Both edges are expressed as lower-bound prefixes (the first prefix at or
+ * above a value), which is what makes the range duplicate-safe: a run of
+ * elements sharing a score is included or excluded as a unit even when it spans
+ * several leaves. */
+static bool scoreRangeBounds(const char *min_score,
+                             const char *max_score,
+                             int min_ex,
+                             int max_ex,
+                             char lo[SCORE_SIZE],
+                             char hi[SCORE_SIZE],
+                             bool *hi_unbounded) {
+    *hi_unbounded = false;
+
+    if (min_ex) {
+        if (!scorePrefixNext(min_score, lo)) return false; /* nothing sorts above min */
+    } else {
+        memcpy(lo, min_score, SCORE_SIZE);
+    }
+
+    if (max_ex) {
+        memcpy(hi, max_score, SCORE_SIZE);
+    } else if (!scorePrefixNext(max_score, hi)) {
+        *hi_unbounded = true; /* max is the largest possible prefix: no upper cut */
+    }
+
+    if (!*hi_unbounded && memcmp(lo, hi, SCORE_SIZE) >= 0) return false;
+    return true;
+}
+
+/* Two independent lower-bound searches (first element with score prefix >= key)
+ * over two DIFFERENT leaves, stepped in lockstep so both leaves' pointer-chase
+ * cache misses are outstanding at once (memory-level parallelism). Each
+ * values[mid] is a separately allocated sds, so every probe is a miss;
+ * interleaving the two searches and prefetching both payloads per step lets the
+ * out-of-order core overlap them instead of serializing 2*log2(leaf) misses.
+ * Mirrors resolveBothIdxPrefetch but resolves pure lower bounds (both edges are
+ * "first >= key"), which is the half-open form the score range needs. */
+static void lowerBoundBothByScore(const leafNode *lo_leaf, const char *lo, const leafNode *hi_leaf, const char *hi, int *out_lo_idx, int *out_hi_idx) {
+    int llo = 0, lhi = lo_leaf->header.num_items;
+    int hlo = 0, hhi = hi_leaf->header.num_items;
+    while (llo < lhi || hlo < hhi) {
+        int lmid = (llo + lhi) / 2;
+        int hmid = (hlo + hhi) / 2;
+        if (llo < lhi) __builtin_prefetch(lo_leaf->values[lmid]);
+        if (hlo < hhi) __builtin_prefetch(hi_leaf->values[hmid]);
+        if (llo < lhi) {
+            if (memcmp(lo_leaf->values[lmid], lo, SCORE_SIZE) < 0)
+                llo = lmid + 1;
+            else
+                lhi = lmid;
+        }
+        if (hlo < hhi) {
+            if (memcmp(hi_leaf->values[hmid], hi, SCORE_SIZE) < 0)
+                hlo = hmid + 1;
+            else
+                hhi = hmid;
+        }
+    }
+    *out_lo_idx = llo;
+    *out_hi_idx = hlo;
+}
+
+/* Resolve a finite half-open score window [lo, hi) with ONE shared tree descent
+ * (see buildBoundaryPaths). Fills `bp` with both boundary leaves and their
+ * sub-paths, records the lower-bound leaf indices (bp->start_idx = first element
+ * >= lo; the hi lower bound is returned via *out_hi_idx), and reports the global
+ * ranks of both edges. Returns whether both edges fall in the same leaf.
+ *
+ * Both leaf-local edges use lower-bound ("first element with score prefix >=
+ * key") resolution; the child_sizes accumulation in rankFromBoundaryPath turns
+ * each leaf-local index into a global rank, all from a single root->leaf
+ * descent. Because both edges are lower bounds the window is duplicate-score
+ * safe: hi marks the first element excluded from the range, so an equal-score
+ * run is kept or dropped as a unit even when it continues into the next leaf. */
+static bool scoreRangeSharedDescent(fbtreeIndex *fbt, const char *lo, const char *hi, BoundaryPaths *bp, int *out_hi_idx, unsigned long *out_start_rank, unsigned long *out_end_rank) {
+    bool same_leaf = buildBoundaryPaths(fbt, bp, lo, hi, findChildByScoreWrapper);
+
+    int lo_idx, hi_idx;
+    if (same_leaf) {
+        /* One leaf: nothing independent to overlap, resolve directly. */
+        lo_idx = leafNodeBinarySearchByScore(bp->start_leaf, lo);
+        hi_idx = leafNodeBinarySearchByScore(bp->end_leaf, hi);
+    } else {
+        /* Two leaves: software-pipeline the searches so the misses overlap. */
+        lowerBoundBothByScore(bp->start_leaf, lo, bp->end_leaf, hi, &lo_idx, &hi_idx);
+    }
+
+    bp->start_idx = lo_idx;
+    *out_hi_idx = hi_idx;
+    *out_start_rank = rankFromBoundaryPath(bp, false, lo_idx);
+    *out_end_rank = rankFromBoundaryPath(bp, true, hi_idx);
+    return same_leaf;
+}
+
 /* Delete elements with score prefix in [min_score, max_score].
  * min_ex/max_ex: if true, the corresponding bound is exclusive.
  * Score is an 8-byte big-endian normalized prefix (as stored in the tree).
@@ -2124,9 +2478,11 @@ unsigned long fbtreeDeleteRangeByScore(fbtreeIndex *fbt,
                                        void *callback_ctx) {
     if (!fbt->root) return 0;
 
-    /* Delete-all short-circuit */
-    sds first = leafNodeLowKey(fbt->leftmost_leaf);
-    sds last = leafNodeHighKey(fbt->rightmost_leaf);
+    /* Delete-all short-circuit: when both bounds fall outside the stored score
+     * range every element qualifies, so free the whole tree in one pass rather
+     * than descending for boundaries. */
+    const_sds first = leafNodeLowKey(fbt->leftmost_leaf);
+    const_sds last = leafNodeHighKey(fbt->rightmost_leaf);
     int min_covers = min_ex ? memcmp(min_score, first, SCORE_SIZE) < 0 : memcmp(min_score, first, SCORE_SIZE) <= 0;
     int max_covers = max_ex ? memcmp(max_score, last, SCORE_SIZE) > 0 : memcmp(max_score, last, SCORE_SIZE) >= 0;
     if (min_covers && max_covers) {
@@ -2135,15 +2491,34 @@ unsigned long fbtreeDeleteRangeByScore(fbtreeIndex *fbt,
         return count;
     }
 
-    /* Quick check: empty range */
-    int range_cmp = memcmp(min_score, max_score, SCORE_SIZE);
-    if (range_cmp > 0 || (range_cmp == 0 && (min_ex || max_ex))) return 0;
+    char lo[SCORE_SIZE], hi[SCORE_SIZE];
+    bool hi_unbounded;
+    if (!scoreRangeBounds(min_score, max_score, min_ex, max_ex, lo, hi, &hi_unbounded)) return 0;
 
-    /* Descend once to build the boundary paths, then delete. */
+    if (hi_unbounded) {
+        /* Range runs to the tree end: the upper bound reaches past the largest
+         * representable score prefix, so there is no finite hi key to anchor the
+         * right boundary of a shared descent. min is finite here (the fully
+         * covered range was handled by the delete-all short-circuit above). One
+         * lower-bound seek plus the rank-based delete. */
+        unsigned long start = lowerBoundRankByScore(fbt, lo);
+        unsigned long length = fbtreeLength(fbt);
+        if (length <= start) return 0;
+        return fbtreeDeleteRangeByRank(fbt, start, length - 1, callback, callback_ctx);
+    }
+
+    /* Single shared descent locates both boundary leaves and records the paths
+     * that deleteRangeCore / deleteRangeSameLeaf consume. The hi lower bound is
+     * the first element NOT in range, so the last element to delete sits one
+     * position before it (end_idx = hi_idx - 1). When hi_idx == 0 the end leaf
+     * holds no in-range element and end_idx becomes -1, the "end leaf untouched"
+     * case the delete engine handles for the value path as well. */
     BoundaryPaths bp;
-    bool same_leaf = buildBoundaryPaths(fbt, &bp, min_score, max_score, findChildByScoreWrapper);
-    bp.start_idx = resolveStartIdx(bp.start_leaf, min_score, min_ex, leafCmpByScore);
-    bp.end_idx = resolveEndIdx(bp.end_leaf, max_score, max_ex, leafCmpByScore);
+    int hi_idx;
+    unsigned long start_rank, end_rank;
+    bool same_leaf = scoreRangeSharedDescent(fbt, lo, hi, &bp, &hi_idx, &start_rank, &end_rank);
+    if (end_rank <= start_rank) return 0; /* empty range */
+    bp.end_idx = hi_idx - 1;
     return same_leaf ? deleteRangeSameLeaf(fbt, &bp, callback, callback_ctx)
                      : deleteRangeCore(fbt, &bp, callback, callback_ctx);
 }
@@ -2196,33 +2571,29 @@ unsigned long fbtreeCountRangeByScore(fbtreeIndex *fbt,
                                       int max_ex) {
     if (!fbt->root) return 0;
 
-    /* Whole-tree short-circuit */
-    sds first = leafNodeLowKey(fbt->leftmost_leaf);
-    sds last = leafNodeHighKey(fbt->rightmost_leaf);
+    /* Whole-tree short-circuit: when both bounds fall outside the stored score
+     * range every element qualifies, so answer with the tree length rather than
+     * paying for the two boundary descents. `ZCOUNT key -inf +inf` is the common
+     * case this serves. */
+    const_sds first = leafNodeLowKey(fbt->leftmost_leaf);
+    const_sds last = leafNodeHighKey(fbt->rightmost_leaf);
     int min_covers = min_ex ? memcmp(min_score, first, SCORE_SIZE) < 0 : memcmp(min_score, first, SCORE_SIZE) <= 0;
     int max_covers = max_ex ? memcmp(max_score, last, SCORE_SIZE) > 0 : memcmp(max_score, last, SCORE_SIZE) >= 0;
     if (min_covers && max_covers) return fbtreeLength(fbt);
 
-    /* Empty range */
-    int range_cmp = memcmp(min_score, max_score, SCORE_SIZE);
-    if (range_cmp > 0 || (range_cmp == 0 && (min_ex || max_ex))) return 0;
+    char lo[SCORE_SIZE], hi[SCORE_SIZE];
+    bool hi_unbounded;
+    if (!scoreRangeBounds(min_score, max_score, min_ex, max_ex, lo, hi, &hi_unbounded)) return 0;
 
+    /* Unbounded upper edge (upper bound reaches past the largest representable
+     * score prefix): one lower-bound seek; the rest of the tree is in range. */
+    if (hi_unbounded) return fbtreeLength(fbt) - lowerBoundRankByScore(fbt, lo);
+
+    /* Finite window: one shared descent yields both boundary ranks. */
     BoundaryPaths bp;
-    bool same_leaf = buildBoundaryPaths(fbt, &bp, min_score, max_score, findChildByScoreWrapper);
-    if (same_leaf) {
-        /* One leaf: nothing to overlap, resolve directly. */
-        bp.start_idx = resolveStartIdx(bp.start_leaf, min_score, min_ex, leafCmpByScore);
-        bp.end_idx = resolveEndIdx(bp.end_leaf, max_score, max_ex, leafCmpByScore);
-    } else {
-        /* Two leaves: software-pipeline the searches so both misses overlap. */
-        resolveBothIdxPrefetch(bp.start_leaf, min_score, min_ex, bp.end_leaf, max_score, max_ex,
-                               leafCmpByScore, &bp.start_idx, &bp.end_idx);
-    }
-
-    /* start_idx is the first in-range element; end_idx is the last in-range
-     * element (inclusive), so its one-past position is end_idx + 1. */
-    unsigned long start_rank = rankFromBoundaryPath(&bp, false, bp.start_idx);
-    unsigned long end_rank = rankFromBoundaryPath(&bp, true, bp.end_idx + 1);
+    int hi_idx;
+    unsigned long start_rank, end_rank;
+    scoreRangeSharedDescent(fbt, lo, hi, &bp, &hi_idx, &start_rank, &end_rank);
     return end_rank > start_rank ? end_rank - start_rank : 0;
 }
 
@@ -2269,6 +2640,7 @@ unsigned long fbtreeCountRangeByValue(fbtreeIndex *fbt,
 typedef struct {
     bool valid;
     size_t size;
+    size_t leaves; /* leaf nodes reachable from the root */
     leafNode *leftmost_leaf;
     leafNode *rightmost_leaf;
 } validateResult;
@@ -2328,12 +2700,13 @@ static validateResult validateLeaf(leafNode *leaf, int depth, bool verbose, vali
         }
         if (count > 0 && count % 8 != 0) printf("\n");
     }
-    return (validateResult){.valid = valid, .size = count, .leftmost_leaf = leaf, .rightmost_leaf = leaf};
+    return (validateResult){.valid = valid, .size = count, .leaves = 1, .leftmost_leaf = leaf, .rightmost_leaf = leaf};
 }
 
 static validateResult validateInner(innerNode *inner, int depth, bool verbose, validateErrCtx *err) {
     bool valid = true;
     size_t total_size = 0;
+    size_t total_leaves = 0;
     leafNode *leftmost = NULL;
     leafNode *rightmost = NULL;
 
@@ -2368,9 +2741,23 @@ static validateResult validateInner(innerNode *inner, int depth, bool verbose, v
 
         validateResult child_result = validateNode(child, depth + 1, verbose, err);
 
-        /* Track leftmost/rightmost leaves */
+        /* Validate the leaf chain link that crosses from the previous child's
+         * subtree into this one: the two boundary leaves must be each other's
+         * next/prev. Every pair of in-order adjacent leaves meets at exactly
+         * one inner node (their lowest common ancestor), so checking the link
+         * here pins the whole chain to the structural leaf order by identity.
+         * Key comparisons alone cannot: leaves holding equal keys may be
+         * permuted in the chain without any key going backwards. */
+        bool link_ok = true;
+        if (i > 0 && rightmost && child_result.leftmost_leaf) {
+            link_ok = (rightmost->next == child_result.leftmost_leaf &&
+                       child_result.leftmost_leaf->prev == rightmost);
+        }
+
+        /* Track leftmost/rightmost leaves and the structural leaf count */
         if (i == 0) leftmost = child_result.leftmost_leaf;
         rightmost = child_result.rightmost_leaf;
+        total_leaves += child_result.leaves;
 
         /* Validate stored size matches actual size */
         bool size_ok = (inner->child_sizes[i] == child_result.size);
@@ -2383,11 +2770,12 @@ static validateResult validateInner(innerNode *inner, int depth, bool verbose, v
         if (!feature_ok) validateFail(err, "inner at depth %d child %d: feature bytes do not match anchor", depth, i);
         if (!size_ok) validateFail(err, "inner at depth %d child %d: stored subtree size %zu != actual %zu", depth, i, inner->child_sizes[i], child_result.size);
         if (!num_items_ok) validateFail(err, "inner at depth %d child %d: stored child num_items %u != actual %u", depth, i, (unsigned)inner->child_num_items[i], (unsigned)inner->children[i]->num_items);
+        if (!link_ok) validateFail(err, "inner at depth %d child %d: leaf chain does not link the previous child's rightmost leaf to this child's leftmost leaf", depth, i);
 
-        valid = valid && prefix_ok && anchor_ok && feature_ok && size_ok && num_items_ok && child_result.valid;
+        valid = valid && prefix_ok && anchor_ok && feature_ok && size_ok && num_items_ok && link_ok && child_result.valid;
         total_size += child_result.size;
 
-        if (verbose && (!prefix_ok || !anchor_ok || !feature_ok || !size_ok || !num_items_ok)) {
+        if (verbose && (!prefix_ok || !anchor_ok || !feature_ok || !size_ok || !num_items_ok || !link_ok)) {
             printIndent(depth);
             printf("   \033[31m");
             if (!prefix_ok) printf("prefix ");
@@ -2395,10 +2783,11 @@ static validateResult validateInner(innerNode *inner, int depth, bool verbose, v
             if (!feature_ok) printf("feature ");
             if (!size_ok) printf("size(%zu!=%zu) ", inner->child_sizes[i], child_result.size);
             if (!num_items_ok) printf("num_items(%u!=%u) ", inner->child_num_items[i], inner->children[i]->num_items);
+            if (!link_ok) printf("leaf-link ");
             printf("FAIL\033[0m\n");
         }
     }
-    return (validateResult){.valid = valid, .size = total_size, .leftmost_leaf = leftmost, .rightmost_leaf = rightmost};
+    return (validateResult){.valid = valid, .size = total_size, .leaves = total_leaves, .leftmost_leaf = leftmost, .rightmost_leaf = rightmost};
 }
 
 static validateResult validateNode(node *n, int depth, bool verbose, validateErrCtx *err) {
@@ -2419,10 +2808,15 @@ bool fbtreeDebugValidate(fbtreeIndex *fbt, bool verbose, char *errmsg, size_t er
     unsigned long length = fbt->root ? getSubtreeSize(fbt->root) : 0;
     if (verbose) printf("FBTree (length=%lu)\n", length);
     if (!fbt->root) {
-        /* Empty tree: caches must be NULL */
+        /* Empty tree: caches must be NULL and the leaf counter zero */
         if (fbt->leftmost_leaf || fbt->rightmost_leaf) {
             if (verbose) printf("\033[31mERROR: empty tree has non-NULL leaf cache\033[0m\n");
             validateFail(err, "empty tree has non-NULL leaf cache");
+            return false;
+        }
+        if (fbt->num_leaves != 0) {
+            if (verbose) printf("\033[31mERROR: empty tree has num_leaves %zu\033[0m\n", fbt->num_leaves);
+            validateFail(err, "empty tree has num_leaves %zu", fbt->num_leaves);
             return false;
         }
         return true;
@@ -2450,7 +2844,58 @@ bool fbtreeDebugValidate(fbtreeIndex *fbt, bool verbose, char *errmsg, size_t er
                      (void *)fbt->rightmost_leaf, (void *)actual_rightmost);
     }
 
-    return result.valid && length_ok && caches_ok;
+    /* Verify the cached leaf counter against the leaves reachable from the root. */
+    bool leaves_ok = (fbt->num_leaves == result.leaves);
+    if (!leaves_ok) {
+        if (verbose) printf("\033[31mERROR: num_leaves %zu != %zu leaves reachable from root\033[0m\n", fbt->num_leaves, result.leaves);
+        validateFail(err, "num_leaves %zu != %zu leaves reachable from root", fbt->num_leaves, result.leaves);
+    }
+
+    /* Verify the doubly-linked leaf chain: starts at the leftmost leaf with no
+     * predecessor, every next/prev pair is mutually consistent, keys never go
+     * backwards across a link, and it ends at the rightmost leaf after visiting
+     * exactly the leaves the tree owns. Any leaf reachable from the root but
+     * absent from the chain (or vice versa) shows up as a count mismatch. The
+     * chain's order is pinned to the structural leaf order by identity in
+     * validateInner, at the inner node where each adjacent leaf pair meets. */
+    bool chain_ok = true;
+    if (actual_leftmost && actual_leftmost->prev != NULL) {
+        chain_ok = false;
+        validateFail(err, "leaf chain: leftmost leaf has non-NULL prev");
+    }
+    size_t chain_leaves = 0;
+    leafNode *leaf = actual_leftmost;
+    while (leaf && chain_ok) {
+        chain_leaves++;
+        if (chain_leaves > result.leaves) {
+            chain_ok = false;
+            validateFail(err, "leaf chain: more than %zu leaves reachable via next (cycle or stray leaf)", result.leaves);
+            break;
+        }
+        leafNode *next = leaf->next;
+        if (next) {
+            if (next->prev != leaf) {
+                chain_ok = false;
+                validateFail(err, "leaf chain: leaf %zu next->prev does not point back", chain_leaves - 1);
+            } else if (leaf->header.num_items > 0 && next->header.num_items > 0 &&
+                       sdscmp(leafNodeHighKey(leaf), leafNodeLowKey(next)) > 0) {
+                /* Equal keys across a link are legal: duplicates may span leaves. */
+                chain_ok = false;
+                validateFail(err, "leaf chain: keys decrease across link after leaf %zu", chain_leaves - 1);
+            }
+        } else if (leaf != actual_rightmost) {
+            chain_ok = false;
+            validateFail(err, "leaf chain: ends at leaf %zu, which is not the rightmost leaf", chain_leaves - 1);
+        }
+        leaf = next;
+    }
+    if (chain_ok && chain_leaves != result.leaves) {
+        chain_ok = false;
+        validateFail(err, "leaf chain: visits %zu leaves, tree has %zu", chain_leaves, result.leaves);
+    }
+    if (!chain_ok && verbose) printf("\033[31mERROR: leaf chain inconsistent\033[0m\n");
+
+    return result.valid && length_ok && caches_ok && leaves_ok && chain_ok;
 }
 
 /* ========== Defrag / Dismiss ========== */
@@ -2603,26 +3048,13 @@ void fbtreeDismissMemory(fbtreeIndex *fbt) {
 }
 
 size_t fbtreeEstimateStructureMemory(fbtreeIndex *fbt) {
-    unsigned long len = fbtreeLength(fbt);
     size_t size = sizeof(fbtreeIndex);
-    if (len == 0) return size;
+    if (fbt->num_leaves == 0) return size;
 
-    /* Leaf count is exact for small chains; for larger trees it is
-     * extrapolated from the fill of the first leaves, which reflects how
-     * sparse deletes have left the tree. */
-    enum {
-        FILL_SAMPLE_LEAVES = 16
-    };
-    size_t leaves_seen = 0, items_seen = 0;
-    leafNode *leaf = fbt->leftmost_leaf;
-    while (leaf && leaves_seen < FILL_SAMPLE_LEAVES) {
-        items_seen += leaf->header.num_items;
-        leaves_seen++;
-        leaf = leaf->next;
-    }
-    size_t est_leaves = (leaf == NULL) ? leaves_seen : (size_t)(len / ((double)items_seen / leaves_seen)) + 1;
-    size += est_leaves * sizeof(leafNode);
+    /* num_leaves is maintained exactly at every leaf birth and death, so the
+     * leaf level is counted directly rather than extrapolated from a sample. */
+    size += fbt->num_leaves * sizeof(leafNode);
     /* Inner levels shrink geometrically by the fanout. */
-    size += (est_leaves / (NODE_SIZE - 1) + 1) * sizeof(innerNode);
+    size += (fbt->num_leaves / (NODE_SIZE - 1) + 1) * sizeof(innerNode);
     return size;
 }

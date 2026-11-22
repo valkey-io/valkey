@@ -290,6 +290,24 @@ start_server {tags {"expire"}} {
         set e
     } {ERR invalid expire time in 'getex' command}
 
+    test {GETEX and SET with relative expire overflow when basetime is added} {
+        r set foo bar
+
+        # The value fits in a long long, but adding the current time overflows.
+        assert_error "ERR invalid expire time in 'getex' command" {r GETEX foo PX 9223372036854775807}
+        assert_error "ERR invalid expire time in 'getex' command" {r GETEX foo PX 9223372036854770000}
+        # EX value passes the LLONG_MAX/1000 check but overflows once basetime is added.
+        assert_error "ERR invalid expire time in 'getex' command" {r GETEX foo EX 9223372036854775}
+
+        # SET shares the same expire parsing path.
+        assert_error "ERR invalid expire time in 'set' command" {r SET foo bar PX 9223372036854775807}
+        assert_error "ERR invalid expire time in 'set' command" {r SET foo bar EX 9223372036854775}
+
+        # The key must be untouched: still present, no TTL.
+        assert_equal {bar} [r get foo]
+        assert_equal {-1} [r ttl foo]
+    }
+
     test {GETEX with error expiration time} {
         r del foo
         assert_error {ERR value is not an integer or out of range} {r getex foo ex abcd}
@@ -521,6 +539,9 @@ start_server {tags {"expire"}} {
         set encoded [r dump foo5]
         r restore foo6 100000 $encoded
         r restore foo7 [expr [clock milliseconds]+100000] $encoded absttl
+        # MSETEX and HSETEX with a repeated expire option
+        r msetex 1 foo8 bar ex 100 ex 200
+        r hsetex foo9 px 100000 px 200000 fields 1 f v
 
         assert_replication_stream $repl {
             {select *}
@@ -545,6 +566,8 @@ start_server {tags {"expire"}} {
             {set foo5 bar}
             {restore foo6 * * ABSTTL}
             {restore foo7 * * absttl}
+            {msetex 1 foo8 bar PXAT *}
+            {hsetex foo9 PXAT * fields 1 f v}
         }
         close_replication_stream $repl
     } {} {needs:repl}
@@ -607,6 +630,28 @@ start_server {tags {"expire"}} {
             # This is because TTLs are always replicated as absolute values
             foreach key [$primary keys *] {
                 assert_equal [$primary pexpiretime $key] [$replica pexpiretime $key]
+            }
+        }
+
+        test {MSETEX and HSETEX with a repeated expire option are replicated with the last one} {
+            $replica replicaof $primary_host $primary_port
+            wait_for_sync $replica
+            $primary msetex 1 foo18 bar ex 100 ex 200
+            $primary msetex 1 foo19 bar px 100000 px 200000
+            $primary msetex 1 foo20 bar exat [expr [clock seconds]+100] exat [expr [clock seconds]+200]
+            $primary hsetex foo21 ex 100 ex 200 fields 1 f v
+            $primary hsetex foo22 px 100000 px 200000 fields 1 f v
+            $primary hsetex foo23 exat [expr [clock seconds]+100] exat [expr [clock seconds]+200] fields 1 f v
+            # Keys and values named like the option
+            $primary msetex 1 ex ex ex 100 ex 200
+            $primary hsetex px px 100000 px 200000 fields 1 f v
+            wait_for_ofs_sync $primary $replica
+
+            foreach key {foo18 foo19 foo20 ex} {
+                assert_equal [$primary pexpiretime $key] [$replica pexpiretime $key]
+            }
+            foreach key {foo21 foo22 foo23 px} {
+                assert_equal [$primary hpexpiretime $key FIELDS 1 f] [$replica hpexpiretime $key FIELDS 1 f]
             }
         }
 

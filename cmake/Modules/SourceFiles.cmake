@@ -30,6 +30,7 @@ set(VALKEY_SERVER_SRCS
     ${CMAKE_SOURCE_DIR}/src/db.c
     ${CMAKE_SOURCE_DIR}/src/replication.c
     ${CMAKE_SOURCE_DIR}/src/rdb.c
+    ${CMAKE_SOURCE_DIR}/src/rdb_transcoder.c
     ${CMAKE_SOURCE_DIR}/src/t_string.c
     ${CMAKE_SOURCE_DIR}/src/t_list.c
     ${CMAKE_SOURCE_DIR}/src/t_set.c
@@ -37,6 +38,7 @@ set(VALKEY_SERVER_SRCS
     ${CMAKE_SOURCE_DIR}/src/fbtree.c
     ${CMAKE_SOURCE_DIR}/src/ordered_index.c
     ${CMAKE_SOURCE_DIR}/src/t_hash.c
+    ${CMAKE_SOURCE_DIR}/src/t_path_hash.c
     ${CMAKE_SOURCE_DIR}/src/config.c
     ${CMAKE_SOURCE_DIR}/src/aof.c
     ${CMAKE_SOURCE_DIR}/src/bgiteration.c
@@ -128,6 +130,7 @@ set(VALKEY_SERVER_SRCS
     ${CMAKE_SOURCE_DIR}/src/queues.c
     ${CMAKE_SOURCE_DIR}/src/compression.c
     ${CMAKE_SOURCE_DIR}/src/compression_lz4.c
+    ${CMAKE_SOURCE_DIR}/src/compression_zstd.c
     ${CMAKE_SOURCE_DIR}/src/compression_stream.c
     ${CMAKE_SOURCE_DIR}/src/hotkeys.c
     ${CMAKE_SOURCE_DIR}/src/space_saving.c

@@ -1367,4 +1367,46 @@ test "Raft proto: no false AE_ACK success after AE bumps term" {
     }
 }
 
+test "Raft proto: NODE_FORGET resets tracking from AE_ACK" {
+    start_server {overrides {cluster-enabled yes cluster-protocol raft}} {
+        # --------------------------------------------------------------------------
+        # L0 is the leader in term 2, appending a NOOP to slots 1-2, term 2
+        # L0 sends two entries, which we expect to ack properly
+        # L0 sends NODE_FORGET and two more entries, dropping uncommitted
+        # At this point, we expect only the new entries to be present
+        # --------------------------------------------------------------------------
+        
+        # Setup        
+        set cport [expr {[srv 0 port] + 10000}]
+        set self_id [R 0 CLUSTER MYID]
+        set l0_id [string repeat "c" 40]
+        set l0_addr "127.0.0.1:9994@19994,,tls-port=0,shard-id=[string repeat f 40]"
+        set l1_id [string repeat "d" 40]
+        set l1_addr "127.0.0.1:9995@19995,,tls-port=0,shard-id=[string repeat e 40]"
+ 
+        # We send two entries just to check we get an ack back
+        set fd0 [raft_connect_fake_node 127.0.0.1 $cport $l0_id $l0_addr]
+        raft_send $fd0 "AE $l0_id 2 0 0 0 2\n2 NOOP -\n2 NOOP -"
+        assert_match "AE_ACK 2 1 2 *" [raft_recv_until $fd0 "AE_ACK *"]
+
+        # Then, we apply NODE_FORGET, dropping existing entries and appending new
+        raft_send $fd0 "AE $l0_id 2 2 3 3 3\n2 NODE_FORGET $self_id 0\n2 NOOP -\n2 NOOP -"
+        wait_for_condition 50 100 {
+            [CI 0 cluster_raft_log_entries] == 3
+        } else {
+            fail "NODE_FORGET did not truncate the log"
+        }
+ 
+        # A leader of another cluster, also in term 3, sends a heartbeat. The
+        # ACK must not report an index the node no longer has.
+        set fd1 [raft_connect_fake_node 127.0.0.1 $cport $l1_id $l1_addr]
+        raft_send $fd1 "AE $l1_id 3 0 0 0 0"
+        set ack [raft_recv_until $fd1 "AE_ACK 3 1 *"]
+        assert_lessthan_equal [lindex $ack 3] [CI 0 cluster_raft_log_entries]
+ 
+        close $fd0
+        close $fd1
+    }
+}
+
 } ;# tags

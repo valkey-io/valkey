@@ -226,6 +226,11 @@ static void startRehashing(kvstore *kvs, int didx, int first_key) {
     for (int i = first_key; i < first_key + 100; i++) {
         ASSERT_TRUE(kvstoreHashtableAdd(kvs, didx, stringFromInt(i)));
     }
+    /* Adding the keys may have started an automatic resize that is not done
+     * yet (this depends on the bucket size, e.g. on 32-bit builds). Complete
+     * it, because a new resize can't start while rehashing. */
+    hashtable *ht = kvstoreGetHashtable(kvs, didx);
+    while (hashtableIsRehashing(ht)) hashtableRehashMicroseconds(ht, 1000);
     ASSERT_TRUE(kvstoreHashtableExpand(kvs, didx, 10000));
     ASSERT_TRUE(hashtableIsRehashing(kvstoreGetHashtable(kvs, didx)));
 }

@@ -8,6 +8,7 @@
 
 extern "C" {
 #include "kvstore.h"
+#include "monotonic.h"
 }
 
 uint64_t hashTestCallback(const void *key) {
@@ -46,6 +47,8 @@ char *stringFromInt(int value) {
 class KvstoreTest : public ::testing::Test {
   protected:
     static void SetUpTestSuite() {
+        monotonicInit();
+
         /* Initialize KvstoreHashtableTestType explicitly by field name to avoid
          * dependency on field order (designated initializers require C++20). */
         memset(&KvstoreHashtableTestType, 0, sizeof(KvstoreHashtableTestType));
@@ -215,6 +218,73 @@ TEST_F(KvstoreTest, kvstoreHashtableIteratorRemoveAllKeysDeleteEmptyHashtable) {
     ASSERT_EQ(kvstoreSize(kvs2), 0u);
 
     kvstoreRelease(kvs2);
+}
+
+/* Starts rehashing in the hash table at 'didx' by adding some keys and then
+ * expanding it. */
+static void startRehashing(kvstore *kvs, int didx, int first_key) {
+    for (int i = first_key; i < first_key + 100; i++) {
+        ASSERT_TRUE(kvstoreHashtableAdd(kvs, didx, stringFromInt(i)));
+    }
+    ASSERT_TRUE(kvstoreHashtableExpand(kvs, didx, 10000));
+    ASSERT_TRUE(hashtableIsRehashing(kvstoreGetHashtable(kvs, didx)));
+}
+
+TEST_F(KvstoreTest, kvstoreIncrementallyRehashSkipsPausedHashtable) {
+    /* Use a large time budget. If the function spins on the paused hash
+     * table, it uses the whole budget. */
+    const uint64_t threshold_us = 1000000;
+    kvstore *kvs = kvstoreCreate(&KvstoreHashtableTestType, 1, 0);
+
+    /* Hash table 0 is first in the rehashing list. */
+    startRehashing(kvs, 0, 0);
+    startRehashing(kvs, 1, 100);
+    ASSERT_EQ(kvstoreHashtableRehashingCount(kvs), 2u);
+
+    hashtable *ht0 = kvstoreGetHashtable(kvs, 0);
+    hashtable *ht1 = kvstoreGetHashtable(kvs, 1);
+    hashtablePauseRehashing(ht0);
+
+    /* The paused hash table is skipped and the next one is rehashed. */
+    uint64_t elapsed_us = kvstoreIncrementallyRehash(kvs, threshold_us);
+    ASSERT_LT(elapsed_us, threshold_us);
+    ASSERT_TRUE(hashtableIsRehashing(ht0));
+    ASSERT_FALSE(hashtableIsRehashing(ht1));
+    ASSERT_EQ(kvstoreHashtableRehashingCount(kvs), 1u);
+
+    /* Only the paused hash table is left. Return without using the budget. */
+    elapsed_us = kvstoreIncrementallyRehash(kvs, threshold_us);
+    ASSERT_LT(elapsed_us, threshold_us);
+    ASSERT_TRUE(hashtableIsRehashing(ht0));
+
+    /* After resuming, the hash table completes rehashing. */
+    hashtableResumeRehashing(ht0);
+    kvstoreIncrementallyRehash(kvs, threshold_us);
+    ASSERT_FALSE(hashtableIsRehashing(ht0));
+    ASSERT_EQ(kvstoreHashtableRehashingCount(kvs), 0u);
+
+    kvstoreRelease(kvs);
+}
+
+TEST_F(KvstoreTest, kvstoreIncrementallyRehashStopsWhenResizeForbidden) {
+    const uint64_t threshold_us = 1000000;
+    kvstore *kvs = kvstoreCreate(&KvstoreHashtableTestType, 1, 0);
+
+    startRehashing(kvs, 0, 0);
+    startRehashing(kvs, 1, 100);
+    ASSERT_EQ(kvstoreHashtableRehashingCount(kvs), 2u);
+
+    /* No hash table can rehash. Return without using the budget. */
+    hashtableSetResizePolicy(HASHTABLE_RESIZE_FORBID);
+    uint64_t elapsed_us = kvstoreIncrementallyRehash(kvs, threshold_us);
+    hashtableSetResizePolicy(HASHTABLE_RESIZE_ALLOW);
+    ASSERT_LT(elapsed_us, threshold_us);
+    ASSERT_EQ(kvstoreHashtableRehashingCount(kvs), 2u);
+
+    kvstoreIncrementallyRehash(kvs, threshold_us);
+    ASSERT_EQ(kvstoreHashtableRehashingCount(kvs), 0u);
+
+    kvstoreRelease(kvs);
 }
 
 TEST_F(KvstoreTest, kvstoreHashtableExpand) {

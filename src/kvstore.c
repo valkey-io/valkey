@@ -735,17 +735,31 @@ uint64_t kvstoreIncrementallyRehash(kvstore *kvs, uint64_t threshold_us) {
 
     /* Our goal is to rehash as many hash tables as we can before reaching threshold_us,
      * after each hash table completes rehashing, it removes itself from the list. */
-    listNode *node;
+    listNode *node = listFirst(kvs->rehashing);
     monotime timer;
     uint64_t elapsed_us = 0;
     elapsedStart(&timer);
-    while ((node = listFirst(kvs->rehashing))) {
-        hashtableRehashMicroseconds(listNodeValue(node), threshold_us - elapsed_us);
+    while (node) {
+        /* Get the next node first, because the current node is removed from
+         * the list when its hash table completes rehashing. */
+        listNode *next = listNextNode(node);
+        hashtable *ht = listNodeValue(node);
 
+        int steps = hashtableRehashMicroseconds(ht, threshold_us - elapsed_us);
         elapsed_us = elapsedUs(timer);
+
+        if (steps == 0 && !hashtableIsRehashingPaused(ht)) {
+            /* The resize policy doesn't allow rehashing. This applies to all
+             * the hash tables, so there is nothing more we can do now. */
+            break;
+        }
         if (elapsed_us >= threshold_us) {
             break; /* Reached the time limit. */
         }
+        /* If rehashing is paused for this hash table, it is still in the
+         * list. Move on to the next one instead of retrying the same one
+         * until the time limit is reached. */
+        node = next;
     }
     return elapsed_us;
 }

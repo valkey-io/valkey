@@ -445,6 +445,7 @@ static void clusterRaftStartElection(void);
 static clusterNode *clusterRaftSelectTransferTarget(void);
 static int clusterRaftRequestLeaderTransfer(void);
 static void clusterRaftMaybeSendTimeoutNow(void);
+static void raftSetVerifiedIndex(uint64_t msg_term, uint64_t verified_index, bool force);
 
 static void clusterRaftRandomizeElectionTimeout(void) {
     mstime_t base = server.cluster_node_timeout;
@@ -540,6 +541,7 @@ static void clusterRaftSingletonStepDown(void) {
     raftLogTruncateFrom(1);
     rs->last_applied = 0;
     rs->commit_index = 0;
+    raftSetVerifiedIndex(rs->current_term, rs->last_applied, true);
 }
 
 /* Propose NODE_JOIN + SLOT_CHANGE for ourselves. Called once, before the
@@ -1953,14 +1955,16 @@ static void clusterRaftSetLeader(const char *leader_id) {
 /* Set flag to send AE_ACK message when handling AE or INSTALL_SNAPSHOT. This
  * may be called repeatedly before clusterRaftBeforeSleep() is called. We store
  * the maximum commit that we have verified, and no more. It is the caller's
- * responsibility to correctly provide the verified index. */
-static void raftSetVerifiedIndex(uint64_t msg_term, uint64_t verified_index) {
+ * responsibility to correctly provide the verified index. 
+ * Ordinarily, this should only progress forward, however we may need to force
+ * the value e.g. during NODE_FORGET */
+static void raftSetVerifiedIndex(uint64_t msg_term, uint64_t verified_index, bool force) {
     clusterRaftState *rs = RAFT_STATE();
-    if (rs->ae_ack_term < msg_term) {
+    if ((rs->ae_ack_term < msg_term) || force) {
         rs->ae_ack_term = msg_term;
         rs->ae_ack_index = 0;
     }
-    if (rs->ae_ack_index < verified_index) {
+    if ((rs->ae_ack_index < verified_index) || force) {
         rs->ae_ack_index = verified_index;
     }
 }
@@ -2057,9 +2061,9 @@ static int clusterRaftProcessAppendEntries(clusterLink *link, int argc, sds *arg
      * have no entries sent, we have verified our prev_log_index and term.
      * Otherwise, we can verify up to the new index applied */
     if (entry_line_count == 0) {
-        raftSetVerifiedIndex(msg_term, prev_log_index);
+        raftSetVerifiedIndex(msg_term, prev_log_index, false);
     } else {
-        raftSetVerifiedIndex(msg_term, new_index - 1);
+        raftSetVerifiedIndex(msg_term, new_index - 1, false);
     }
     rs->todo_send_ae_ack = 1;
     return 1;
@@ -2219,7 +2223,7 @@ static int clusterRaftProcessInstallSnapshot(clusterLink *link, int argc, sds *a
     /* If we're already past the snapshot, ignore.
      * We can ack up to our commit index as far as this function knows */
     if (snap_index <= rs->last_applied) {
-        raftSetVerifiedIndex(msg_term, rs->commit_index);
+        raftSetVerifiedIndex(msg_term, rs->commit_index, false);
         rs->todo_send_ae_ack = 1;
         return 1;
     }
@@ -2229,7 +2233,7 @@ static int clusterRaftProcessInstallSnapshot(clusterLink *link, int argc, sds *a
     if (raftLogTermAt(snap_index) == snap_term) {
         if (snap_index > rs->commit_index) rs->commit_index = snap_index;
         raftApplyCommitted();
-        raftSetVerifiedIndex(msg_term, rs->commit_index);
+        raftSetVerifiedIndex(msg_term, rs->commit_index, false);
         rs->todo_send_ae_ack = 1;
         return 1;
     }
@@ -2411,7 +2415,7 @@ static int clusterRaftProcessInstallSnapshot(clusterLink *link, int argc, sds *a
         myself->repl_offset = 0; /* As when applying SET_REPLICA_OF. */
     }
     /* We can ack up to our commit index as far as this function knows */
-    raftSetVerifiedIndex(msg_term, rs->commit_index);
+    raftSetVerifiedIndex(msg_term, rs->commit_index, false);
     rs->todo_send_ae_ack = 1;
     rs->todo_update_replication = 1;
     rs->todo_update_slot_coverage = 1;
@@ -4529,6 +4533,7 @@ static void clusterRaftForgetMyself(void) {
      * have left. Drop them so a restart cannot apply them as a singleton. */
     rs->commit_index = rs->last_applied;
     raftLogTruncateFrom(rs->last_applied + 1);
+    raftSetVerifiedIndex(rs->current_term, rs->last_applied, true);
     rs->todo_save_config = 1;
 }
 

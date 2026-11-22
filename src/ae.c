@@ -632,9 +632,12 @@ int aeProcessEvents(aeEventLoop *eventLoop, int flags) {
         /* After sleep callback. */
         if (eventLoop->aftersleep != NULL && flags & AE_CALL_AFTER_SLEEP) eventLoop->aftersleep(eventLoop, numevents);
 
-        /* Prioritize high-priority events: Always drain priority events
-         * immediately before processing normal events. */
-        processed += aeProcessQoSEvents(eventLoop);
+        /* Prioritize high-priority events: drain them immediately before processing
+         * normal events. Like normal file events, skip them if the caller did not
+         * request AE_FILE_EVENTS. */
+        if (flags & AE_FILE_EVENTS) {
+            processed += aeProcessQoSEvents(eventLoop);
+        }
 
         /* Process normal file events */
         for (j = 0; j < numevents; j++) {

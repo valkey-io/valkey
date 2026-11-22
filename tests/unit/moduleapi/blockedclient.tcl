@@ -109,6 +109,21 @@ start_server {tags {"modules"}} {
         }
     }
 
+    test {RESP3 Pub/Sub client can be blocked by a module command} {
+        if {[lsearch $::denytags "resp3"] >= 0} {
+            error "skipped:resp3 denied"
+        }
+        set rd [valkey_client]
+        $rd hello 3
+        $rd readraw 1
+        assert_equal {#t} [$rd do_fake_bg_true]
+        $rd readraw 0
+        assert_equal {subscribe foo 1} [$rd subscribe foo]
+        $rd readraw 1
+        assert_equal {#t} [$rd do_fake_bg_true]
+        $rd close
+    }
+
 foreach call_type {nested normal} {
     test "Busy module command - $call_type" {
         set busy_time_limit 50
@@ -297,6 +312,12 @@ foreach call_type {nested normal} {
         assert_match "OK" [r unblock_by_timer 100 100]
     }
     
+    test {Unmatched POSTPONED_LEN reply from a thread safe context does not crash the server} {
+        assert_equal {} [r postponed_unmatched_thread]
+        assert_equal OK [r postponed_unmatched_free]
+        assert_equal PONG [r ping]
+    }
+
     test "Unload the module - blockedclient" {
         assert_equal {OK} [r module unload blockedclient]
     }

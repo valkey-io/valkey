@@ -109,3 +109,67 @@ start_server {tags {"modules"} overrides {{save ""}}} {
         }
     }
 }
+
+# Global defrag resume state must survive MODULE UNLOAD. defragunload holds its
+# pass open with cursor 1 until released, and defragtest is loaded after it, so
+# a cursor that lands on the wrong module shows up as global_wrong_cursor.
+set unloadmodule [file normalize tests/modules/defragunload.so]
+set infomodule [file normalize tests/modules/infotest.so]
+
+# Returns 0 if the server was compiled without active defrag.
+proc start_held_global_defrag {} {
+    r config set active-defrag-ignore-bytes 1
+    r config set active-defrag-threshold-lower 0
+    r config set active-defrag-cycle-min 99
+    catch {r config set activedefrag yes}
+    if {[r config get activedefrag] ne "activedefrag yes"} {return 0}
+    wait_for_condition 100 50 {
+        [r defragunload.calls] > 0
+    } else {
+        fail "global defrag never reached defragunload"
+    }
+    return 1
+}
+
+proc assert_defragtest_cursor_intact {} {
+    wait_for_condition 100 50 {
+        [getInfoProperty [r info defragtest_stats] defragtest_global_attempts] > 0
+    } else {
+        fail "global defrag never reached defragtest"
+    }
+    assert_equal 0 [getInfoProperty [r info defragtest_stats] defragtest_global_wrong_cursor]
+}
+
+start_server {tags {"modules"} overrides {{save ""}}} {
+    r module load $unloadmodule
+    r module load $testmodule 100
+    if {[start_held_global_defrag]} {
+        test {Module defrag: unloading the module being defragged does not pass its cursor on} {
+            r module unload defragunload
+            assert_defragtest_cursor_intact
+        }
+    }
+}
+
+start_server {tags {"modules"} overrides {{save ""}}} {
+    r module load $infomodule
+    r module load $unloadmodule
+    r module load $testmodule 100
+    if {[start_held_global_defrag]} {
+        test {Module defrag: unloading an earlier module does not skip the module being defragged} {
+            r module unload infotest
+
+            # defragunload must still be the module being defragged.
+            set calls [r defragunload.calls]
+            wait_for_condition 100 50 {
+                [r defragunload.calls] > $calls
+            } else {
+                fail "defragunload was skipped after unloading infotest"
+            }
+            assert_equal 0 [getInfoProperty [r info defragtest_stats] defragtest_global_attempts]
+
+            r defragunload.release
+            assert_defragtest_cursor_intact
+        }
+    }
+}

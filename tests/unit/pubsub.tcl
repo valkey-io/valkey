@@ -494,6 +494,10 @@ start_server {tags {"pubsub network"}} {
         assert_equal {AK} [lindex [r config get notify-keyspace-events] 1]
         r config set notify-keyspace-events EA
         assert_equal {AE} [lindex [r config get notify-keyspace-events] 1]
+        r config set notify-keyspace-events KEAn
+        assert_equal {AnKE} [lindex [r config get notify-keyspace-events] 1]
+        r config set notify-keyspace-events KEAnm
+        assert_equal {AnKEm} [lindex [r config get notify-keyspace-events] 1]
     }
 
     test "Keyspace notifications: new key test" {

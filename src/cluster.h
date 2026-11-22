@@ -70,6 +70,7 @@ void clusterUpdateMyselfHumanNodename(void);
 void clusterUpdateMyselfAvailabilityZone(void);
 void clusterUpdateMyselfReplicaPriority(void);
 
+int clusterPublishMessageLengthValid(robj *channel, robj *message);
 void clusterPropagatePublish(robj *channel, robj *message, int sharded);
 void clusterBroadcastPong(int target);
 

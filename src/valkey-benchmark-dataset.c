@@ -228,7 +228,7 @@ static sds getFieldValue(const char *row, int column_index, char delimiter) {
 
     if (current_col == column_index) {
         size_t len = p - start;
-        if (len > 0 && start[0] == '"' && p[-1] == '"') {
+        if (len > 1 && start[0] == '"' && p[-1] == '"') {
             start++;
             len -= 2;
         }

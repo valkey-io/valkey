@@ -2172,13 +2172,20 @@ static int cliReadReply(int output_raw_strings) {
     valkeyReply *reply;
     sds out = NULL;
     int output = 1;
+    int status;
 
     if (config.last_reply) {
         freeReplyObject(config.last_reply);
         config.last_reply = NULL;
     }
 
-    if (valkeyGetReply(context, &_reply) != VALKEY_OK) {
+    /* libvalkey returns a RESP3 attribute as its own reply, ahead of the reply
+     * it describes. Attributes are not part of the reply, so skip them. */
+    while ((status = valkeyGetReply(context, &_reply)) == VALKEY_OK &&
+           ((valkeyReply *)_reply)->type == VALKEY_REPLY_ATTR) {
+        freeReplyObject(_reply);
+    }
+    if (status != VALKEY_OK) {
         if (config.blocking_state_aborted) {
             config.blocking_state_aborted = 0;
             config.monitor_mode = 0;
@@ -2572,6 +2579,9 @@ static valkeyReply *reconnectingValkeyCommand(valkeyContext *c, const char *fmt,
 
 static int parseOptions(int argc, char **argv) {
     int i;
+    /* parseEnv() runs first, so auth may already hold VALKEYCLI_AUTH. Only a
+     * password set by -a or -u below should trigger the warning. */
+    char *env_auth = config.conn_info.auth;
 
     for (i = 1; i < argc; i++) {
         int lastarg = i == argc - 1;
@@ -2706,7 +2716,12 @@ static int parseOptions(int argc, char **argv) {
             config.hotkeys_count = HOTKEYS_COUNT;
         } else if (!strcmp(argv[i], "--hotkeys-count") && !lastarg) {
             config.hotkeys = 1;
-            config.hotkeys_count = atoi(argv[++i]);
+            int count = atoi(argv[++i]);
+            if (count <= 0) {
+                fprintf(stderr, "Invalid hotkeys count. Must be a positive integer.\n");
+                exit(1);
+            }
+            config.hotkeys_count = count;
         } else if (!strcmp(argv[i], "--eval") && !lastarg) {
             config.eval = argv[++i];
         } else if (!strcmp(argv[i], "--ldb")) {
@@ -2906,7 +2921,7 @@ static int parseOptions(int argc, char **argv) {
         exit(1);
     }
 
-    if (!config.no_auth_warning && config.conn_info.auth != NULL) {
+    if (!config.no_auth_warning && config.conn_info.auth != env_auth) {
         fputs("Warning: Using a password with '-a' or '-u' option on the command"
               " line interface may not be safe.\n",
               stderr);
@@ -5236,12 +5251,12 @@ static int clusterManagerMigrateKeysInSlot(clusterManagerNode *source,
         if (config.conn_info.input_dbnum == dbnum) {
             break;
         }
+        char *dots = NULL;
+        valkeyReply *reply = NULL, *migrate_reply = NULL;
         if (cliSelect(&config, source->context) == VALKEY_ERR) {
             success = 0;
             goto next;
         }
-        char *dots = NULL;
-        valkeyReply *reply = NULL, *migrate_reply = NULL;
         reply = CLUSTER_MANAGER_COMMAND(source,
                                         "CLUSTER "
                                         "GETKEYSINSLOT %d %d",
@@ -7932,7 +7947,7 @@ static int clusterManagerCommandReshard(int argc, char **argv) {
     int opts = CLUSTER_MANAGER_OPT_VERBOSE;
     if (config.cluster_manager_command.flags & CLUSTER_MANAGER_CMD_FLAG_USE_ATOMIC_SLOT_MIGRATION)
         opts |= CLUSTER_MANAGER_OPT_USE_ATOMIC_SLOT_MIGRATION;
-    if (!clusterApplyReshardTable(table, target, opts)) {
+    if (!(result = clusterApplyReshardTable(table, target, opts))) {
         goto cleanup;
     }
 cleanup:
@@ -8087,7 +8102,7 @@ static int clusterManagerCommandRebalance(int argc, char **argv) {
                 if (config.cluster_manager_command.flags & CLUSTER_MANAGER_CMD_FLAG_USE_ATOMIC_SLOT_MIGRATION) {
                     opts |= CLUSTER_MANAGER_OPT_USE_ATOMIC_SLOT_MIGRATION;
                 }
-                if (!clusterApplyReshardTable(table, dst, opts)) {
+                if (!(result = clusterApplyReshardTable(table, dst, opts))) {
                     goto end_move;
                 }
             }
@@ -9987,6 +10002,7 @@ void testHint(const char *input) {
 
     sds hint = getHintForInput(input);
     printf("%s\n", hint);
+    sdsfree(hint);
     exit(0);
 }
 

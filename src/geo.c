@@ -525,9 +525,11 @@ void geoaddCommand(client *c) {
  *                               [COUNT count [ANY]] [STORE key|STOREDIST key]
  * GEORADIUSBYMEMBER key member radius unit ... options ...
  * GEOSEARCH key [FROMMEMBER member] [FROMLONLAT long lat] [BYRADIUS radius unit]
- *               [BYBOX width height unit] [WITHCOORD] [WITHDIST] [WITHHASH] [COUNT count [ANY]] [ASC|DESC]
+ *               [BYBOX width height unit] [BYPOLYGON numvertices longitude latitude [longitude latitude ...]]
+ *               [WITHCOORD] [WITHDIST] [WITHHASH] [COUNT count [ANY]] [ASC|DESC]
  * GEOSEARCHSTORE dest_key src_key [FROMMEMBER member] [FROMLONLAT long lat] [BYRADIUS radius unit]
- *               [BYBOX width height unit] [COUNT count [ANY]] [ASC|DESC] [STOREDIST]
+ *               [BYBOX width height unit] [BYPOLYGON numvertices longitude latitude [longitude latitude ...]]
+ *               [COUNT count [ANY]] [ASC|DESC] [STOREDIST]
  *  */
 void georadiusGeneric(client *c, int srcKeyIndex, int flags) {
     robj *storekey = NULL;
@@ -669,6 +671,7 @@ void georadiusGeneric(client *c, int srcKeyIndex, int flags) {
                     geoPolygonPointsFree(&shape);
                     return;
                 }
+                geoPolygonPointsFree(&shape);
                 /* Extract polygon vertices. */
                 shape.conversion = 1;
                 shape.t.polygon.num_vertices = num_vertices;

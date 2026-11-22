@@ -40,6 +40,7 @@ TEST_MODULES = \
     datatype2.so \
     auth.so \
     keyspace_events.so \
+    pathhash_notifications.so \
     block_keyspace_notification.so \
     blockedclient.so \
     getkeys.so \
@@ -47,6 +48,7 @@ TEST_MODULES = \
     test_lazyfree.so \
     timer.so \
     defragtest.so \
+    defragunload.so \
     keyspecs.so \
     hash.so \
     hash_stringref.so \

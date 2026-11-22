@@ -8436,12 +8436,18 @@ int clusterNodeIsReplica(clusterNode *node) {
 
 clusterNode *clusterNodeGetPrimary(clusterNode *node) {
     clusterNode *primary = node;
+    /* Out-of-order gossip can briefly leave the replicaof links forming a
+     * cycle, possibly one that doesn't include this node. An acyclic chain
+     * can't be longer than the number of known nodes, so stop after that
+     * many steps instead of looping forever. */
+    unsigned long remaining_steps = dictSize(server.cluster->nodes);
     while (primary->replicaof != NULL) {
         primary = primary->replicaof;
-        if (primary == node) break;
+        if (primary == node || --remaining_steps == 0) {
+            serverLog(LL_WARNING, "Cycle detected in the replicaof chain of node %.40s", node->name);
+            return node;
+        }
     }
-    /* Assert that a node's replicaof/primary chain does not form a cycle. */
-    debugServerAssert(primary->replicaof == NULL);
     return primary;
 }
 

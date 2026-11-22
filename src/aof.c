@@ -1814,7 +1814,10 @@ int loadSingleAppendOnlyFile(char *filename) {
             }
         }
         if (ch == '#') { /* Skip annotations */
-            if (fgets(buf, sizeof(buf), fp) == NULL && !feof(fp)) goto readerr;
+            /* A line without a newline at the end of the file is a torn annotation.
+             * Treat it as a short read. Otherwise the next write would be appended
+             * to the torn line, and the next load would fail. */
+            if (fgets(buf, sizeof(buf), fp) == NULL || feof(fp)) goto readerr;
             continue;
         }
         ungetc(ch, fp);

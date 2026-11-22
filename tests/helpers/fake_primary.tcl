@@ -5,7 +5,9 @@
 # STREAM_FILE is provided, its contents are sent after the RDB and the
 # connection stays open until the replica disconnects. When PSYNC_REPLY is
 # provided, it is sent as the whole PSYNC reply instead of the full sync, and
-# the connection stays open until the replica disconnects.
+# the connection stays open until the replica disconnects. A PSYNC_REPLY that
+# starts with -ERR makes the replica fall back to SYNC, which is then answered
+# with the same bulk transfer.
 #
 # Usage: tclsh fake_primary.tcl PORT PAYLOAD_FILE ANNOUNCE_SIZE ?STREAM_FILE? ?PSYNC_REPLY? ?OFFSET?
 
@@ -45,6 +47,16 @@ proc accept {sock host port} {
             } elseif {$cmd eq "REPLCONF"} {
                 puts -nonewline $sock "+OK\r\n"
                 flush $sock
+            } elseif {$cmd eq "PSYNC" && [string match "-ERR*" $psync_reply]} {
+                # Reject PSYNC so the replica falls back to SYNC.
+                puts -nonewline $sock "$psync_reply\r\n"
+                flush $sock
+            } elseif {$cmd eq "SYNC"} {
+                puts -nonewline $sock "\$$announce_size\r\n"
+                puts -nonewline $sock $payload
+                flush $sock
+                set served 1
+                break
             } elseif {$cmd eq "PSYNC" && $psync_reply ne ""} {
                 puts -nonewline $sock "$psync_reply\r\n"
                 flush $sock

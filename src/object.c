@@ -1519,7 +1519,6 @@ void freeMemoryOverheadData(struct serverMemOverhead *mh) {
  * information used for the MEMORY OVERHEAD and INFO command. The returned
  * structure pointer should be freed calling freeMemoryOverheadData(). */
 struct serverMemOverhead *getMemoryOverheadData(void) {
-    int j;
     size_t mem_total = 0;
     size_t mem = 0;
     size_t zmalloc_used = zmalloc_used_memory();
@@ -1590,15 +1589,13 @@ struct serverMemOverhead *getMemoryOverheadData(void) {
     mh->functions_caches = functionsMemoryOverhead();
     mem_total += mh->functions_caches;
 
-    for (j = 0; j < server.dbnum; j++) {
-        serverDb *db = server.db[j];
-        if (db == NULL) continue;
-
+    serverDb *db;
+    forEachCreatedDb(db) {
         unsigned long long keyscount = kvstoreSize(db->keys);
 
         mh->total_keys += keyscount;
         mh->db = zrealloc(mh->db, sizeof(mh->db[0]) * (mh->num_dbs + 1));
-        mh->db[mh->num_dbs].dbid = j;
+        mh->db[mh->num_dbs].dbid = db->id;
 
         mem = kvstoreMemUsage(db->keys) + keyscount * sizeof(robj);
         mh->db[mh->num_dbs].overhead_ht_main = mem;

@@ -766,10 +766,9 @@ int selectDb(client *c, int id) {
 
 long long dbTotalServerKeyCount(void) {
     long long total = 0;
-    int j;
-    for (j = 0; j < server.dbnum; j++) {
-        if (dbHasNoKeys(j)) continue;
-        total += kvstoreSize(server.db[j]->keys);
+    serverDb *db;
+    forEachCreatedDb(db) {
+        total += kvstoreSize(db->keys);
     }
     return total;
 }

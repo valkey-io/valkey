@@ -8268,11 +8268,14 @@ unsigned int delKeysInSlot(unsigned int hashslot, int lazy, bool propagate_del, 
     unsigned int j = 0;
     int before_execution_nesting = server.execution_nesting;
 
-    for (int i = 0; i < server.dbnum; i++) {
+    /* server.created_db_ids is read on every iteration, so a database created
+     * while keys are deleted (for example by a module) is safe. A database
+     * inserted before the current position shifts the list, and the current
+     * database is visited again, with no keys left in the slot. */
+    for (int i = 0; i < server.created_db_count; i++) {
         kvstoreHashtableIterator *kvs_di = NULL;
         void *next;
-        serverDb *db = server.db[i];
-        if (db == NULL) continue;
+        serverDb *db = server.db[server.created_db_ids[i]];
         kvs_di = kvstoreGetHashtableIterator(db->keys, hashslot, HASHTABLE_ITER_SAFE);
         while (kvstoreHashtableIteratorNext(kvs_di, &next)) {
             robj *valkey = next;

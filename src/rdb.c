@@ -1587,7 +1587,6 @@ werr:
  * error. */
 static int rdbSaveRioInternal(int req, int rdbver, rio *rdb, int *error, int rdbflags, rdbSaveInfo *rsi) {
     long key_counter = 0;
-    int j;
 
     if (rdbWriteHeader(rdb, req, rdbver, rdbflags, rsi) == C_ERR) goto werr;
 
@@ -1596,8 +1595,9 @@ static int rdbSaveRioInternal(int req, int rdbver, rio *rdb, int *error, int rdb
         /* RDB slot import info is encoded in a required opcode since exposing
          * importing slots is a consistency problem. */
         if (clusterRDBSaveSlotImports(rdb, rdbver) == C_ERR) goto werr;
-        for (j = 0; j < server.dbnum; j++) {
-            if (rdbSaveDb(rdb, j, rdbflags, rdbver, &key_counter) == -1) goto werr;
+        serverDb *db;
+        forEachCreatedDb(db) {
+            if (rdbSaveDb(rdb, db->id, rdbflags, rdbver, &key_counter) == -1) goto werr;
         }
     }
 

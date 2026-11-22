@@ -1955,7 +1955,7 @@ static void clusterRaftSetLeader(const char *leader_id) {
 /* Set flag to send AE_ACK message when handling AE or INSTALL_SNAPSHOT. This
  * may be called repeatedly before clusterRaftBeforeSleep() is called. We store
  * the maximum commit that we have verified, and no more. It is the caller's
- * responsibility to correctly provide the verified index. 
+ * responsibility to correctly provide the verified index.
  * Ordinarily, this should only progress forward, however we may need to force
  * the value e.g. during NODE_FORGET */
 static void raftSetVerifiedIndex(uint64_t msg_term, uint64_t verified_index, bool force) {

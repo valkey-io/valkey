@@ -38,9 +38,16 @@ proc raft_handoff_write {src key} {
 }
 
 proc raft_assert_write_not_lost {writer dst key} {
+    wait_for_condition 100 50 {
+        [raft_migration_state $dst] eq "success"
+    } else {
+        fail "Target did not finish the slot handoff ([raft_migration_state $dst])"
+    }
     if {![catch {$writer read} reply]} {
         assert_equal OK $reply
         assert_equal after [R $dst GET $key] "Source acknowledged a write lost during slot handoff"
+    } else {
+        assert_equal before [R $dst GET $key] "Target lost imported data during slot handoff"
     }
 }
 
@@ -175,6 +182,7 @@ start_cluster 4 0 {tags {external:skip cluster} overrides {cluster-protocol raft
 
         set writer [raft_handoff_write $src $key]
         assert_equal $commit_before [CI $src cluster_raft_commit_index]
+        assert_equal awaiting-cluster-commit [raft_migration_state $dst]
         foreach c $sleepers {$c read}
         wait_for_condition 100 50 {
             [CI $src cluster_raft_last_applied] > $commit_before

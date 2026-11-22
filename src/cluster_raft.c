@@ -491,6 +491,8 @@ static void clusterRaftSyncSlotMigrationPause(void) {
 static void clusterRaftOnSlotOwnershipApplied(void) {
     if (RAFT_STATE()->slot_migration_pause && !clusterIsAnySlotExportFailoverGranted() && clusterRaftLogFullyApplied())
         clusterRaftDropSlotMigrationPause();
+    else if (RAFT_STATE()->slot_migration_pause)
+        clusterRaftHoldSlotMigrationPause();
 }
 
 static void clusterRaftReleaseSlotMigrationPauseIfCaughtUp(void) {
@@ -1728,7 +1730,6 @@ static void raftLogApply(raftLogEntry *e) {
         if (entry_result == RAFT_RESULT_OK) {
             rs->todo_update_slot_coverage = 1;
             clearCachedClusterSlotsResponse();
-            clusterRaftOnSlotOwnershipApplied();
         }
         serverLog(LL_NOTICE, "%s SLOT_CHANGE (index %llu).",
                   entry_result != RAFT_RESULT_OK ? "Skipped" : "Applied", (unsigned long long)e->index);
@@ -1859,6 +1860,13 @@ static void raftLogApply(raftLogEntry *e) {
 
     /* Check pending proposals for a match and remove it. */
     clusterRaftCompletePendingProposal(e->type, e->data, entry_result);
+
+    if (e->type == RAFT_ENTRY_SLOT_CHANGE && entry_result == RAFT_RESULT_OK) {
+        /* Complete our import callback before revalidating ownership. */
+        clusterUpdateSlotExportsOnOwnershipChange();
+        clusterUpdateSlotImportsOnOwnershipChange();
+        clusterRaftOnSlotOwnershipApplied();
+    }
 }
 
 /* Apply all committed but unapplied log entries. */
@@ -4951,7 +4959,8 @@ static int clusterRaftSpecialCommand(client *c) {
         addReply(c, shared.ok);
         return 1;
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "bumpepoch") && c->argc == 2) {
-        addReply(c, shared.ok);
+        /* No config epochs in Raft. Reply like gossip for tools and tests. */
+        addReplyStatusFormat(c, "BUMPED %llu", (unsigned long long)clusterGetShardEpoch(myself->shard_id));
         return 1;
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "addvoter") && c->argc == 3) {
         void *h = blockClientAsync(c);

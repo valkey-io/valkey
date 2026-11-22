@@ -989,7 +989,7 @@ void clusterUpdateSlotImportsOnOwnershipChange(void) {
                 /* Close the client, but first unlink this migration to prevent it from being
                  * treated as a slot migration client from here on (e.g. preventing proxying
                  * of any pending commands to our old replicas). */
-                job->client->slot_migration_job = NULL;
+                if (job->client) job->client->slot_migration_job = NULL;
                 resetSlotMigrationJob(job);
             }
             continue;
@@ -2453,9 +2453,12 @@ void clusterHandleSlotMigrationClientClose(slotMigrationJob *job) {
     /* If we have granted failover, the failover may have happened, but we don't
      * know. We keep the slot export around so that we remain paused until we
      * find out about the takeover (or until the pause times out).
+     * An import awaiting cluster commit must also wait for its proposal callback
+     * before deciding whether its imported keys should be cleaned up.
      *
      * Otherwise, we can mark it failed. */
-    if (job->state != SLOT_EXPORT_FAILOVER_GRANTED) {
+    if (job->state != SLOT_EXPORT_FAILOVER_GRANTED &&
+        job->state != SLOT_IMPORT_AWAITING_CLUSTER_COMMIT) {
         if (job->type == SLOT_MIGRATION_EXPORT) {
             finishSlotMigrationJob(job, SLOT_MIGRATION_JOB_FAILED,
                                    "Connection lost to target. Check CLUSTER "
@@ -2659,6 +2662,7 @@ bool canSlotMigrationJobSendAck(slotMigrationJob *job) {
            job->state != SLOT_EXPORT_READ_AUTH_RESPONSE &&
            job->state != SLOT_EXPORT_SEND_ESTABLISH &&
            job->state != SLOT_EXPORT_READ_ESTABLISH_RESPONSE &&
+           job->state != SLOT_IMPORT_AWAITING_CLUSTER_COMMIT &&
            job->state != SLOT_IMPORT_OCCURRING_ON_PRIMARY;
 }
 
@@ -2671,10 +2675,11 @@ void clusterSlotMigrationCron(void) {
     while ((ln = listNext(&li)) != NULL) {
         job = ln->value;
 
-        /* Note that after granting failover, we no longer care about the
-         * connection timeout, since we will use pause timeout. */
+        /* Granted exports use the pause timeout. Imports awaiting cluster
+         * commit use the proposal callback, even if the connection is lost. */
         if (isSlotMigrationJobInProgress(job) &&
             job->state != SLOT_EXPORT_FAILOVER_GRANTED &&
+            job->state != SLOT_IMPORT_AWAITING_CLUSTER_COMMIT &&
             job->state != SLOT_IMPORT_OCCURRING_ON_PRIMARY) {
             serverAssert(job->type == SLOT_MIGRATION_EXPORT || job->client);
             /* For imports, last interaction will be set to the last

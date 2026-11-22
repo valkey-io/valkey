@@ -85,18 +85,6 @@ proc wait_for_migration {node_idx slot {maxtries 100}} {
         fail "Cluster node $target_id did not get slot $slot within [expr {$maxtries * 100}] ms (current $nodes)"
     }
     wait_for_cluster_propagation
-
-    # Raft ownership can converge before the source finishes its export.
-    # Wait for that job before checking migration completion.
-    if {$::cluster_raft} {
-        set jobname [get_job_name $node_idx $slot]
-        for {set i 0} {$i < [llength $::servers]} {incr i} {
-            set job [get_migration_by_name $i $jobname]
-            if {$job ne "" && [dict get $job operation] eq "EXPORT"} {
-                wait_for_migration_field $i $jobname state success
-            }
-        }
-    }
 }
 
 # Ensure that a given hash slot is served by the specified node.
@@ -1482,7 +1470,7 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster network} overrides
             assert_match "OK" [R 0 CLUSTER SETSLOT 0 NODE $node0_id]
             wait_for_migration 0 0
         }
-    } {} {cluster-raft:skip} ;# CLUSTER BUMPEPOCH is a Raft no-op; slot takeover uses gossip epochs
+    }
 
     test "Export unpauses itself even if slot failover doesn't occur" {
         assert_does_not_resync {

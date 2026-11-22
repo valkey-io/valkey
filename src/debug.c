@@ -698,7 +698,7 @@ void debugCommand(client *c) {
         }
         server.debug_cluster_failover_epoch = epoch;
         addReply(c, shared.ok);
-    } else if (!strcasecmp(objectGetVal(c->argv[1]), "slotmigration")) {
+    } else if (!strcasecmp(objectGetVal(c->argv[1]), "slotmigration") && c->argc == 4) {
         if (!strcasecmp(objectGetVal(c->argv[2]), "prevent-pause")) {
             server.debug_slot_migration_prevent_pause = (atoi(objectGetVal(c->argv[3])) != 0);
         } else if (!strcasecmp(objectGetVal(c->argv[2]), "prevent-failover")) {
@@ -754,6 +754,11 @@ void debugCommand(client *c) {
                 nextra += used;
                 remaining -= used;
             }
+        } else if (val->encoding == OBJ_ENCODING_BTREE) {
+            /* Leaf count of the B+tree index, read by tests that check leaf
+             * compaction. */
+            zset *zs = objectGetVal(val);
+            snprintf(extra, sizeof(extra), " btree_leaves:%lu", orderedIndexGetNumLeaves(zs->oi));
         }
 
         sds s = sdsempty();
@@ -2301,7 +2306,7 @@ int memtest_test_linux_anonymous_maps(void) {
                  (unsigned long)start_vect[regions], (unsigned long)size_vect[regions]);
         if (write(fd, logbuf, strlen(logbuf)) == -1) { /* Nothing to do. */
         }
-        regions++;
+        if (++regions == MEMTEST_MAX_REGIONS) break;
     }
 
     int errors = 0;

@@ -48,8 +48,12 @@ static void exitScriptTimedOutMode(scriptRunCtx *run_ctx) {
     serverAssert(scriptIsTimedOut());
     run_ctx->flags &= ~SCRIPT_TIMEDOUT;
     blockingOperationEnds();
-    /* if we are a replica and we have an active primary, set it for continue processing */
-    if (server.primary_host && server.primary) queueClientForReprocessing(server.primary);
+    /* if we are a replica and we have an active primary, set it for continue processing.
+     * A blocked primary (e.g. postponed by CLIENT PAUSE WRITE) is queued when it is unblocked.
+     * A throttled primary is queued by the throttler when it releases it (throttlerTimeProc()). */
+    if (server.primary_host && server.primary && !server.primary->flag.blocked &&
+        !server.primary->flag.throttled)
+        queueClientForReprocessing(server.primary);
 }
 
 static void enterScriptTimedOutMode(scriptRunCtx *run_ctx) {

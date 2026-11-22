@@ -17,7 +17,6 @@ bool clusterIsSlotExporting(int slot);
 bool clusterIsAnySlotImporting(void);
 bool clusterIsAnySlotExporting(void);
 bool clusterIsAnySlotExportFailoverGranted(void);
-void slotExportTryUnpause(void);
 void clusterMarkImportingSlotsInDb(serverDb *db);
 bool clusterSlotMigrationShouldInstallWriteHandler(client *c);
 void initClusterSlotMigrationJobList(void);

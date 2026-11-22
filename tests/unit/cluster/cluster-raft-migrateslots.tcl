@@ -1,7 +1,7 @@
 # Source must not ACK a write that applying SLOT_CHANGE will delete.
-# The grant-window tests pause at FAILOVER-GRANTED, wait past the 2s export
-# timeout, SET, then resume Raft. They only differ in how SLOT_CHANGE is stalled.
-# A third test checks that failing before grant does not leave Raft paused.
+# The grant-window tests stall SLOT_CHANGE and attempt writes after export
+# timeout or cancellation, then resume Raft. Pre-grant failure must not stick
+# a write pause.
 source tests/support/cluster_raft.tcl
 
 proc raft_migration_state {idx} {
@@ -153,42 +153,55 @@ start_cluster 4 0 {tags {external:skip cluster} overrides {cluster-protocol raft
         raft_assert_write_not_lost $writer $dst $key
     }
 
-    test "Raft: leader source does not ACK writes while SLOT_CHANGE is uncommitted" {
-        # Leader source: entry is in the local log, but sleeping voters withhold ACK.
-        set src 0
-        set dst 2
-        set slot 0
-        set key "06S"
-        assert_equal $slot [R $src CLUSTER KEYSLOT $key]
-        raft_begin_handoff $src $dst $slot $key
+    foreach {slot key cancel_export name} {
+        0 06S 0 {Raft: leader source does not ACK writes while SLOT_CHANGE is uncommitted}
+        1 Qi 1 {Raft: cancelling an export cannot release a pending slot handoff pause}
+    } {
+        test $name {
+            # Leader source: entry is in the local log, but sleeping voters withhold ACK.
+            set src 0
+            set dst 2
+            assert_equal $slot [R $src CLUSTER KEYSLOT $key]
+            raft_begin_handoff $src $dst $slot $key
 
-        set sleepers {}
-        foreach i {1 3} {
-            set c [valkey_deferring_client [expr {-$i}]]
-            test_defer [list $c close]
-            $c DEBUG SLEEP 6
-            lappend sleepers $c
-        }
-        after 200
-        set log_before [CI $src cluster_raft_log_entries]
-        set commit_before [CI $src cluster_raft_commit_index]
-        R $dst DEBUG SLOTMIGRATION PREVENT-FAILOVER 0
-        wait_for_condition 100 10 {
-            [CI $src cluster_raft_log_entries] > $log_before &&
-            [CI $src cluster_raft_commit_index] == $commit_before
-        } else {
-            fail "Leader did not keep SLOT_CHANGE uncommitted"
-        }
+            set sleepers {}
+            foreach i {1 3} {
+                set c [valkey_deferring_client [expr {-$i}]]
+                test_defer [list $c close]
+                $c DEBUG SLEEP 6
+                lappend sleepers $c
+            }
+            after 200
+            set log_before [CI $src cluster_raft_log_entries]
+            set commit_before [CI $src cluster_raft_commit_index]
+            R $dst DEBUG SLOTMIGRATION PREVENT-FAILOVER 0
+            wait_for_condition 100 10 {
+                [CI $src cluster_raft_log_entries] > $log_before &&
+                [CI $src cluster_raft_commit_index] == $commit_before
+            } else {
+                fail "Leader did not keep SLOT_CHANGE uncommitted"
+            }
 
-        set writer [raft_handoff_write $src $key]
-        assert_equal $commit_before [CI $src cluster_raft_commit_index]
-        assert_equal awaiting-cluster-commit [raft_migration_state $dst]
-        foreach c $sleepers {$c read}
-        wait_for_condition 100 50 {
-            [CI $src cluster_raft_last_applied] > $commit_before
-        } else {
-            fail "Leader did not apply the slot handoff after followers woke"
+            if {$cancel_export} {
+                set writer [valkey_deferring_client [expr {-$src}]]
+                test_defer [list $writer close]
+                # Process cancellation and SET without another beforeSleep in between.
+                set fd [$writer channel]
+                puts -nonewline $fd "CLUSTER CANCELSLOTMIGRATIONS\r\nSET $key after\r\n"
+                flush $fd
+                assert_equal OK [$writer read]
+            } else {
+                set writer [raft_handoff_write $src $key]
+            }
+            assert_equal $commit_before [CI $src cluster_raft_commit_index]
+            assert_equal awaiting-cluster-commit [raft_migration_state $dst]
+            foreach c $sleepers {$c read}
+            wait_for_condition 100 50 {
+                [CI $src cluster_raft_last_applied] > $commit_before
+            } else {
+                fail "Leader did not apply the slot handoff after followers woke"
+            }
+            raft_assert_write_not_lost $writer $dst $key
         }
-        raft_assert_write_not_lost $writer $dst $key
     }
 }

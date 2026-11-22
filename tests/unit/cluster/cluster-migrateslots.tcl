@@ -196,6 +196,10 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster network} overrides
     set node1_id [R 1 CLUSTER MYID]
     set node2_id [R 2 CLUSTER MYID]
     set fake_jobname "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    set migration_pause_reason "slot_migration_in_progress"
+    if {$::cluster_raft} {
+        set migration_pause_reason "slot_ownership_change_in_progress"
+    }
 
     test "General command interface" {
         assert_error "*wrong number of arguments*" {R 0 CLUSTER MIGRATESLOTS}
@@ -1483,7 +1487,7 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster network} overrides
             set jobname [get_job_name 0 0]
             wait_for_migration_field 0 $jobname state failover-granted
 
-            assert_match "slot_migration_in_progress" [s -0 paused_reason]
+            assert_match $migration_pause_reason [s -0 paused_reason]
 
             # Our job should get dropped after pause timeout expires
             wait_for_migration_field 0 $jobname state failed
@@ -1513,7 +1517,7 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster network} overrides
             set jobname [get_job_name 0 0]
             wait_for_migration_field 0 $jobname state failover-granted
 
-            assert_match "slot_migration_in_progress" [s -0 paused_reason]
+            assert_match $migration_pause_reason [s -0 paused_reason]
             assert_match "write" [s -0 paused_actions]
 
             # Cancel the job
@@ -1544,7 +1548,7 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster network} overrides
             set jobname [get_job_name 0 0]
             wait_for_migration_field 0 $jobname state failover-granted
 
-            assert_match "slot_migration_in_progress" [s -0 paused_reason]
+            assert_match $migration_pause_reason [s -0 paused_reason]
             assert_match "write" [s -0 paused_actions]
 
             # While we are blocked, execute a SET on another client

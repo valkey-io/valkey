@@ -458,13 +458,12 @@ static int clusterRaftQuorum(void) {
 }
 
 static void clusterRaftHoldSlotMigrationPause(void) {
-    pauseActions(PAUSE_DURING_SLOT_MIGRATION, LLONG_MAX, PAUSE_ACTIONS_CLIENT_WRITE_SET);
+    pauseActions(PAUSE_DURING_SLOT_OWNERSHIP_CHANGE, LLONG_MAX, PAUSE_ACTIONS_CLIENT_WRITE_SET);
 }
 
 static void clusterRaftDropSlotMigrationPause(void) {
     RAFT_STATE()->slot_migration_pause = 0;
-    /* Another export may still be in FAILOVER_PAUSED with mf_end set. */
-    slotExportTryUnpause();
+    unpauseActions(PAUSE_DURING_SLOT_OWNERSHIP_CHANGE);
 }
 
 static int clusterRaftLogFullyApplied(void) {
@@ -472,8 +471,8 @@ static int clusterRaftLogFullyApplied(void) {
     return rs->last_applied >= raftLogLastIndex();
 }
 
-/* The migration job clears this pause after 2s. Keep it until SLOT_CHANGE
- * is applied, so a partitioned source cannot ACK a write that apply drops.
+/* Keep a separate pause until SLOT_CHANGE is applied, so export timeout or
+ * cancellation cannot let through writes that applying the change drops.
  * Arm only at FAILOVER-GRANTED: earlier pauses cannot be followed by a
  * proposal, and a sibling still snapshotting is not a granted handoff. */
 static void clusterRaftSyncSlotMigrationPause(void) {
@@ -2963,8 +2962,7 @@ static void clusterRaftCron(void) {
     mstime_t now = monotonicMs();
 
     clusterRaftAssertLearnerRole();
-    /* clusterCron runs slot-migration timeout first; re-arm before we return
-     * so a postponed SET cannot run in the next file-event batch. */
+    /* Synchronize the handoff hold after slot-migration timeout handling. */
     clusterRaftSyncSlotMigrationPause();
 
     clusterRaftReapJoiningStubs();

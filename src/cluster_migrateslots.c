@@ -124,6 +124,7 @@ static sds generateSlotMigrationJobDescription(slotMigrationJob *job, clusterNod
 static slotMigrationJob *clusterLookupMigrationJob(sds name);
 static sds generateSyncSlotsEstablishCommand(slotMigrationJob *job);
 static void clusterCleanupSlotMigrationLog(size_t max_len);
+static void slotExportTryUnpause(void);
 
 /* Create an empty list of slot ranges. */
 list *createSlotRangeList(void) {
@@ -2722,7 +2723,7 @@ void clusterSlotMigrationCron(void) {
     slotExportTryUnpause();
 }
 
-void slotExportTryUnpause(void) {
+static void slotExportTryUnpause(void) {
     if (getPausedActionsWithPurpose(PAUSE_DURING_SLOT_MIGRATION) == 0) return;
     listNode *ln;
     listIter li;

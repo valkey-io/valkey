@@ -664,6 +664,7 @@ typedef enum {
     PAUSE_DURING_SHUTDOWN,
     PAUSE_DURING_FAILOVER,
     PAUSE_DURING_SLOT_MIGRATION,
+    PAUSE_DURING_SLOT_OWNERSHIP_CHANGE,
     NUM_PAUSE_PURPOSES /* This value is the number of purposes above. */
 } pause_purpose;
 

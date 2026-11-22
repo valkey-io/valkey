@@ -1300,36 +1300,66 @@ test "Raft proto: INSTALL_SNAPSHOT is not ACKed past the snapshot" {
     }
 }
 
-test "Raft proto: false AE_ACK success during message batching" {
+test "Raft proto: AE_ACK reports verified prefix under normal AE conditions" {
     start_server {overrides {cluster-enabled yes cluster-protocol raft}} {
+        # --------------------------------------------------------------------------
+        # L0 is the leader in term 2, appending a NOOP to slots 1-3, term 2
+        # L1 is the leader in term 3, carrying an existing tail in slot 1, term 2
+        # On bumping the term, we can only verify up to the committed prefix
+        # On heartbeat, we should not move the tracked value backwards
+        # --------------------------------------------------------------------------
         set cport [expr {[srv 0 port] + 10000}]
         
+        # Setup
+        set l0_id [string repeat "c" 40]
+        set l0_addr "127.0.0.1:9994@19994,,tls-port=0,shard-id=[string repeat f 40]"
+        set l1_id [string repeat "d" 40]
+        set l1_addr "127.0.0.1:9995@19995,,tls-port=0,shard-id=[string repeat e 40]"
+ 
+        # Check message on first response, can ack all AEs processed
+        set fd0 [raft_connect_fake_node 127.0.0.1 $cport $l0_id $l0_addr]
+        raft_send $fd0 "AE $l0_id 2 0 0 0 3\n2 NOOP -\n2 NOOP -\n2 NOOP -"
+        assert_match "AE_ACK 2 1 3 *" [raft_recv_until $fd0 "AE_ACK *"]
+
+        # Check message on new term, should only ack 1 this term
+        set fd1 [raft_connect_fake_node 127.0.0.1 $cport $l1_id $l1_addr]
+        raft_send $fd1 "AE $l1_id 3 1 2 0 0"
+        assert_match "AE_ACK 3 1 1 *" [raft_recv_until $fd1 "AE_ACK *"]
+ 
+        # A later heartbeat should not move the tracked value backwards
+        raft_send $fd1 "AE $l1_id 3 0 0 0 0"
+        assert_match "AE_ACK 3 1 1 *" [raft_recv_until $fd1 "AE_ACK *"]
+ 
+        close $fd0
+        close $fd1
+    }
+}
+
+test "Raft proto: no false AE_ACK success after AE bumps term" {
+    start_server {overrides {cluster-enabled yes cluster-protocol raft}} {
+        # --------------------------------------------------------------------------
+        # L0 is the leader in term 2, appending a NOOP to slots 1-2, term 2
+        # L1 is the leader in term 3, carrying an existing tail in slot 1, term 1
+        # We stuff both messages in the wire one after the other, same event loop pass
+        # We then check that the follower never sends a true AE_ACK in term 3
+        # --------------------------------------------------------------------------
+        set cport [expr {[srv 0 port] + 10000}]
+        
+        # Setup
         set l0_id [string repeat "c" 40]
         set l1_id [string repeat "d" 40]
         set l1_addr "127.0.0.1:9995@19995,,tls-port=0,shard-id=[string repeat e 40]"
         set fd [raft_connect_fake_node 127.0.0.1 $cport $l1_id $l1_addr]
  
-        # --------------------------------------------------------------------------
-        # L0 is the leader in term 2, appending a NOOP to slot 1, term 2
-        # L1 is the leader in term 3, carrying an existing tail in slot 1, term 1
-        # We stuff both messages in the wire one after the other, same event loop pass
-        # --------------------------------------------------------------------------
+        # Wire stuffing
         puts -nonewline $fd "[raft_msg "AE $l0_id 2 0 0 0 1\n2 NOOP -"][raft_msg "AE $l1_id 3 1 1 0 0"]"
         flush $fd
 
-        # --------------------------------------------------------------------------
-        # When the follower sees term 3, it bumps its term and sets leader to l1
-        # The log entry doesn't match so it should return false to leader
-        # This check ensures that the first item we see is a rejection
-        # --------------------------------------------------------------------------
+        # Check first message, should be false
         assert_match "AE_ACK 3 0 1 *" [raft_recv_until $fd "AE_ACK *"]
         assert_equal $l1_id [CI 0 cluster_raft_leader]
  
-        # --------------------------------------------------------------------------
-        # If the follower has set the todo_send_ae_ack we may get a second response
-        # We probe it by sending a message we know should be rejected
-        # If we get a true AE_ACK in term 3, we have a problem
-        # --------------------------------------------------------------------------
+        # Check subsequent messages, should not have a "true" in term 3
         raft_send $fd "AE $l1_id 3 1000 3 0 0"
         assert_match "AE_ACK 3 0 *" [raft_recv_until $fd "AE_ACK *"]
  

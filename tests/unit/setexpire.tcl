@@ -1,9 +1,29 @@
 set ::live_member_ttl 100
 
+# Turn active expiry off until the current test ends, pass or fail, so a failed
+# test cannot leave it off for the tests after it. 'client' is a command prefix
+# such as r, $primary or {R 0}.
+proc disable_active_expiry {{client r}} {
+    set run_id [server_run_id $client]
+    {*}$client DEBUG SET-ACTIVE-EXPIRE 0
+    test_defer [list restore_active_expiry $client $run_id]
+}
+
+proc server_run_id {client} {
+    regexp {run_id:(\w+)} [{*}$client INFO server] -> run_id
+    return $run_id
+}
+
+# A restarted server starts with active expiry on, so only the same server
+# needs it back.
+proc restore_active_expiry {client run_id} {
+    if {[catch {server_run_id $client} id] || $id ne $run_id} return
+    {*}$client DEBUG SET-ACTIVE-EXPIRE 1
+}
+
 proc flush_and_disable_active_expiry {} {
     r FLUSHALL
-    r DEBUG SET-ACTIVE-EXPIRE 0
-    test_defer {r DEBUG SET-ACTIVE-EXPIRE 1}
+    disable_active_expiry
 }
 
 proc create_numbered_set {key n} {
@@ -2250,7 +2270,7 @@ start_server {tags {"setexpire external:skip"}} {
 
         test {A replica never reclaims an expired member on its own} {
             $primary FLUSHALL
-            $primary DEBUG SET-ACTIVE-EXPIRE 0
+            disable_active_expiry $primary
             attach_replica $primary $replica $primary_host $primary_port
 
             $primary SADD myset m1 keepme
@@ -2273,7 +2293,7 @@ start_server {tags {"setexpire external:skip"}} {
 
         test {A promoted replica reclaims its expired members itself} {
             $primary FLUSHALL
-            $primary DEBUG SET-ACTIVE-EXPIRE 0
+            disable_active_expiry $primary
             attach_replica $primary $replica $primary_host $primary_port
 
             $primary SADD myset m1 m2 keepme
@@ -2301,7 +2321,7 @@ start_server {tags {"setexpire external:skip"}} {
 
         test {SREM, SPERSIST and SPEXPIRE preserve member expiry state on replicas} {
             $primary FLUSHALL
-            $primary DEBUG SET-ACTIVE-EXPIRE 0
+            disable_active_expiry $primary
             attach_replica $primary $replica $primary_host $primary_port
 
             foreach key {kr kp kx} {
@@ -2325,7 +2345,7 @@ start_server {tags {"setexpire external:skip"}} {
         # Startup RDB loading propagates skipped members; DEBUG RELOAD does not.
         test {A primary loading an RDB at startup feeds SREM for the expired members it skips} {
             $primary FLUSHALL
-            $primary DEBUG SET-ACTIVE-EXPIRE 0
+            disable_active_expiry $primary
             attach_replica $primary $replica $primary_host $primary_port
             $primary SADD myset live1 live2 expired
             make_members_expired $primary myset {expired}
@@ -2464,8 +2484,8 @@ start_cluster 2 0 {tags {external:skip cluster}} {
     test "MIGRATE carries an expired member the exporting node had not reclaimed" {
         R 0 FLUSHALL
         R 1 FLUSHALL
-        R 0 DEBUG SET-ACTIVE-EXPIRE 0
-        R 1 DEBUG SET-ACTIVE-EXPIRE 0
+        disable_active_expiry {R 0}
+        disable_active_expiry {R 1}
 
         R 0 SADD $key live expired
         make_members_expired [Rn 0] $key {expired}
@@ -2501,8 +2521,8 @@ start_server {tags {"setexpire needs:repl external:skip"} overrides {set-max-lis
 
         test "SPOP with a count keeps hidden members while removing live ones" {
             $primary FLUSHALL
-            $primary DEBUG SET-ACTIVE-EXPIRE 0
-            $replica DEBUG SET-ACTIVE-EXPIRE 0
+            disable_active_expiry $primary
+            disable_active_expiry $replica
             set live_members [make_rax_window_set $primary myset 126 60]
             set physical [expr {126 + [llength $live_members]}]
             wait_for_ofs_sync $primary $replica
@@ -2530,8 +2550,8 @@ start_server {tags {"setexpire needs:repl external:skip"} overrides {set-max-lis
         foreach cmd {SINTERSTORE SUNIONSTORE SDIFFSTORE} {
             test "$cmd over a source with hidden members stores the same set on the replica" {
                 $primary FLUSHALL
-                $primary DEBUG SET-ACTIVE-EXPIRE 0
-                $replica DEBUG SET-ACTIVE-EXPIRE 0
+                disable_active_expiry $primary
+                disable_active_expiry $replica
                 set live_members [make_rax_window_set $primary src{t} 126 60]
                 set physical [expr {126 + [llength $live_members]}]
                 # Live and hidden members of the source, so every set operation
@@ -2563,8 +2583,8 @@ start_server {tags {"setexpire needs:repl external:skip"} overrides {set-max-lis
 
         test "SRANDMEMBER on a replica draws only live members and reclaims nothing" {
             $primary FLUSHALL
-            $primary DEBUG SET-ACTIVE-EXPIRE 0
-            $replica DEBUG SET-ACTIVE-EXPIRE 0
+            disable_active_expiry $primary
+            disable_active_expiry $replica
             set live_members [make_mostly_expired_set $primary myset 400 20 0]
             wait_for_ofs_sync $primary $replica
 
@@ -2584,7 +2604,7 @@ start_server {tags {"setexpire needs:repl external:skip"} overrides {set-max-lis
 
         test "SPOP with a count equal to the size over live volatile members leaves no key" {
             $primary FLUSHALL
-            $primary DEBUG SET-ACTIVE-EXPIRE 0
+            disable_active_expiry $primary
             # 200 volatile members make the expiry index a RAX.
             set members {}
             for {set i 0} {$i < 200} {incr i} { lappend members live$i }
@@ -2607,7 +2627,7 @@ start_server {tags {"setexpire needs:repl external:skip"} overrides {set-max-lis
 start_server {tags {"setexpire external:skip"} overrides {set-max-listpack-entries 0}} {
     test "SRANDMEMBER with a count below the physical size returns unique live members" {
         r FLUSHALL
-        r DEBUG SET-ACTIVE-EXPIRE 0
+        disable_active_expiry r
         set live_members [make_rax_window_set r myset 126 150]
 
         # Three times the count exceeds the physical size, which selects the
@@ -2625,7 +2645,7 @@ start_server {tags {"setexpire external:skip"} overrides {set-max-listpack-entri
     # clock, so it is the one bucket a census cannot settle from its key alone.
     test "SRANDMEMBER with a negative count draws only live members inside the window" {
         r FLUSHALL
-        r DEBUG SET-ACTIVE-EXPIRE 0
+        disable_active_expiry r
         set live_members [make_rax_window_set r myset 126 150]
 
         set got [r SRANDMEMBER myset -600]
@@ -3007,7 +3027,7 @@ start_server {tags {"setexpire needs:repl external:skip"}} {
             foreach {cmd score operands} $::hidden_member_stores {
                 test "$cmd over a set source with hidden members stores the same result on the replica - $encoding" {
                     $primary FLUSHALL
-                    $primary DEBUG SET-ACTIVE-EXPIRE 0
+                    disable_active_expiry $primary
                     use_set_encoding $encoding $primary
                     use_set_encoding $encoding $replica
                     attach_replica $primary $replica $primary_host $primary_port
@@ -3176,7 +3196,7 @@ start_server {tags {"setexpire needs:repl external:skip"}} {
 
         test {A writable replica accepts SADD and SPEXPIRE on a hidden member} {
             $primary FLUSHALL
-            $primary DEBUG SET-ACTIVE-EXPIRE 0
+            disable_active_expiry $primary
             $replica config set replica-read-only no
             $primary SADD myset keep m1
             make_members_expired $primary myset {m1}
@@ -3197,7 +3217,7 @@ start_server {tags {"setexpire needs:repl external:skip"}} {
 
         test {SMOVE and SORT STORE over a hidden member store the same result on the replica} {
             $primary FLUSHALL
-            $primary DEBUG SET-ACTIVE-EXPIRE 0
+            disable_active_expiry $primary
             $primary SADD src{t} live gone
             make_members_expired $primary src{t} {gone}
             $primary SADD dst{t} other

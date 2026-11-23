@@ -171,7 +171,33 @@ void processUnblockedClients(void) {
 
         if (c->flag.module) {
             if (!c->flag.blocked) {
-                moduleCallCommandUnblockedHandler(c);
+                /* A module temp client whose command waited for the replica acks (for example
+                 * CLUSTER SETSLOT through RM_Call 'K') must run it again here, as normal clients do in
+                 * processPendingCommandAndInputBuffer(), so the unblock handler gets the real reply.
+                 * replication_done (set by processClientsWaitingReplicas()) marks that wait. pending_command
+                 * alone is also set for postponed and in-use blocks, which must not re-run. The re-run
+                 * does not wait for the acks again, because clusterCommandSetSlot() checks replication_done.
+                 * Keep this in sync with unblockClientOnKey(). */
+                if (c->flag.pending_command && c->flag.replication_done) {
+                    client *old_client = server.current_client;
+                    c->flag.reexecuting_command = 1;
+                    server.current_client = c;
+                    enterExecutionUnit(1, 0);
+                    if (processCommandAndResetClient(c) == C_ERR) {
+                        /* Client was freed during command processing, exit immediately */
+                        exitExecutionUnit();
+                        server.current_client = old_client;
+                        continue;
+                    }
+                    c->flag.replication_done = 0;
+                    if (!c->flag.blocked) moduleCallCommandUnblockedHandler(c);
+                    exitExecutionUnit();
+                    afterCommand(c);
+                    c->flag.reexecuting_command = 0;
+                    server.current_client = old_client;
+                } else {
+                    moduleCallCommandUnblockedHandler(c);
+                }
             }
             continue;
         }

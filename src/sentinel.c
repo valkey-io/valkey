@@ -2414,6 +2414,9 @@ void sentinelReconnectInstance(sentinelValkeyInstance *ri) {
         } else {
             link->pending_commands = 0;
             link->cc_conn_time = mstime();
+            /* The instance may have restarted with a config file, assume it
+             * has one until the next INFO says otherwise. */
+            ri->has_config_file = 1;
             link->cc->data = link;
             valkeyAeAttach(server.el, link->cc);
             valkeyAsyncSetConnectCallback(link->cc, sentinelLinkEstablishedCallback);
@@ -4850,7 +4853,8 @@ int sentinelKillClients(sentinelValkeyInstance *ri) {
 
     if (ri->link->cc == NULL) return C_ERR;
 
-    /* 1) Rewrite the configuration (the instance just switched roles)
+    /* 1) Rewrite the configuration (the instance just switched roles), unless
+     *    INFO reported that the instance has no config file.
      * 2) Disconnect all clients (but this one sending the command) in order
      *    to trigger the ask-master-on-reconnection protocol for connected
      *    clients.
@@ -4896,10 +4900,10 @@ int sentinelKillClients(sentinelValkeyInstance *ri) {
     return C_OK;
 }
 
-/* Send REPLICAOF to the specified instance, always followed by a
- * CONFIG REWRITE command in order to store the new configuration on disk
- * when possible (that is, if the instance is recent enough to support
- * config rewriting, and if the server was started with a configuration file).
+/* Send REPLICAOF to the specified instance, followed by a CONFIG REWRITE
+ * command in order to store the new configuration on disk. The rewrite is
+ * skipped when INFO reported that the server was started without a
+ * configuration file, since it can only fail there.
  *
  * If Host is NULL the function sends "REPLICAOF NO ONE".
  *
@@ -4926,7 +4930,7 @@ int sentinelSendReplicaOf(sentinelValkeyInstance *ri, const sentinelAddr *addr) 
      * 1) Abort a potentially ongoing Valkey FAILOVER (that may be stuck). REPLICAOF
      *    can't be used during a failover.
      * 2) Reconfigure the instance according to the specified host/port params.
-     * 3) Rewrite the configuration.
+     * 3) Rewrite the configuration, unless the instance has no config file.
      * 4) Disconnect all clients (but this one sending the command) in order
      *    to trigger the ask-primary-on-reconnection protocol for connected
      *    clients.

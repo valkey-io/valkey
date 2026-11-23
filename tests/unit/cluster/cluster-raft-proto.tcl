@@ -1070,7 +1070,7 @@ test "Raft proto: a new leader doesn't treat the old leader as failed if it vote
     # is older than the node timeout, but its vote replies count as contact,
     # so the new leader doesn't step down or propose NODE_FAIL for it before
     # its first AE_ACK.
-    start_server {overrides {cluster-enabled yes cluster-protocol raft cluster-node-timeout 1000}} {
+    start_server {overrides {cluster-enabled yes cluster-protocol raft cluster-node-timeout 2000}} {
         set cport [expr {[srv 0 port] + 10000}]
         set node_id [R 0 CLUSTER MYID]
         set node_addr "127.0.0.1:[srv 0 port]@$cport,,tls-port=0,shard-id=[string repeat t 40]"
@@ -1097,11 +1097,12 @@ test "Raft proto: a new leader doesn't treat the old leader as failed if it vote
             fail "node didn't become leader"
         }
 
-        # A doesn't ack yet. Before the fix, the new leader stepped down in
-        # its first cron tick, since A's last AE was older than the node
-        # timeout. The cron checks quorum freshness before it sends a
-        # heartbeat, so a few AEs show that it stayed leader.
-        for {set i 0} {$i < 3} {incr i} {
+        # A doesn't ack. Before the fix, the new leader stepped down in its
+        # first cron tick, since A's last AE was older than the node timeout.
+        # The cron checks quorum freshness before it sends a heartbeat, so
+        # the first heartbeat after the election's AE shows it stayed leader.
+        # Without ACKs, the leader drops the link after half the node timeout.
+        for {set i 0} {$i < 2} {incr i} {
             if {[catch {raft_recv_until $out_a "AE *" 2000} ae]} {
                 fail "new leader stopped sending AEs (role [CI 0 cluster_raft_role])"
             }

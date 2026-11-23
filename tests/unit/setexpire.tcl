@@ -1433,14 +1433,16 @@ start_server {tags {"setexpire"}} {
         r SADD plainset {*}$members
         r SADD volatile {*}$members
 
-        set plain_mem [r MEMORY USAGE plainset]
+        # SAMPLES 0 counts every member, so a sample of reused, larger heap
+        # chunks on a libc build cannot outweigh the expiry index.
+        set plain_mem [r MEMORY USAGE plainset SAMPLES 0]
         r SEXPIRE volatile 100000 MEMBERS 64 {*}$members
-        set volatile_mem [r MEMORY USAGE volatile]
+        set volatile_mem [r MEMORY USAGE volatile SAMPLES 0]
 
         assert_morethan $volatile_mem $plain_mem
 
         r SPERSIST volatile MEMBERS 64 {*}$members
-        assert_lessthan [r MEMORY USAGE volatile] $volatile_mem
+        assert_lessthan [r MEMORY USAGE volatile SAMPLES 0] $volatile_mem
 
         use_set_encoding listpack
     } {OK}

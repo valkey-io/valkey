@@ -1431,8 +1431,8 @@ void scanGenericCommandWithOptions(client *c, robj *o, unsigned long long cursor
             orderedIndexItemGetElement(item, &element, &len);
             addReplyBulkCBuffer(c, element, len);
             if (opts->only_keys) continue;
-            char buf[MAX_LONG_DOUBLE_CHARS];
-            int score_len = ld2string(buf, sizeof(buf), orderedIndexItemGetScore(item), LD_STR_AUTO);
+            char buf[MAX_D2STRING_CHARS];
+            int score_len = d2string(buf, sizeof(buf), orderedIndexItemGetScore(item));
             addReplyBulkCBuffer(c, buf, score_len);
         }
     } else {

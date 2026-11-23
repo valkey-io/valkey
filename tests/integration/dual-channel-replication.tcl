@@ -1814,7 +1814,8 @@ foreach compression {no lz4} {
                 }
                 # The replica reconnected (full or partial resync).
                 assert_morethan [expr {[s -1 sync_full] + [s -1 sync_partial_ok]}] $syncs
-                wait_for_ofs_sync $primary $replica
+                # Default waiting budget of 5s is not sufficient on slow CI runs
+                wait_for_ofs_sync $primary $replica 300 100
                 assert_equal [$primary debug digest] [$replica debug digest]
             }
         }

@@ -403,6 +403,12 @@ struct bgIterator {
      * deleted key.  keyDelete() removes the dbEntry from early_iterate_entries immediately (step 1)
      * to avoid a dangling pointer.  This flag records if the entry was in early_iterate_entries. */
     bool last_key_delete_was_early; // Used only in main thread during command processing
+
+    /* Keys (robj) that were expedited (in early_iterate_entries) and then deleted by a module write
+     * outside call().  A module that deletes and re-creates such a key (e.g. VM_StringSet) gets a
+     * new dbEntry that must be treated as early too.  Used only in main thread.  Created lazily,
+     * cleared when the next command starts and after the module propagation is processed. */
+    list *module_early_deleted_keys;
     unsigned long added_since_feed; // Items queued outside of feedIterator since its last call
 
     // Variables maintaining runtime statistics
@@ -946,6 +952,9 @@ static void bgIteratorRelease(bgIterator *it) {
     hashtableRelease(it->early_iterate_entries);
     it->early_iterate_entries = NULL;
 
+    if (it->module_early_deleted_keys) listRelease(it->module_early_deleted_keys);
+    it->module_early_deleted_keys = NULL;
+
     sdsfree(it->name);
     zfree(it);
 }
@@ -1141,6 +1150,14 @@ static bool iteratorHasPassedKey(bgIterator *it, int dbid, const_sds key, dbEntr
     return false;
 }
 
+
+// Set while module replication (ValkeyModule_Replicate/ReplicateVerbatim) is queued through
+// alsoPropagate().  See bgIteration_setModulePropagation().
+static bool moduleReplicationPending = false;
+
+void bgIteration_setModulePropagation(bool on) {
+    moduleReplicationPending = on;
+}
 
 // This expedites a single key and doesn't attempt to avoid expediting through optimization.
 static bool expediteSingleKeyWithoutOptimization(bgIterator *it,
@@ -1785,6 +1802,8 @@ static void resetReplicationFlagForIterators(client *c) {
     listRewind(allIterators, &li);
     while ((node = listNext(&li)) != NULL) {
         bgIterator *it = listNodeValue(node);
+        // Module early-deleted keys only apply to the module write that deleted them
+        if (it->module_early_deleted_keys) listEmpty(it->module_early_deleted_keys);
         if (it->completed || it->terminated) {
             it->cur_cmd_may_replicate = false;
         } else {
@@ -2062,6 +2081,7 @@ static bgIterator *bgIteratorCreate(const char *name,
     it->terminated = false;
     it->cur_cmd_may_replicate = false;
     it->last_key_delete_was_early = false;
+    it->module_early_deleted_keys = NULL;
     it->added_since_feed = 0;
 
     it->dbentries_queued = 0;
@@ -2326,6 +2346,17 @@ void bgIteration_keyDelete(int dbid, const_sds key) {
          * early_iterate_entries (if it was there) and save the early iterate status for use during
          * the replication of the DEL. */
         it->last_key_delete_was_early = hashtableDelete(it->early_iterate_entries, de);
+
+        /* A module write outside call() may delete a key that was expedited and then re-create it
+         * (VM_StringSet).  Remember the key so the new dbEntry can be marked early when the module's
+         * propagation is processed (see bgIteration_handleModuleEarlyDeletedKeys). */
+        if (it->last_key_delete_was_early && !server.in_call) {
+            if (it->module_early_deleted_keys == NULL) {
+                it->module_early_deleted_keys = listCreate();
+                listSetFreeMethod(it->module_early_deleted_keys, decrRefCountVoid);
+            }
+            listAddNodeTail(it->module_early_deleted_keys, createObject(OBJ_STRING, sdsdup(key)));
+        }
     }
 
     /* We might be within the context of a command execution.  This happens if the key is found to
@@ -2464,6 +2495,27 @@ bool bgIteration_blockClientIfRequired(client *c) {
 }
 
 
+/* A module write outside call() deleted an expedited key and re-created it (see keyDelete).  The
+ * clone of the old entry was already queued, and the module's replication of the write covers the
+ * new value.  So the new dbEntry is treated as early: the scan must not send it a second time. */
+static void handleModuleEarlyDeletedKeys(bgIterator *it, int dbid) {
+    if (it->module_early_deleted_keys == NULL) return;
+
+    listIter li;
+    listNode *node;
+    listRewind(it->module_early_deleted_keys, &li);
+    while ((node = listNext(&li)) != NULL) {
+        robj *oKey = listNodeValue(node);
+        sds key = objectGetVal(oKey);
+        if (!it->keyset_iter->isKeyInScope(it->keyset_iter, key)) continue;
+        dbEntry *de = dbFind(server.db[dbid], key);
+        if (de == NULL || hashtableFind(it->early_iterate_entries, de, NULL)) continue;
+        bool wasAdded = hashtableAdd(it->early_iterate_entries, de);
+        serverAssert(wasAdded);
+    }
+}
+
+
 // PUBLIC API
 void bgIteration_handleCommandReplication(int dbid,
                                           struct serverCommand *cmd,
@@ -2501,6 +2553,10 @@ void bgIteration_handleCommandReplication(int dbid,
         // curCmdMissingKeys is only valid when we are using the replication flags (and stale otherwise)
         listEmpty(curCmdMissingKeys);
     }
+    /* A module write (ValkeyModule_Replicate/ReplicateVerbatim) propagated outside call(), from a
+     * timer or a callback. It has no replication flags, so it is decided by scan position below.
+     * MULTI/EXEC are never produced here (not in_exec), so the transaction framing is unaffected. */
+    bool modulePropagation = moduleReplicationPending && !blockClientIfRequiredWasCalled && !server.in_exec;
 
     /* In the case that a key is touched in a different DB (COPY/MOVE) the key is recorded as
      *  a "special" key and than handled below. */
@@ -2609,6 +2665,9 @@ void bgIteration_handleCommandReplication(int dbid,
         // ** The code below performs the replication (if necessary) and can be skipped
         if (!(it->iteration_flags & BGITERATOR_FLAG_REPLICATION)) continue;
 
+        if (modulePropagation) handleModuleEarlyDeletedKeys(it, dbid);
+        if (it->module_early_deleted_keys) listEmpty(it->module_early_deleted_keys);
+
         bool replicate = false;
         if (useReplicationFlags) replicate = it->cur_cmd_may_replicate;
 
@@ -2685,6 +2744,47 @@ void bgIteration_handleCommandReplication(int dbid,
                 iteratorHasPassedKey(it, dbid, key, dbFind(server.db[dbid], key))) {
                 replicate = true;
             }
+        }
+
+        /* A module write outside call(): a keyless write is always replicated.  A keyed write is
+         * replicated only if every in-scope key was passed or expedited early (the same signal the
+         * HDEL branch uses).  Keys the scan has not reached are sent later by the iterator, so
+         * replicating now would apply the write twice on the replica. */
+        if (!replicate && modulePropagation) {
+            getKeysResult modResult;
+            initGetKeysResult(&modResult);
+            int modNumKeys = getKeysFromCommand(cmd, argv, argc, &modResult);
+            if (modNumKeys == 0) {
+                replicate = true;
+            } else {
+                bool anyInScope = false;
+                bool anyPassed = false;
+                bool allPassed = true;
+                for (int j = 0; j < modNumKeys; j++) {
+                    sds key = objectGetVal(argv[modResult.keys[j].pos]);
+                    if (!it->keyset_iter->isKeyInScope(it->keyset_iter, key)) continue;
+                    anyInScope = true;
+                    if (iteratorHasPassedKey(it, dbid, key, dbFind(server.db[dbid], key))) {
+                        anyPassed = true;
+                    } else {
+                        allPassed = false;
+                    }
+                }
+                if (anyInScope && anyPassed && !allPassed) {
+                    /* Unsafe mixed span: some in-scope keys were passed (or expedited) and some
+                     * are still ahead of the scan.  Sending the write now would apply it twice on
+                     * the replica, and skipping it would silently diverge.  Abort this iterator's
+                     * sync so the replica re-syncs. */
+                    serverLog(LL_WARNING,
+                              "Forkless sync %s terminated: module propagated a keyed command in db %d "
+                              "whose keys are partly passed by the sync and partly not yet reached",
+                              it->name, dbid);
+                    bgIteratorTerminate(it);
+                } else {
+                    replicate = anyInScope && allPassed;
+                }
+            }
+            getKeysFreeResult(&modResult);
         }
 
         if (replicate) {

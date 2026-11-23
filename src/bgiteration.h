@@ -361,6 +361,10 @@ size_t bgIteration_memoryInuseForReplication(void);
 /* Check if a dbEntry is currently in-use/locked by bgIteration. */
 bool bgIteration_isEntryInuse(dbEntry *de);
 
+/* Mark module replication (ValkeyModule_Replicate/ReplicateVerbatim) while it is propagated, so
+ * that bgIteration decides it by scan position instead of the call() replication flags. */
+void bgIteration_setModulePropagation(bool on);
+
 
 /* Notify bgIteration that a dbEntry has been added/modified.
  *  - If caller has a dbEntry*, dbEntryModified is more efficient

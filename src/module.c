@@ -3799,6 +3799,15 @@ int VM_ReplyWithLongDouble(ValkeyModuleCtx *ctx, long double ld) {
  * the AOF or the replicas from the propagation of the specified command.
  * Otherwise, by default, the command will be propagated in both channels.
  *
+ * #### Note about replication during a forkless sync
+ *
+ * Outside of a command (timers, callbacks) during a forkless full sync, a
+ * command without keys is always replicated. A command with keys is replicated
+ * if the sync already sent all of them, and not if it sent none (the sync sends
+ * their new values later). If it sent only some of them, the sync of that
+ * replica is terminated and the replica syncs again, so a module should not
+ * replicate one command over keys the sync may reach at different times.
+ *
  * #### Note about calling this function from a thread safe context:
  *
  * Normally when you call this function from the callback implementing a
@@ -3861,7 +3870,9 @@ int VM_Replicate(ValkeyModuleCtx *ctx, const char *cmdname, const char *fmt, ...
     if (!(flags & VALKEYMODULE_CALL_ARGV_NO_AOF)) target |= PROPAGATE_AOF;
     if (!(flags & VALKEYMODULE_CALL_ARGV_NO_REPLICAS)) target |= PROPAGATE_REPL;
 
+    bgIteration_setModulePropagation(true);
     alsoPropagate(ctx->client->db->id, argv, argc, target, slot);
+    bgIteration_setModulePropagation(false);
 
     /* Release the argv. */
     for (j = 0; j < argc; j++) decrRefCount(argv[j]);
@@ -3887,7 +3898,9 @@ int VM_ReplicateVerbatim(ValkeyModuleCtx *ctx) {
     /* Reject replication when the server is paused for replica traffic. */
     if (isPausedActions(PAUSE_ACTION_REPLICA)) return VALKEYMODULE_ERR;
 
+    bgIteration_setModulePropagation(true);
     alsoPropagate(ctx->client->db->id, ctx->client->argv, ctx->client->argc, PROPAGATE_AOF | PROPAGATE_REPL, ctx->client->slot);
+    bgIteration_setModulePropagation(false);
     server.dirty++;
     return VALKEYMODULE_OK;
 }

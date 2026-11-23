@@ -47,6 +47,7 @@ TEST_MODULES = \
     getchannels.so \
     test_lazyfree.so \
     timer.so \
+    forklesstimer.so \
     defragtest.so \
     defragunload.so \
     keyspecs.so \

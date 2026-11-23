@@ -143,17 +143,25 @@ proc numbered_members {prefix n} {
 
 set ::rax_window_ms 8192
 
+proc server_mstime {r} {
+    lassign [$r TIME] sec usec
+    return [expr {$sec * 1000 + $usec / 1000}]
+}
+
 proc make_rax_window_set {r key hidden live} {
     assert_lessthan $hidden 127 "a full vector bucket re-keys its entries by their own windows"
-    # Enter the window early enough that the deadline passes and the test body
-    # runs before the window ends.
-    while {[clock milliseconds] % $::rax_window_ms >= $::rax_window_ms / 2} { after 50 }
-
+    # Aim the deadline at the start of a window in server time, so the test body
+    # gets nearly the whole window after the hidden members expire. A relative PX
+    # cannot land in the past, and the deadline the server stored decides the
+    # window, so a delay before SADDEX only moves the deadline.
     set hidden_members [numbered_members h $hidden]
-    set deadline [expr {[clock milliseconds] + 300}]
+    set now [server_mstime $r]
+    set target [expr {($now + 300 + $::rax_window_ms - 1) / $::rax_window_ms * $::rax_window_ms}]
+    $r SADDEX $key PX [expr {$target - $now}] MEMBERS [llength $hidden_members] {*}$hidden_members
+    set deadline [set_member_pexpiretime $r $key [lindex $hidden_members 0]]
     # The index files the deadline under the end of the window containing it.
     set ::rax_window_end [expr {($deadline / $::rax_window_ms + 1) * $::rax_window_ms}]
-    $r SADDEX $key PXAT $deadline MEMBERS [llength $hidden_members] {*}$hidden_members
+    set ::rax_window_client $r
 
     # A second, far-future window makes the index a genuine multi-bucket RAX:
     # the hidden members' near bucket is the one a census cannot settle from its
@@ -169,7 +177,8 @@ proc make_rax_window_set {r key hidden live} {
     $r SADD $key {*}$plain_members
     set live_members [concat $plain_members $far_members]
 
-    wait_for_condition 100 10 {
+    set wait_ms [expr {$deadline - [server_mstime $r]}]
+    wait_for_condition [expr {max($wait_ms, 0) / 10 + 100}] 10 {
         [$r SISMEMBER $key [lindex $hidden_members 0]] == 0 &&
         [$r SISMEMBER $key [lindex $hidden_members end]] == 0
     } else {
@@ -184,7 +193,7 @@ proc make_rax_window_set {r key hidden live} {
 # Outside the window the index answers correctly and proves nothing, so a run
 # that drifts past it must fail rather than pass for the wrong reason.
 proc assert_inside_rax_window {} {
-    set remaining [expr {$::rax_window_end - [clock milliseconds]}]
+    set remaining [expr {$::rax_window_end - [server_mstime $::rax_window_client]}]
     assert_morethan $remaining 0 \
         "the expiry-index window ended [expr {-$remaining}] ms ago, so this run proves nothing"
 }

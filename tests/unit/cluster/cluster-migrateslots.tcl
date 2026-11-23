@@ -1570,7 +1570,11 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster network} overrides
             wait_for_migration_field 0 $jobname state success
             wait_for_migration_field 2 $jobname state success
             wait_for_migration 2 0
-            assert_match "none" [s -0 paused_reason]
+            wait_for_condition 100 10 {
+                [s -0 paused_reason] eq "none"
+            } else {
+                fail "Source remained paused after export completion"
+            }
 
             # Read the result from the blocked clients (-MOVED)
             assert_error "MOVED 0 *:*" {$blpop_client read}

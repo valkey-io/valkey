@@ -8436,11 +8436,10 @@ int clusterNodeIsReplica(clusterNode *node) {
 
 clusterNode *clusterNodeGetPrimary(clusterNode *node) {
     clusterNode *primary = node;
-    /* #5452 keeps gossip from forming replicaof cycles, but a nodes.conf
-     * saved by an older version can still contain one, possibly one that
-     * doesn't include this node. An acyclic chain can't be longer than the
-     * number of known nodes, so stop after that many steps instead of
-     * looping forever. */
+    /* Hardening that complements #5556: an acyclic chain can't be longer
+     * than the number of known nodes, so bound the walk by that. This
+     * guarantees termination even if the replicaof links form a cycle that
+     * doesn't include this node. */
     unsigned long remaining_steps = dictSize(server.cluster->nodes);
     while (primary->replicaof != NULL) {
         primary = primary->replicaof;

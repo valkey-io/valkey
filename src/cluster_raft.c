@@ -477,6 +477,7 @@ static int clusterRaftLogFullyApplied(void) {
  * proposal, and a sibling still snapshotting is not a granted handoff. */
 static void clusterRaftSyncSlotMigrationPause(void) {
     clusterRaftState *rs = RAFT_STATE();
+    if (!rs->slot_migration_pause && !getPausedActionsWithPurpose(PAUSE_DURING_SLOT_MIGRATION)) return;
     if (!rs->slot_migration_pause && clusterIsAnySlotExportFailoverGranted()) rs->slot_migration_pause = 1;
     if (!rs->slot_migration_pause) return;
     if (!clusterIsAnySlotExportFailoverGranted() && rs->role == RAFT_ROLE_LEADER && clusterRaftLogFullyApplied() &&

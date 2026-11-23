@@ -8443,14 +8443,17 @@ clusterNode *clusterNodeGetPrimary(clusterNode *node) {
     unsigned long remaining_steps = dictSize(server.cluster->nodes);
     while (primary->replicaof != NULL) {
         primary = primary->replicaof;
-        if (primary == node || --remaining_steps == 0) {
-            static mstime_t last_log_time_ms = 0;
-            if (server.mstime > last_log_time_ms + 10000) {
-                last_log_time_ms = server.mstime;
-                serverLog(LL_WARNING, "Cycle detected in the replicaof chain of node %.40s", node->name);
-            }
-            return node;
+        if (primary == node || --remaining_steps == 0) break;
+    }
+    /* Assert that a node's replicaof/primary chain does not form a cycle. */
+    debugServerAssert(primary->replicaof == NULL);
+    if (primary->replicaof != NULL) {
+        static mstime_t last_log_time_ms = 0;
+        if (server.mstime > last_log_time_ms + 10000) {
+            last_log_time_ms = server.mstime;
+            serverLog(LL_WARNING, "Cycle detected in the replicaof chain of node %.40s", node->name);
         }
+        return node;
     }
     return primary;
 }

@@ -2570,11 +2570,12 @@ void bgIteration_handleCommandReplication(int dbid,
                  *       standard "missing key", we would get the DBID incorrect. */
 
             } else if (listLength(curCmdMissingKeys) > 0 && cmd->proc != multiCommand &&
-                       cmd->proc != execCommand && !isDeleteCmd(cmd) && cmd->proc != hdelCommand) {
+                       cmd->proc != execCommand && !isDeleteCmd(cmd) && cmd->proc != hdelCommand &&
+                       cmd->proc != sremCommand) {
                 /* MULTI/EXEC are ignored because they are injected around a transaction by
                  * propagateToBgIteration without passing through bgIteration_blockClientIfRequired.
                  * curCmdMissingKeys holds the keys of a command inside the transaction.
-                 * Deletes are ignored because they never create keys.  A DEL/HDEL from a lazy
+                 * Deletes are ignored because they never create keys.  A DEL/HDEL/SREM from a lazy
                  * expiry in a nested READ would otherwise re-process the list of the enclosing
                  * write, adding its new keys to early_iterate_entries a second time. */
                 listIter missingIt;
@@ -2673,13 +2674,15 @@ void bgIteration_handleCommandReplication(int dbid,
             }
         }
 
-        /* An HDEL that the replication flags don't replicate: active hash field expiry, lazy expiry
-         * on a read (top-level or nested inside a write), or a client HDEL that isn't replicating.
+        /* An HDEL or SREM that the replication flags don't replicate: active hash field or set
+         * member expiry, lazy expiry on a read (top-level or nested inside a write), or a client
+         * HDEL or SREM that isn't replicating.
          * Like a DEL, decide by the key's state: replicate if the iterator has already passed the
          * key (or sent it early).  Otherwise the iterator will send the key later in its current
-         * state, which already reflects the expired fields.  Unlike a DEL, the key usually still
-         * exists here (the final HDEL is followed by a real DEL, handled above). */
-        if (!replicate && cmd->proc == hdelCommand) {
+         * state, which already reflects the expired fields or members.  Unlike a DEL, the key
+         * usually still exists here (the final HDEL or SREM is followed by a real DEL, handled
+         * above). */
+        if (!replicate && (cmd->proc == hdelCommand || cmd->proc == sremCommand)) {
             sds key = objectGetVal(argv[1]);
             if (it->keyset_iter->isKeyInScope(it->keyset_iter, key) &&
                 iteratorHasPassedKey(it, dbid, key, dbFind(server.db[dbid], key))) {

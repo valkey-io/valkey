@@ -2981,3 +2981,62 @@ start_server {tags {"repl external:skip needs:debug"} overrides {save "" forkles
         }
     }
 }
+
+# Active set member expiry during a forkless full sync must reach the replica
+# the same way.
+
+# Number of sets s:0..s:199 that have only their 2 persistent members left.
+proc forkless_member_expiry_reaped {client} {
+    set n 0
+    for {set s 0} {$s < 200} {incr s} {
+        if {[$client scard s:$s] == 2} { incr n }
+    }
+    return $n
+}
+
+start_server {tags {"repl external:skip needs:debug"} overrides {save "" forkless-infrastructure-enabled yes forkless-policy prefer-forkless repl-diskless-sync yes repl-diskless-sync-delay 0}} {
+    start_server {overrides {save ""}} {
+        set primary [srv -1 client]
+        set primary_host [srv -1 host]
+        set primary_port [srv -1 port]
+        set replica [srv 0 client]
+
+        test "Active set member expiry during a forkless full sync reaches the replica" {
+            # The filler keys keep the scan from queueing all of the sets at once.
+            $primary debug populate 2000 a 10
+            for {set s 0} {$s < 200} {incr s} {
+                $primary sadd s:$s m0 m1 m2 m3 m4 keep1 keep2
+            }
+            $primary config set rdb-key-save-delay 2000
+            $replica replicaof $primary_host $primary_port
+            wait_for_condition 100 50 {
+                [s -1 current_save_keys_processed] >= 700
+            } else {
+                fail "scan did not progress"
+            }
+            $primary config set rdb-key-save-delay 10000
+            for {set s 0} {$s < 200} {incr s} {
+                $primary spexpire s:$s 100 MEMBERS 5 m0 m1 m2 m3 m4
+            }
+            wait_for_condition 100 100 {
+                [forkless_member_expiry_reaped $primary] >= 100
+            } else {
+                fail "primary did not expire the members"
+            }
+            assert_equal 1 [s -1 rdb_bgsave_in_progress]
+
+            $primary config set rdb-key-save-delay 0
+            wait_for_condition 200 100 {
+                [s -1 rdb_bgsave_in_progress] == 0 &&
+                [status $replica master_link_status] eq "up" &&
+                [forkless_member_expiry_reaped $primary] == 200
+            } else {
+                fail "sync did not finish"
+            }
+            wait_for_ofs_sync $primary $replica
+
+            # SCARD counts members that expired but were not reclaimed.
+            assert_equal 200 [forkless_member_expiry_reaped $replica]
+        }
+    }
+}

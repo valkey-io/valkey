@@ -3884,6 +3884,8 @@ void freePathHashObject(robj *o);
 robj *pathHashTypeDup(robj *o);
 size_t pathHashTypeMemUsage(robj *o, size_t sample_size);
 void pathHashTypeDigest(unsigned char *digest, robj *o);
+void pathHashTypePauseRehashing(pathHashObject *path_hash);
+void pathHashTypeResumeRehashing(pathHashObject *path_hash);
 size_t pathHashTypeCount(robj *o, const unsigned char *prefix, size_t prefix_len);
 int rewritePathHashObject(rio *r, robj *key, robj *o);
 void phsetCommand(client *c);
@@ -4115,6 +4117,7 @@ int getChannelsFromCommand(struct serverCommand *cmd, robj **argv, int argc, get
 int doesCommandHaveChannelsWithFlags(struct serverCommand *cmd, int flags);
 void getKeysFreeResult(getKeysResult *result);
 int sintercardGetKeys(struct serverCommand *cmd, robj **argv, int argc, getKeysResult *result);
+int msetexGetKeys(struct serverCommand *cmd, robj **argv, int argc, getKeysResult *result);
 int zunionInterDiffGetKeys(struct serverCommand *cmd, robj **argv, int argc, getKeysResult *result);
 int zunionInterDiffStoreGetKeys(struct serverCommand *cmd, robj **argv, int argc, getKeysResult *result);
 int evalGetKeys(struct serverCommand *cmd, robj **argv, int argc, getKeysResult *result);

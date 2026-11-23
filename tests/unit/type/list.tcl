@@ -2499,3 +2499,158 @@ foreach {pop} {BLPOP BLMPOP_RIGHT} {
     }
 
 } ;# stop servers
+
+# MEMORY USAGE of a quicklist is O(1): it reads a counter that is updated on
+# every change. With enable-debug-assert (set in the test config), each
+# MEMORY USAGE call also compares the counter with a full walk of the nodes and
+# crashes the server if they differ. So each step below calls MEMORY USAGE.
+# Tests that only rely on this assert are tagged external:skip, because an
+# external server may run without enable-debug-assert.
+foreach compress {0 1} {
+    start_server [list tags {"list"} overrides [list save "" list-max-listpack-size 4 list-compress-depth $compress]] {
+        # Values that LZF can compress: 4 of them make a node of more than 48 bytes.
+        proc ql_val {i} { return "[string repeat x 30]-$i" }
+
+        # Some tests change these settings. Each test sets them again at its
+        # start, so a failed test does not leak them into the next tests.
+        proc ql_reset_config {} {
+            r config set list-max-listpack-size 4
+            catch {r debug quicklist-packed-threshold 0}
+        }
+
+        proc ql_fill {key n} {
+            r del $key
+            for {set i 0} {$i < $n} {incr i} { r rpush $key [ql_val $i] }
+            assert_encoding quicklist $key
+        }
+
+        test "MEMORY USAGE of quicklist follows push and pop (compress $compress)" {
+            ql_reset_config
+            ql_fill mylist{t} 100
+            set m1 [r memory usage mylist{t}]
+            for {set i 0} {$i < 50} {incr i} { r lpush mylist{t} [ql_val $i] }
+            set m2 [r memory usage mylist{t}]
+            assert_morethan $m2 $m1
+            for {set i 0} {$i < 50} {incr i} { r lpop mylist{t} }
+            r rpop mylist{t} 10
+            set m3 [r memory usage mylist{t}]
+            assert_lessthan $m3 $m2
+            r lmpop 2 mylist{t} other{t} left count 5
+            r memory usage mylist{t}
+        }
+
+        test "MEMORY USAGE of quicklist follows LINSERT, LSET, LREM and LTRIM (compress $compress)" {
+            ql_reset_config
+            ql_fill mylist{t} 100
+            r linsert mylist{t} before [ql_val 50] [ql_val new1]
+            r linsert mylist{t} after [ql_val 50] [ql_val new2]
+            r memory usage mylist{t}
+            # LSET with a value of the same size, a bigger value and a smaller value.
+            r lset mylist{t} 40 [ql_val 99]
+            r lset mylist{t} 41 [string repeat y 200]
+            r lset mylist{t} 42 z
+            r memory usage mylist{t}
+            r lrem mylist{t} 0 [ql_val 10]
+            r lrem mylist{t} 2 [ql_val 20]
+            r lrem mylist{t} -1 [ql_val 30]
+            r memory usage mylist{t}
+            r ltrim mylist{t} 5 -5
+            r memory usage mylist{t}
+            r ltrim mylist{t} 20 60
+            r memory usage mylist{t}
+        } {*} {external:skip}
+
+        test "MEMORY USAGE of quicklist follows LMOVE and RPOPLPUSH (compress $compress)" {
+            ql_reset_config
+            ql_fill src{t} 60
+            ql_fill dst{t} 60
+            for {set i 0} {$i < 30} {incr i} {
+                r lmove src{t} dst{t} left right
+                r rpoplpush dst{t} src{t}
+            }
+            # LMOVE inside the same list rotates it.
+            for {set i 0} {$i < 10} {incr i} { r lmove src{t} src{t} right left }
+            r memory usage src{t}
+            r memory usage dst{t}
+        } {*} {external:skip}
+
+        test "MEMORY USAGE of quicklist does not change on read commands (compress $compress)" {
+            ql_reset_config
+            ql_fill mylist{t} 100
+            set before [r memory usage mylist{t}]
+            r lrange mylist{t} 0 -1
+            r lindex mylist{t} 50
+            r lpos mylist{t} [ql_val 70]
+            r llen mylist{t}
+            assert_equal $before [r memory usage mylist{t}]
+        }
+
+        test "MEMORY USAGE of quicklist with plain nodes (compress $compress)" {
+            ql_reset_config
+            r debug quicklist-packed-threshold 100b
+            ql_fill mylist{t} 40
+            set big [string repeat b 500]
+            r lpush mylist{t} $big
+            r rpush mylist{t} $big
+            r linsert mylist{t} after [ql_val 20] $big
+            r linsert mylist{t} before [ql_val 10] $big
+            r memory usage mylist{t}
+            # Replace a plain value with a bigger plain value, and with a small one.
+            r lset mylist{t} 0 [string repeat c 700]
+            r lset mylist{t} -1 small
+            # Replace a packed value with a plain value.
+            r lset mylist{t} 5 $big
+            r memory usage mylist{t}
+            r lrem mylist{t} 0 $big
+            r memory usage mylist{t}
+            r ltrim mylist{t} 1 -2
+            r memory usage mylist{t}
+            r debug quicklist-packed-threshold 0
+        } {OK} {needs:debug external:skip}
+
+        test "MEMORY USAGE of quicklist is the same after COPY (compress $compress)" {
+            ql_reset_config
+            ql_fill lsrc{t} 100
+            r linsert lsrc{t} after [ql_val 50] [ql_val new]
+            r copy lsrc{t} ldst{t} replace
+            set src_usage [r memory usage lsrc{t}]
+            set dst_usage [r memory usage ldst{t}]
+            # The copy allocates each node with its exact size. Other
+            # allocators (for example glibc) may keep a bigger block when the
+            # source shrinks a node with realloc, so the sizes can differ.
+            if {[string match {*jemalloc*} [s mem_allocator]]} {
+                assert_equal $src_usage $dst_usage
+            }
+        }
+
+        test "MEMORY USAGE of quicklist after RESTORE and DEBUG RELOAD (compress $compress)" {
+            ql_reset_config
+            ql_fill mylist{t} 100
+            set dump [r dump mylist{t}]
+            r restore restored{t} 0 $dump
+            assert_equal [r lrange mylist{t} 0 -1] [r lrange restored{t} 0 -1]
+            r memory usage restored{t}
+            r debug reload
+            r memory usage mylist{t}
+            r memory usage restored{t}
+        } {*} {needs:debug external:skip}
+
+        test "MEMORY USAGE of list during listpack and quicklist conversion (compress $compress)" {
+            ql_reset_config
+            r config set list-max-listpack-size -2
+            r del mylist{t}
+            r rpush mylist{t} a b c
+            assert_encoding listpack mylist{t}
+            r memory usage mylist{t}
+            # Grow it into a quicklist with values of about 1 KB each.
+            for {set i 0} {$i < 20} {incr i} { r rpush mylist{t} [string repeat v 1000] }
+            assert_encoding quicklist mylist{t}
+            r memory usage mylist{t}
+            # Shrink it back to a listpack.
+            r ltrim mylist{t} 0 2
+            assert_encoding listpack mylist{t}
+            r memory usage mylist{t}
+            r config set list-max-listpack-size 4
+        } {OK} {external:skip}
+    }
+}

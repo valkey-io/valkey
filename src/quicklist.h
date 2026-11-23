@@ -96,9 +96,12 @@ typedef struct quicklistBookmark {
 #error unknown arch bits count
 #endif
 
-/* quicklist is a 40 byte struct (on 64-bit systems) describing a quicklist.
+/* quicklist is a 48 byte struct (on 64-bit systems) describing a quicklist.
  * 'count' is the number of total entries.
  * 'len' is the number of quicklist nodes.
+ * 'entries_alloc_bytes' is the allocated size of the 'entry' buffer of every
+ *      node in the list (listpack, LZF or plain data). It does not count the
+ *      quicklistNode structs. See quicklistMemUsage() in quicklist.c.
  * 'compress' is: 0 if compression disabled; otherwise, it's the number
  *                of quicklistNodes to leave uncompressed at ends of quicklist.
  * 'fill' is the user-requested (or default) fill factor.
@@ -109,6 +112,7 @@ typedef struct quicklist {
     quicklistNode *tail;
     unsigned long count;                  /* total count of all entries in all listpacks */
     unsigned long len;                    /* number of quicklistNodes */
+    size_t entries_alloc_bytes;           /* allocated bytes of all node entries */
     signed int fill : QL_FILL_BITS;       /* fill factor for individual nodes */
     unsigned int compress : QL_COMP_BITS; /* depth of end nodes not to compress;0=off */
     unsigned int bookmark_count : QL_BM_BITS;
@@ -193,6 +197,8 @@ size_t quicklistGetLzf(const quicklistNode *node, void **data);
 void quicklistNodeLimit(int fill, size_t *size, unsigned int *count);
 int quicklistNodeExceedsLimit(int fill, size_t new_sz, unsigned int new_count);
 void quicklistRepr(unsigned char *ql, int full);
+size_t quicklistMemUsage(const quicklist *ql);
+size_t quicklistMemUsageDebug(const quicklist *ql);
 
 /* bookmarks */
 int quicklistBookmarkCreate(quicklist **ql_ref, const char *name, quicklistNode *node);

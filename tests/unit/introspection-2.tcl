@@ -30,6 +30,15 @@ start_server {tags {"introspection"}} {
         assert {[r object idletime foo] >= 2}
     }
 
+    test {OBJECT introspection commands return null for missing keys} {
+        set rd [valkey_client]
+        test_defer [list $rd close]
+        $rd readraw 1
+        set null_reply [expr {$::force_resp3 ? {_} : {$-1}}]
+        assert_equal $null_reply [$rd object idletime missing]
+        assert_equal $null_reply [$rd object refcount missing]
+    }
+
     proc test_touch_alters_access_time {} {
         r set foo bar
         r set script_foo bar
@@ -135,8 +144,120 @@ start_server {tags {"introspection"}} {
         assert_morethan [r command count] 0
     }
 
+    test {COMMAND DOCS marks sorted-set numeric arguments as doubles} {
+        foreach {command argument_index} {
+            zincrby 1
+            zinter 2
+            zinterstore 3
+            zunion 2
+            zunionstore 3
+        } {
+            set docs [dict get [r command docs $command] $command]
+            set argument [lindex [dict get $docs arguments] $argument_index]
+            assert_equal double [dict get $argument type]
+        }
+    }
+
+    test {COMMAND DOCS allows XX with GT or LT for expiry commands} {
+        foreach command {
+            expire expireat pexpire pexpireat
+            hexpire hexpireat hpexpire hpexpireat
+        } {
+            set docs [dict get [r command docs $command] $command]
+            set condition [lindex [dict get $docs arguments] 2]
+            set alternatives [dict get $condition arguments]
+            assert_equal NX [dict get [lindex $alternatives 0] token]
+
+            set xx_comparison [lindex $alternatives 1]
+            assert_equal block [dict get $xx_comparison type]
+            set options [dict get $xx_comparison arguments]
+            assert_equal XX [dict get [lindex $options 0] token]
+            assert_equal {optional} [dict get [lindex $options 0] flags]
+
+            set comparison [lindex $options 1]
+            assert_equal {optional} [dict get $comparison flags]
+            set comparisons [dict get $comparison arguments]
+            assert_equal GT [dict get [lindex $comparisons 0] token]
+            assert_equal LT [dict get [lindex $comparisons 1] token]
+        }
+    }
+
+    test {COMMAND DOCS marks absolute expiry timestamps as unix-time} {
+        foreach command {expireat pexpireat hexpireat hpexpireat} {
+            set docs [dict get [r command docs $command] $command]
+            set timestamp [lindex [dict get $docs arguments] 1]
+            assert_match {unix-time-*} [dict get $timestamp name]
+            assert_equal unix-time [dict get $timestamp type]
+        }
+    }
+
     test {COMMAND GETKEYS GET} {
         assert_equal {key} [r command getkeys get key]
+    }
+
+    test {COMMAND DOCS marks RESTORE eviction metadata as mutually exclusive} {
+        foreach command {restore restore-asking} {
+            set docs [dict get [r command docs $command] $command]
+            set eviction [lindex [dict get $docs arguments] 5]
+            assert_equal oneof [dict get $eviction type]
+            assert_equal {optional} [dict get $eviction flags]
+
+            set options [dict get $eviction arguments]
+            foreach {index token} {0 IDLETIME 1 FREQ} {
+                set option [lindex $options $index]
+                assert_equal integer [dict get $option type]
+                assert_equal $token [dict get $option token]
+                assert {![dict exists $option flags]}
+            }
+        }
+    }
+
+    test {COMMAND DOCS allows XX with GT or LT for ZADD} {
+        set docs [dict get [r command docs zadd] zadd]
+        set condition [lindex [dict get $docs arguments] 1]
+        assert_equal oneof [dict get $condition type]
+        assert_equal {optional} [dict get $condition flags]
+        set alternatives [dict get $condition arguments]
+        assert_equal NX [dict get [lindex $alternatives 0] token]
+
+        set xx_comparison [lindex $alternatives 1]
+        assert_equal block [dict get $xx_comparison type]
+        set options [dict get $xx_comparison arguments]
+        assert_equal XX [dict get [lindex $options 0] token]
+        assert_equal {optional} [dict get [lindex $options 0] flags]
+
+        set comparison [lindex $options 1]
+        assert_equal oneof [dict get $comparison type]
+        assert_equal {optional} [dict get $comparison flags]
+        set comparisons [dict get $comparison arguments]
+        assert_equal GT [dict get [lindex $comparisons 0] token]
+        assert_equal LT [dict get [lindex $comparisons 1] token]
+
+        # CH follows the condition directly.
+        assert_equal CH [dict get [lindex [dict get $docs arguments] 2] token]
+    }
+
+    test {COMMAND DOCS marks LCS LEN and IDX as mutually exclusive} {
+        set docs [dict get [r command docs lcs] lcs]
+        set output [lindex [dict get $docs arguments] 2]
+        assert_equal oneof [dict get $output type]
+        assert_equal {optional} [dict get $output flags]
+
+        set options [dict get $output arguments]
+        foreach {index token} {0 LEN 1 IDX} {
+            set option [lindex $options $index]
+            assert_equal pure-token [dict get $option type]
+            assert_equal $token [dict get $option token]
+            assert {![dict exists $option flags]}
+        }
+
+        # MINMATCHLEN follows the output selector directly.
+        assert_equal MINMATCHLEN [dict get [lindex [dict get $docs arguments] 3] token]
+    }
+
+    test {COMMAND GETKEYS EXEC} {
+        assert_equal {} [r command getkeys exec]
+        assert_equal {key} [r command getkeys exec ifeq key value]
     }
 
     test {COMMAND GETKEYSANDFLAGS} {
@@ -144,6 +265,11 @@ start_server {tags {"introspection"}} {
         assert_equal {{k1 {OW update}} {k2 {OW update}}} [r command getkeysandflags mset k1 v1 k2 v2]
         assert_equal {{k1 {RW access delete}} {k2 {RW insert}}} [r command getkeysandflags LMOVE k1 k2 left right]
         assert_equal {{k1 {RO access}} {k2 {OW update}}} [r command getkeysandflags sort k1 store k2]
+    }
+
+    test {COMMAND GETKEYSANDFLAGS EXEC} {
+        assert_equal {} [r command getkeysandflags exec]
+        assert_equal {{key {RO access}}} [r command getkeysandflags exec ifeq key value]
     }
 
     test {COMMAND GETKEYS MEMORY USAGE} {
@@ -168,6 +294,12 @@ start_server {tags {"introspection"}} {
 
     test {COMMAND GETKEYS LCS} {
         assert_equal {key1 key2} [r command getkeys lcs key1 key2]
+    }
+
+    test {COMMAND GETKEYS PFMERGE without source keys} {
+        assert_equal {k1} [r command getkeys pfmerge k1]
+        assert_equal {{k1 {RW access insert}}} [r command getkeysandflags pfmerge k1]
+        assert_equal {k1 k2} [r command getkeys pfmerge k1 k2]
     }
 
     test {COMMAND GETKEYS MORE THAN 256 KEYS} {
@@ -205,6 +337,19 @@ start_server {tags {"introspection"}} {
         assert_equal {{key1{t} {OW update}} {key2{t} {OW update}}} [r command getkeysandflags msetex 2 key1{t} val1 key2{t} val2 nx]
     }
 
+    test {COMMAND DOCS does not mark hash field counts as keys} {
+        foreach command {
+            hexpire hexpireat hexpiretime hgetdel hgetex hpersist hpexpire
+            hpexpireat hpexpiretime hpttl hsetex httl
+        } {
+            set docs [dict get [r command docs $command] $command]
+            set fields [lindex [dict get $docs arguments] end]
+            set numfields [lindex [dict get $fields arguments] 0]
+            assert_equal numfields [dict get $numfields name]
+            assert_equal 0 [dict exists $numfields key_spec_index]
+        }
+    }
+
     test {COMMAND GETKEYS* NOT_KEY commands should report no key arguments} {
         # Shard pub/sub - shard channel is NOT_KEY
         assert_error {ERR The command has no key arguments} {r command getkeys ssubscribe mychannel}
@@ -233,7 +378,7 @@ start_server {tags {"introspection"}} {
         assert_not_equal [lsearch $commands "client|list"] -1
     }
 
-    test "COMMAND LIST FILTERBY ACLCAT against non existing category" {
+    test "COMMAND LIST FILTERBY ACLCAT against nonexistent category" {
         assert_equal {} [r command list filterby aclcat non_existing_category]
     }
 
@@ -271,7 +416,7 @@ start_server {tags {"introspection"}} {
         assert_equal {} [r command list filterby pattern non_exists*]
     }
 
-    test "COMMAND LIST FILTERBY MODULE against non existing module" {
+    test "COMMAND LIST FILTERBY MODULE against nonexistent module" {
         # This should be empty, the real one is in subcommands.tcl
         assert_equal {} [r command list filterby module non_existing_module]
     }
@@ -316,10 +461,52 @@ start_server {tags {"introspection"}} {
         }
     }
 
-    foreach cmd {ZUNIONSTORE XREAD EVAL SORT SORT_RO MIGRATE GEORADIUS} {
+    foreach cmd {ZUNIONSTORE XREAD EVAL EXEC SORT SORT_RO MIGRATE GEORADIUS} {
         test "$cmd command is marked with movablekeys" {
             set info [lindex [r command info $cmd] 0]
             assert_match {*movablekeys*} [lindex $info 2]
+        }
+    }
+
+    test "fuzzy traffic generator covers every data type" {
+        # generate_fuzzy_traffic_on_key picks the commands to send by the type of
+        # the key it is given. A data type with no command list makes the corrupt
+        # dump fuzzer fail as soon as it restores a key of that type, which is
+        # easy to miss because it depends on the payload it happens to corrupt.
+        # Catch it here instead, where it fails on the very first CI run.
+
+        # COMMAND DOCS group -> type name reported by TYPE.
+        set type_groups [dict create string string list list set set sorted-set zset \
+                                     hash hash stream stream pathhash pathhash]
+        # Groups whose commands operate on the types above rather than adding one
+        # of their own, plus the groups that are not about keys at all.
+        set typeless_groups {bitmap cluster connection generic geo hyperloglog pubsub scripting server transactions}
+
+        set supported [fuzzy_traffic_commands_by_type]
+        set uncovered {}
+        foreach {name doc} [r command docs] {
+            # skip anything lacking a group field
+            if {![dict exists $doc group]} continue
+            # skip typeless_groups
+            set group [dict get $doc group]
+            if {[lsearch -exact $typeless_groups $group] != -1} continue
+            if {![dict exists $type_groups $group] || ![dict exists $supported [dict get $type_groups $group]]} {
+                lappend uncovered $group
+            }
+        }
+        if {[llength $uncovered]} {
+            fail "command groups with no fuzzy traffic command list: [lsort -unique $uncovered].\
+                  Add them to fuzzy_traffic_commands_by_type in tests/support/util.tcl, and create a key\
+                  of that type in generate_types in tests/integration/corrupt-dump-fuzzer.tcl."
+        }
+
+        foreach {type cmds} $supported {
+            # SCAN validates the type name against the server's own type table, so
+            # this rejects a type key that was misspelled.
+            r scan 0 type $type
+            foreach cmd $cmds {
+                assert_not_equal {} [lindex [r command info $cmd] 0] "$type command $cmd does not exist"
+            }
         }
     }
 

@@ -432,8 +432,8 @@ int64_t getSignedBitfield(unsigned char *p, uint64_t offset, uint64_t bits) {
  * of storing it as an unsigned or signed integer with the specified
  * number of bits. The functions both take the value and a possible increment.
  * If no overflow could happen and the value+increment fit inside the limits,
- * then zero is returned, otherwise in case of overflow, 1 is returned,
- * otherwise in case of underflow, -1 is returned.
+ * then zero is returned; otherwise, in case of overflow, 1 is returned;
+ * otherwise, in case of underflow, -1 is returned.
  *
  * When non-zero is returned (overflow or underflow), if not NULL, *limit is
  * set to the value the operation should result when an overflow happens,
@@ -633,7 +633,7 @@ int getBitfieldTypeFromArgument(client *c, robj *o, int *sign, int *bits) {
 /* This is a helper function for commands implementations that need to write
  * bits to a string object. The command creates or pad with zeroes the string
  * so that the 'maxbit' bit can be addressed. The object is finally
- * returned. Otherwise if the key holds a wrong type NULL is returned and
+ * returned. Otherwise, if the key holds a wrong type NULL is returned and
  * an error is sent to the client. */
 robj *lookupStringForBitCommand(client *c, uint64_t maxbit, int *dirty) {
     size_t byte = maxbit >> 3;
@@ -1011,7 +1011,7 @@ void bitcountCommand(client *c) {
         return;
     }
 
-    /* Return 0 for non existing keys. */
+    /* Return 0 for nonexistent keys. */
     if (o == NULL) {
         addReply(c, shared.czero);
         return;
@@ -1122,8 +1122,8 @@ void bitposCommand(client *c) {
         return;
     }
 
-    /* For empty ranges (start > end) we return -1 as an empty range does
-     * not contain a 0 nor a 1. */
+    /* For empty ranges (start > end) we return -1 as an empty range contains
+     * neither 0 nor 1. */
     if (start > end) {
         addReplyLongLong(c, -1);
     } else {
@@ -1199,7 +1199,7 @@ struct bitfieldOp {
     int opcode;      /* Operation id. */
     int owtype;      /* Overflow type to use. */
     int bits;        /* Integer bitfield bits width. */
-    int sign;        /* True if signed, otherwise unsigned op. */
+    int sign;        /* True if signed; otherwise, unsigned op. */
 };
 
 /* This implements both the BITFIELD command and the BITFIELD_RO command

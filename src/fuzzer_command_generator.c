@@ -7,6 +7,7 @@
 #include <valkey/valkey.h>
 #include "commands.h"
 #include "fuzzer_command_generator.h"
+#include "cli_common.h"
 #include "sds.h"
 #include "dict.h"
 #include "zmalloc.h"
@@ -47,7 +48,8 @@ typedef enum {
     CMD_GROUP_GEO = 8,
     CMD_GROUP_BITMAP = 9,
     CMD_GROUP_PUBSUB = 10,
-    CMD_GROUP_GENERIC = 11
+    CMD_GROUP_GENERIC = 11,
+    CMD_GROUP_PATH_HASH = 12
 } CommandGroupType;
 
 typedef enum {
@@ -103,7 +105,7 @@ typedef struct {
     dict *configDict;
     sds *aclCategories;
     size_t aclCategoriesCount;
-    int max_keys;
+    long long max_keys;
     int cluster_mode;
 } FuzzerContext;
 
@@ -216,6 +218,7 @@ static CommandGroupType mapGroupType(const sds groupStr) {
         {"hyperloglog", CMD_GROUP_HYPERLOGLOG},
         {"geo", CMD_GROUP_GEO},
         {"bitmap", CMD_GROUP_BITMAP},
+        {"pathhash", CMD_GROUP_PATH_HASH},
         {"pubsub", CMD_GROUP_PUBSUB},
         {"generic", CMD_GROUP_GENERIC},
         {NULL, CMD_GROUP_UNKNOWN}};
@@ -1044,10 +1047,12 @@ void initializeRandomSeed(void) {
     struct timeval tv;
     gettimeofday(&tv, NULL);
     srand(time(NULL) ^ (unsigned long)pthread_self() ^ tv.tv_usec);
+    /* rand62() uses random(), whose state is separate from rand(). */
+    srandom(time(NULL) ^ (unsigned long)pthread_self() ^ tv.tv_usec);
 }
 
 /* Initialize the fuzzer with a connected Valkey context */
-int initFuzzer(valkeyContext *ctx, int num_keys, int cluster_mode, int fuzz_flags) {
+int initFuzzer(valkeyContext *ctx, long long num_keys, int cluster_mode, int fuzz_flags) {
     int ret = -1;
     fuzz_ctx = zmalloc(sizeof(FuzzerContext));
     /* Set global configuration values */
@@ -1174,6 +1179,9 @@ static void addKeysToCommand(FuzzerCommand *cmd, int numkeys, CommandArgument *a
         case CMD_GROUP_BITMAP:
             keyPrefix = "bitmap";
             break;
+        case CMD_GROUP_PATH_HASH:
+            keyPrefix = "pathhash";
+            break;
         case CMD_GROUP_PUBSUB:
             keyPrefix = "channel";
             break;
@@ -1190,14 +1198,14 @@ static void addKeysToCommand(FuzzerCommand *cmd, int numkeys, CommandArgument *a
     }
 
     for (int i = 0; i < numkeys; i++) {
-        int keyNumber = rand() % fuzz_ctx->max_keys;
+        long long keyNumber = (long long)rand62() % fuzz_ctx->max_keys;
         sds keyName;
 
         /* In cluster mode, ensure all keys use the same slot tag to map to the same slot */
         if (fuzz_ctx->cluster_mode && client_ctx && client_ctx->current_slot_tag) {
-            keyName = sdscatprintf(sdsempty(), "%s%s:%d", client_ctx->current_slot_tag, keyPrefix, keyNumber);
+            keyName = sdscatprintf(sdsempty(), "%s%s:%lld", client_ctx->current_slot_tag, keyPrefix, keyNumber);
         } else {
-            keyName = sdscatprintf(sdsempty(), "%s:%d", keyPrefix, keyNumber);
+            keyName = sdscatprintf(sdsempty(), "%s:%lld", keyPrefix, keyNumber);
         }
 
         appendArg(cmd, keyName);
@@ -1545,8 +1553,6 @@ static void generateStringArgValue(FuzzerCommand *cmd, const char *argName, Comm
         appendArg(cmd, sdscatprintf(sdsempty(), "module-%d", rand() % 100));
     } else if (strcmp(argName, "arg") == 0 || strcmp(argName, "args") == 0) {
         appendArg(cmd, sdscatprintf(sdsempty(), "arg%d", rand() % 10));
-    } else if (strcmp(argName, "command") == 0) {
-        appendArg(cmd, sdsnew(commands[rand() % (sizeof(commands) / sizeof(commands[0]))]));
     } else if (strcmp(argName, "threshold") == 0) {
         appendArg(cmd, sdscatprintf(sdsempty(), "%d", rand() % 30));
     } else if (strcmp(argName, "metric") == 0) {

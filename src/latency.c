@@ -627,7 +627,7 @@ void latencyCommandReplyWithLatestEvents(client *c) {
 }
 
 #define LATENCY_GRAPH_COLS 80
-sds latencyCommandGenSparkeline(char *event, struct latencyTimeSeries *ts) {
+sds latencyCommandGenSparkline(char *event, struct latencyTimeSeries *ts) {
     int j;
     struct sequence *seq = createSparklineSequence();
     sds graph = sdsempty();
@@ -676,7 +676,7 @@ sds latencyCommandGenSparkeline(char *event, struct latencyTimeSeries *ts) {
  * LATENCY DOCTOR: returns a human readable analysis of instance latency.
  * LATENCY GRAPH: provide an ASCII graph of the latency of the specified event.
  * LATENCY RESET: reset data of a specified event or all the data if no event provided.
- * LATENCY HISTOGRAM: return a cumulative distribution of latencies in the format of an histogram for the specified
+ * LATENCY HISTOGRAM: return a cumulative distribution of latencies in the format of a histogram for the specified
  * command names.
  */
 void latencyCommand(client *c) {
@@ -701,7 +701,7 @@ void latencyCommand(client *c) {
         ts = dictGetVal(de);
         event = dictGetKey(de);
 
-        graph = latencyCommandGenSparkeline(event, ts);
+        graph = latencyCommandGenSparkline(event, ts);
         addReplyVerbatim(c, graph, sdslen(graph), "txt");
         sdsfree(graph);
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "latest") && c->argc == 2) {

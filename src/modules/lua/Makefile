@@ -17,10 +17,10 @@ else
 endif
 
 ifeq ($(uname_S),Darwin)
-	SHOBJ_CFLAGS= -I. -I$(DEPS_DIR)/lua/src -I$(DEPS_DIR)/fpconv -fPIC -W -Wall -dynamic -fno-common $(OPTIMIZATION) -std=gnu11 -D_GNU_SOURCE $(STATIC_LUA_FLAG) $(CFLAGS)
+	SHOBJ_CFLAGS= -I. -I$(DEPS_DIR)/lua/src -I$(DEPS_DIR)/fpconv -fPIC -W -Wall -dynamic -fno-common $(OPTIMIZATION) -std=gnu11 -D_GNU_SOURCE $(STATIC_LUA_FLAG) $(CFLAGS) $(CPPFLAGS)
 	SHOBJ_LDFLAGS= -bundle -undefined dynamic_lookup $(LDFLAGS)
 else
-	SHOBJ_CFLAGS= -I. -I$(DEPS_DIR)/lua/src -I$(DEPS_DIR)/fpconv -fPIC -W -Wall -fno-common $(OPTIMIZATION) -std=gnu11 -D_GNU_SOURCE $(STATIC_LUA_FLAG) $(CFLAGS)
+	SHOBJ_CFLAGS= -I. -I$(DEPS_DIR)/lua/src -I$(DEPS_DIR)/fpconv -fPIC -W -Wall -fno-common $(OPTIMIZATION) -std=gnu11 -D_GNU_SOURCE $(STATIC_LUA_FLAG) $(CFLAGS) $(CPPFLAGS)
 	SHOBJ_LDFLAGS= -shared $(LDFLAGS)
 
 # Pretty-printing setup for module build
@@ -66,13 +66,6 @@ else
 OBJS = $(SRCS:.c=.o)
 endif
 
-# OS X 11.x doesn't have /usr/lib/libSystem.dylib and needs an explicit setting.
-ifeq ($(uname_S),Darwin)
-ifeq ("$(wildcard /usr/lib/libSystem.dylib)","")
-	SHOBJ_LDFLAGS+= -L /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/lib -lsystem
-endif
-endif
-
 all: $(LUA_TARGET)
 ifeq ($(BUILD_LUA),module)
 $(LUA_TARGET): $(OBJS) $(LIBS)
@@ -83,13 +76,15 @@ $(LUA_TARGET): $(OBJS) $(LIBS)
 endif
 
 sha1.o: ../../sha1.c
-	$(QUIET_CC_MOD)$(CC) $(SHOBJ_CFLAGS) -c $< -o $@
+	$(QUIET_CC_MOD)$(CC) $(SHOBJ_CFLAGS) -MMD -c $< -o $@
 
 rand.o: ../../rand.c
-	$(QUIET_CC_MOD)$(CC) $(SHOBJ_CFLAGS) -c $< -o $@
+	$(QUIET_CC_MOD)$(CC) $(SHOBJ_CFLAGS) -MMD -c $< -o $@
 
 %.o: %.c
-	$(QUIET_CC_MOD)$(CC) $(SHOBJ_CFLAGS) -c $< -o $@
+	$(QUIET_CC_MOD)$(CC) $(SHOBJ_CFLAGS) -MMD -c $< -o $@
+
+-include $(OBJS:.o=.d)
 
 $(DEPS_DIR)/lua/src/liblua.a:
 	cd $(DEPS_DIR) && $(MAKE) lua
@@ -98,4 +93,4 @@ $(DEPS_DIR)/fpconv/libfpconv.a:
 	cd $(DEPS_DIR) && $(MAKE) fpconv
 
 clean:
-	rm -f *.so *.a $(OBJS)
+	rm -f *.so *.a *.d $(OBJS)

@@ -60,7 +60,7 @@ static void listTypeTryConvertListpack(robj *o, robj **argv, int start, int end,
 
         quicklist *ql = quicklistNew(server.list_max_listpack_size, server.list_compress_depth);
 
-        /* Append listpack to quicklist if it's not empty, otherwise release it. */
+        /* Append listpack to quicklist if it's not empty; otherwise, release it. */
         if (lpLength(objectGetVal(o)))
             quicklistAppendListpack(ql, objectGetVal(o));
         else
@@ -288,7 +288,7 @@ int listTypeNext(listTypeIterator *li, listTypeEntry *entry) {
 
 /* Get entry value at the current position of the iterator.
  * When the function returns NULL, it populates the integer value by
- * reference in 'lval'. Otherwise a pointer to the string is returned,
+ * reference in 'lval'. Otherwise, a pointer to the string is returned,
  * and 'vlen' is set to the length of the string. */
 unsigned char *listTypeGetValue(listTypeEntry *entry, size_t *vlen, long long *lval) {
     unsigned char *vstr = NULL;
@@ -365,7 +365,7 @@ void listTypeReplace(listTypeEntry *entry, robj *value) {
  *
  * Returns 1 if replace happened.
  * Returns 0 if replace failed and no changes happened. */
-int listTypeReplaceAtIndex(robj *o, int index, robj *value) {
+int listTypeReplaceAtIndex(robj *o, long index, robj *value) {
     value = getDecodedObject(value);
     sds vstr = objectGetVal(value);
     size_t vlen = sdslen(vstr);

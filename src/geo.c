@@ -29,6 +29,7 @@
  */
 
 #include "geo.h"
+#include "ordered_index.h"
 #include "geohash_helper.h"
 #include "debugmacro.h"
 #include "pqsort.h"
@@ -36,7 +37,6 @@
 /* Things exported from t_zset.c only for geo.c, since it is the only other
  * part of the server that requires close zset introspection. */
 unsigned char *zzlFirstInRange(unsigned char *zl, zrangespec *range);
-int zslValueLteMax(double value, zrangespec *spec);
 
 /* ====================================================================
  * This file implements the following commands:
@@ -104,7 +104,7 @@ int decodeGeohash(double bits, double *xy) {
 
 /* Input Argument Helper */
 /* Take a pointer to the latitude arg then use the next arg for longitude.
- * On parse error C_ERR is returned, otherwise C_OK. */
+ * On parse error C_ERR is returned; otherwise, C_OK. */
 int extractLongLatOrReply(client *c, robj **argv, double *xy) {
     int i;
     for (i = 0; i < 2; i++) {
@@ -121,7 +121,7 @@ int extractLongLatOrReply(client *c, robj **argv, double *xy) {
 
 /* Input Argument Helper */
 /* Decode lat/long from a zset member's score.
- * Returns C_OK on successful decoding, otherwise C_ERR is returned. */
+ * Returns C_OK on successful decoding; otherwise, C_ERR is returned. */
 int longLatFromMemberOrReply(client *c, robj *zobj, robj *member, double *xy) {
     double score = 0;
 
@@ -294,7 +294,7 @@ int geoGetPointsInRange(robj *zobj, double min, double max, GeoShape *shape, geo
             score = zzlGetScore(sptr);
 
             /* If we fell out of range, break. */
-            if (!zslValueLteMax(score, &range)) break;
+            if (!zsetScoreLteMax(score, &range)) break;
 
             vstr = lpGetValue(eptr, &vlen, &vlong);
             if (geoWithinShape(shape, score, xy, &distance) == C_OK) {
@@ -305,28 +305,27 @@ int geoGetPointsInRange(robj *zobj, double min, double max, GeoShape *shape, geo
             if (ga->used && limit && ga->used >= limit) break;
             zzlNext(zl, &eptr, &sptr);
         }
-    } else if (zobj->encoding == OBJ_ENCODING_SKIPLIST) {
+    } else if (zobj->encoding == OBJ_ENCODING_BTREE) {
         zset *zs = objectGetVal(zobj);
-        zskiplist *zsl = zs->zsl;
-        zskiplistNode *ln;
+        OrderedIndexIterator iter;
+        orderedIndexInitIterator(&iter, zs->oi);
+        orderedIndexSeekToScoreRange(&iter, range.min, range.max, range.minex, range.maxex, 0);
+        OrderedIndexItem *ln;
 
-        if ((ln = zslNthInRange(zsl, &range, 0, NULL)) == NULL) {
-            /* Nothing exists starting at our min.  No results. */
-            return 0;
-        }
-
-        while (ln) {
+        while ((ln = orderedIndexNext(&iter)) != NULL) {
             double xy[2];
             double distance = 0;
+            double score = orderedIndexItemGetScore(ln);
             /* Abort when the node is no longer in range. */
-            if (!zslValueLteMax(ln->score, &range)) break;
-            if (geoWithinShape(shape, ln->score, xy, &distance) == C_OK) {
+            if (!zsetScoreLteMax(score, &range)) break;
+            if (geoWithinShape(shape, score, xy, &distance) == C_OK) {
                 /* Append the new element. */
-                sds ele = zslGetNodeElement(ln);
-                geoArrayAppend(ga, xy, distance, ln->score, sdsdup(ele));
+                const char *ele;
+                size_t ele_len;
+                orderedIndexItemGetElement(ln, &ele, &ele_len);
+                geoArrayAppend(ga, xy, distance, score, sdsnewlen(ele, ele_len));
             }
             if (ga->used && limit && ga->used >= limit) break;
-            ln = ln->level[0].forward;
         }
     }
     return ga->used - origincount;
@@ -526,9 +525,11 @@ void geoaddCommand(client *c) {
  *                               [COUNT count [ANY]] [STORE key|STOREDIST key]
  * GEORADIUSBYMEMBER key member radius unit ... options ...
  * GEOSEARCH key [FROMMEMBER member] [FROMLONLAT long lat] [BYRADIUS radius unit]
- *               [BYBOX width height unit] [WITHCOORD] [WITHDIST] [WITHASH] [COUNT count [ANY]] [ASC|DESC]
+ *               [BYBOX width height unit] [BYPOLYGON numvertices longitude latitude [longitude latitude ...]]
+ *               [WITHCOORD] [WITHDIST] [WITHHASH] [COUNT count [ANY]] [ASC|DESC]
  * GEOSEARCHSTORE dest_key src_key [FROMMEMBER member] [FROMLONLAT long lat] [BYRADIUS radius unit]
- *               [BYBOX width height unit] [COUNT count [ANY]] [ASC|DESC] [STOREDIST]
+ *               [BYBOX width height unit] [BYPOLYGON numvertices longitude latitude [longitude latitude ...]]
+ *               [COUNT count [ANY]] [ASC|DESC] [STOREDIST]
  *  */
 void georadiusGeneric(client *c, int srcKeyIndex, int flags) {
     robj *storekey = NULL;
@@ -670,6 +671,7 @@ void georadiusGeneric(client *c, int srcKeyIndex, int flags) {
                     geoPolygonPointsFree(&shape);
                     return;
                 }
+                geoPolygonPointsFree(&shape);
                 /* Extract polygon vertices. */
                 shape.conversion = 1;
                 shape.t.polygon.num_vertices = num_vertices;
@@ -729,7 +731,7 @@ void georadiusGeneric(client *c, int srcKeyIndex, int flags) {
             }
             addReply(c, shared.czero);
         } else {
-            /* Otherwise we return an empty array. */
+            /* Otherwise, we return an empty array. */
             addReply(c, shared.emptyarray);
         }
         geoPolygonPointsFree(&shape);
@@ -832,7 +834,7 @@ void georadiusGeneric(client *c, int srcKeyIndex, int flags) {
         }
 
         for (i = 0; i < returned_items; i++) {
-            zskiplistNode *znode;
+            OrderedIndexItem *znode;
             geoPoint *gp = ga.array + i;
             gp->dist /= shape.conversion; /* Fix according to unit. */
             double score = storedist ? gp->dist : gp->score;
@@ -840,7 +842,7 @@ void georadiusGeneric(client *c, int srcKeyIndex, int flags) {
 
             if (maxelelen < elelen) maxelelen = elelen;
             totelelen += elelen;
-            znode = zslInsert(zs->zsl, score, gp->member);
+            znode = orderedIndexInsert(zs->oi, score, gp->member, elelen);
             serverAssert(hashtableAdd(zs->ht, znode));
             sdsfree(gp->member);
             gp->member = NULL;
@@ -987,13 +989,13 @@ void geoposCommand(client *c) {
 
 /* GEODIST key ele1 ele2 [unit]
  *
- * Return the distance, in meters by default, otherwise according to "unit",
+ * Return the distance, in meters by default; otherwise, according to "unit",
  * between points ele1 and ele2. If one or more elements are missing NULL
  * is returned. */
 void geodistCommand(client *c) {
     double to_meter = 1;
 
-    /* Check if there is the unit to extract, otherwise assume meters. */
+    /* Check if there is the unit to extract; otherwise, assume meters. */
     if (c->argc == 5) {
         to_meter = extractUnitOrReply(c, c->argv[4]);
         if (to_meter < 0) return;

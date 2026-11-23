@@ -173,6 +173,9 @@ int processRESP(FILE *fp, char *filename, int *out_multi) {
  * be greater than 'to_timestamp', the AOF after the annotation is truncated.
  * Note that in Multi Part AOF, this truncation is only allowed when the last_file
  * parameter is 1.
+ *
+ * Returns 1 to continue, 0 if the AOF was truncated to the timestamp, or -1 on an
+ * error, with 'error' set.
  **/
 int processAnnotations(FILE *fp, char *filename, int last_file) {
     char buf[AOF_ANNOTATION_LINE_MAX_LEN];
@@ -181,6 +184,11 @@ int processAnnotations(FILE *fp, char *filename, int last_file) {
     if (fgets(buf, sizeof(buf), fp) == NULL) {
         printf("Failed to read annotations from AOF %s, aborting...\n", filename);
         exit(1);
+    }
+    /* A line without a newline at the end of the file is a torn annotation. */
+    if (feof(fp)) {
+        ERROR("Torn annotation at the end of the file");
+        return -1;
     }
 
     if (to_timestamp && strncmp(buf, "#TS:", 4) == 0) {
@@ -272,10 +280,12 @@ int checkSingleAof(char *aof_filename, char *aof_filepath, int last_file, int fi
         }
 
         if (buf[0] == '#') {
-            if (!processAnnotations(fp, aof_filepath, last_file)) {
+            int ret = processAnnotations(fp, aof_filepath, last_file);
+            if (ret == 0) {
                 fclose(fp);
                 return AOF_CHECK_TIMESTAMP_TRUNCATED;
             }
+            if (ret < 0) break;
         } else if (buf[0] == '*') {
             if (!processRESP(fp, aof_filepath, &multi)) break;
         } else {
@@ -334,7 +344,7 @@ int checkSingleAof(char *aof_filename, char *aof_filepath, int last_file, int fi
     return AOF_CHECK_OK;
 }
 
-/* Used to determine whether the file is a RDB file. These two possibilities:
+/* Used to determine whether the file is an RDB file. These two possibilities:
  * 1. The file is an old style RDB-preamble AOF
  * 2. The file is a BASE AOF in Multi Part AOF
  * */
@@ -358,13 +368,11 @@ int fileIsRDB(char *filepath) {
         return 0;
     }
 
-    if (size >= 8) { /* There must be at least room for the RDB header. */
-        char sig[5];
-        int rdb_file = fread(sig, sizeof(sig), 1, fp) == 1 && memcmp(sig, "REDIS", sizeof(sig)) == 0;
-        if (rdb_file) {
-            fclose(fp);
-            return 1;
-        }
+    char sig[6];
+    size_t siglen = fread(sig, 1, sizeof(sig), fp);
+    if (rdbHasFileSignature(sig, siglen)) {
+        fclose(fp);
+        return 1;
     }
 
     fclose(fp);

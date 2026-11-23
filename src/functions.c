@@ -98,7 +98,7 @@ static void dictEntryDestructorSdsKeyEngineFunctionValue(void *entry) {
 }
 
 /* Must be case-insensitive to stay consistent with functionDictType (the
- * global function dict). Otherwise names differing only in case (e.g. "aaa"
+ * global function dict). Otherwise, names differing only in case (e.g. "aaa"
  * and "AAA") are stored as distinct entries here but collapse to one entry in
  * the global dict, which later trips an assertion in libraryUnlink. */
 dictType libraryFunctionDictType = {
@@ -374,7 +374,7 @@ static void libraryLink(functionsLibCtx *lib_ctx, functionLibInfo *li) {
 
 /* Takes all libraries from lib_ctx_src and add to lib_ctx_dst.
  * On collision, if 'replace' argument is true, replace the existing library with the new one.
- * Otherwise abort and leave 'lib_ctx_dst' and 'lib_ctx_src' untouched.
+ * Otherwise, abort and leave 'lib_ctx_dst' and 'lib_ctx_src' untouched.
  * Return C_OK on success and C_ERR if aborted. If C_ERR is returned, set a relevant
  * error message on the 'err' out parameter.
  *  */
@@ -772,7 +772,7 @@ void functionRestoreCommand(client *c) {
         return;
     }
 
-    restorePolicy restore_replicy = restorePolicy_Append; /* default policy: APPEND */
+    restorePolicy restore_policy = restorePolicy_Append; /* default policy: APPEND */
     sds data = objectGetVal(c->argv[2]);
     size_t data_len = sdslen(data);
     rio payload;
@@ -781,11 +781,11 @@ void functionRestoreCommand(client *c) {
     if (c->argc == 4) {
         const char *restore_policy_str = objectGetVal(c->argv[3]);
         if (!strcasecmp(restore_policy_str, "append")) {
-            restore_replicy = restorePolicy_Append;
+            restore_policy = restorePolicy_Append;
         } else if (!strcasecmp(restore_policy_str, "replace")) {
-            restore_replicy = restorePolicy_Replace;
+            restore_policy = restorePolicy_Replace;
         } else if (!strcasecmp(restore_policy_str, "flush")) {
-            restore_replicy = restorePolicy_Flush;
+            restore_policy = restorePolicy_Flush;
         } else {
             addReplyError(c, "Wrong restore policy given, value should be either FLUSH, APPEND or REPLACE.");
             return;
@@ -798,6 +798,10 @@ void functionRestoreCommand(client *c) {
         return;
     }
 
+    size_t timeout = LOAD_TIMEOUT_MS;
+    if (mustObeyClient(c)) {
+        timeout = 0;
+    }
     functionsLibCtx *functions_lib_ctx = functionsLibCtxCreate();
     rioInitWithBuffer(&payload, data);
 
@@ -816,7 +820,7 @@ void functionRestoreCommand(client *c) {
             err = sdsnew("given type is not a function");
             goto load_error;
         }
-        if (rdbFunctionLoad(&payload, rdbver, functions_lib_ctx, RDBFLAGS_NONE, &err) != C_OK) {
+        if (rdbFunctionLoad(&payload, rdbver, functions_lib_ctx, RDBFLAGS_NONE, timeout, &err) != C_OK) {
             if (!err) {
                 err = sdsnew("failed loading the given functions payload");
             }
@@ -824,11 +828,11 @@ void functionRestoreCommand(client *c) {
         }
     }
 
-    if (restore_replicy == restorePolicy_Flush) {
+    if (restore_policy == restorePolicy_Flush) {
         functionsLibCtxSwapWithCurrent(functions_lib_ctx, server.lazyfree_lazy_user_flush);
         functions_lib_ctx = NULL; /* avoid releasing the f_ctx in the end */
     } else {
-        if (libraryJoin(curr_functions_lib_ctx, functions_lib_ctx, restore_replicy == restorePolicy_Replace, &err) !=
+        if (libraryJoin(curr_functions_lib_ctx, functions_lib_ctx, restore_policy == restorePolicy_Replace, &err) !=
             C_OK) {
             goto load_error;
         }
@@ -1033,7 +1037,7 @@ sds functionsCreateWithLibraryCtx(sds code, int replace, sds *err, functionsLibC
         goto error;
     }
 
-    functionsAddEngineStats(md.engine);
+    functionsAddEngineStats(scriptingEngineGetName(engine));
 
     old_li = dictFetchValue(lib_ctx->libraries, md.name);
     if (old_li && !replace) {

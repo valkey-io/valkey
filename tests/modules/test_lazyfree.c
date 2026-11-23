@@ -1,6 +1,11 @@
 /* This module emulates a linked list for lazyfree testing of modules, which
  is a simplified version of 'hellotype.c'
  */
+/* define macros for having usleep */
+#define _BSD_SOURCE
+#define _DEFAULT_SOURCE
+#include <unistd.h>
+
 #include "valkeymodule.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -10,6 +15,9 @@
 
 static ValkeyModuleType *LazyFreeLinkType;
 static long long unlink_count = 0;
+
+/* While set, freeing an object blocks, holding up the lazyfree BIO worker. */
+static volatile int hold_free = 0;
 
 struct LazyFreeLinkNode {
     int64_t value;
@@ -112,6 +120,17 @@ int LazyFreeLinkLen_RedisCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv
     return VALKEYMODULE_OK;
 }
 
+/* LAZYFREELINK.HOLDFREE 0|1 */
+int LazyFreeLinkHoldFree_RedisCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    if (argc != 2) return ValkeyModule_WrongArity(ctx);
+    long long hold;
+    if (ValkeyModule_StringToLongLong(argv[1], &hold) != VALKEYMODULE_OK) {
+        return ValkeyModule_ReplyWithError(ctx, "ERR invalid value");
+    }
+    hold_free = hold != 0;
+    return ValkeyModule_ReplyWithSimpleString(ctx, "OK");
+}
+
 void *LazyFreeLinkRdbLoad(ValkeyModuleIO *rdb, int encver) {
     if (encver != 0) {
         return NULL;
@@ -145,6 +164,7 @@ void LazyFreeLinkAofRewrite(ValkeyModuleIO *aof, ValkeyModuleString *key, void *
 }
 
 void LazyFreeLinkFree(void *value) {
+    while (hold_free) usleep(1000);
     LazyFreeLinkReleaseObject(value);
 }
 
@@ -192,9 +212,14 @@ int LazyFreeLinkFlushSlot(ValkeyModuleCtx *ctx, ValkeyModuleString *keyname) {
 }
 
 int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
-
     if (ValkeyModule_Init(ctx,"lazyfreetest",1,VALKEYMODULE_APIVER_1)
         == VALKEYMODULE_ERR) return VALKEYMODULE_ERR;
+
+    /* Opt in to forkless only on request: LAZYFREELINK.INSERT does not handle
+     * the NULL key OpenKey can return while a forkless save runs. */
+    if (argc == 1 && !strcmp(ValkeyModule_StringPtrLen(argv[0], NULL), "forkless")) {
+        ValkeyModule_SetModuleOptions(ctx, VALKEYMODULE_OPTIONS_HANDLE_FORKLESS);
+    }
 
     /* We only allow our module to be loaded when the core version is greater than the version of my module */
     if (ValkeyModule_GetTypeMethodVersion() < VALKEYMODULE_TYPE_METHOD_VERSION) {
@@ -220,6 +245,10 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
 
     if (ValkeyModule_CreateCommand(ctx,"lazyfreelink.len",
         LazyFreeLinkLen_RedisCommand,"readonly",1,1,1) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
+
+    if (ValkeyModule_CreateCommand(ctx,"lazyfreelink.holdfree",
+        LazyFreeLinkHoldFree_RedisCommand,"",0,0,0) == VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
 
     if (ValkeyModule_CreateCommand(ctx,"lazyfreelink.unlinkcount",

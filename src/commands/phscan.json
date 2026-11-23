@@ -1,0 +1,31 @@
+{
+    "PHSCAN": {
+        "summary": "Iterates over fields and values at an exact path in a path hash.",
+        "complexity": "O(L) for the path lookup plus the cost of HSCAN on its field map; COUNT is a work hint, not a hard result limit.",
+        "group": "pathhash",
+        "since": "9.2.0",
+        "arity": -4,
+        "function": "phscanCommand",
+        "command_flags": ["READONLY"],
+        "acl_categories": ["PATHHASH", "READ", "SLOW"],
+        "command_tips": ["NONDETERMINISTIC_OUTPUT"],
+        "key_specs": [{"flags": ["RO", "ACCESS"], "begin_search": {"index": {"pos": 1}}, "find_keys": {"range": {"lastkey": 0, "step": 1, "limit": 0}}}],
+        "reply_schema": {
+            "description": "Cursor and field/value pairs, in both RESP2 and RESP3.",
+            "type": "array",
+            "minItems": 2,
+            "maxItems": 2,
+            "items": [
+                {"description": "The next Hash scan cursor, or 0 when complete.", "type": "string"},
+                {"description": "Alternating field names and values.", "type": "array", "items": {"type": "string"}}
+            ]
+        },
+        "arguments": [
+            {"name": "key", "type": "key", "key_spec_index": 0},
+            {"name": "path", "type": "string"},
+            {"name": "cursor", "type": "integer"},
+            {"name": "pattern", "type": "pattern", "token": "MATCH", "optional": true},
+            {"name": "count", "type": "integer", "token": "COUNT", "optional": true}
+        ]
+    }
+}

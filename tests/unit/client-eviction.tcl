@@ -19,6 +19,18 @@ proc client_exists {name} {
     return true
 }
 
+# Block-wait until the named client's query buffer reaches exactly
+# the given size. The fill is monotonic and settles at exactly this
+# value, so a generous budget cannot hide a stall or a wrong value;
+# it only tolerates slow CLIENT LIST polling on loaded CI runners.
+proc wait_for_qbuf_size {name size} {
+    wait_for_condition 500 100 {
+        [client_field $name qbuf] == $size
+    } else {
+        fail "Failed to fill qbuf for $name"
+    }
+}
+
 proc gen_client {} {
     set rr [valkey_client]
     set name "tst_[randstring 4 4 simplealpha]"
@@ -251,25 +263,40 @@ start_server {} {
     test "client evicted due to client tracking prefixes" {
         r flushdb
         set rr [valkey_client]
+        test_defer { $rr close }
+        # RESP3 so the client can still run CLIENT TRACKING after subscribing below
+        $rr hello 3
 
-        # Since tracking prefixes list is a small overhead this test uses a minimal maxmemory-clients config
-        set temp_maxmemory_clients 200000
-        r config set maxmemory-clients $temp_maxmemory_clients
+        # The tracking prefixes list is only charged ~12 bytes per rax node , and registering a prefix scans
+        # all existing ones, so the cost grows quadratically with the number of prefixes. Since maxmemory-clients
+        # can't go below 128kb (see getClientEvictionLimit), pad the client  with pubsub channel names to get close
+        # to the limit, so only a couple thousand prefixes are needed to trigger eviction.
+        set temp_maxmemory_clients [kb 128]
+        test_config_set r maxmemory-clients $temp_maxmemory_clients
+        # The headroom must absorb the reply buffers being resized by clientsCron while we pad.
+        set headroom [kb 20]
+        set c 0
+        while {[set gap [expr {$temp_maxmemory_clients - $headroom - [clients_sum tot-mem]}]] > 0} {
+            $rr subscribe [string repeat x [expr {min($gap, [kb 8])}]][incr c]
+        }
 
-        # Append tracking prefixes until list maxes out maxmemory clients and causes client eviction
-        # Combine more prefixes in each command to speed up the test. Because we did not actually count
-        # the memory usage of all prefixes, see getClientMemoryUsage, so we can not use larger prefixes
-        # to speed up the test here.
+        # Append tracking prefixes until list maxes out maxmemory clients and causes client eviction.
+        # Send many prefixes per command to reduce the number of round trips.
+        set prefixes_per_cmd 100
+        set n 0
         catch {
-            for {set j 0} {$j < $temp_maxmemory_clients} {incr j} {
-                $rr client tracking on prefix [format a%09s $j] prefix [format b%09s $j] prefix [format c%09s $j] bcast
+            for {set j 0} {$j < 100} {incr j} {
+                set cmd [list client tracking on bcast]
+                for {set k 0} {$k < $prefixes_per_cmd} {incr k} {
+                    lappend cmd prefix [format %010d $n]
+                    incr n
+                }
+                $rr {*}$cmd
             }
         } e
         assert_match {I/O error reading reply} $e
-        $rr close
-
-        # Restore config for next tests
-        r config set maxmemory-clients $maxmemory_clients
+        # Eviction must have been driven by the prefix list, not by the padding
+        assert {$j > 0}
     }
 
     test "client evicted due to output buf" {
@@ -315,11 +342,7 @@ start_server {} {
             if {[catch {
                 $rr write [join [list "*1\r\n\$$qbsize\r\n" [string repeat v $qbsize]] ""]
                 $rr flush
-                wait_for_condition 200 10 {
-                    [client_field $cname qbuf] == $qbsize
-                } else {
-                    fail "Failed to fill qbuf for test"
-                }
+                wait_for_qbuf_size $cname $qbsize
             } e] && $no_evict == off} {
                 assert {![client_exists $cname]}
             } elseif {$no_evict == on} {
@@ -358,12 +381,8 @@ start_server {} {
         set qbsize [expr {$maxmemory_clients - $obuf_size}]
         $rr1 write [join [list "*1\r\n\$$qbsize\r\n" [string repeat v $qbsize]] ""]
         $rr1 flush
-        # Wait for qbuff to be as expected
-        wait_for_condition 200 10 {
-            [client_field qbuf-client qbuf] == $qbsize
-        } else {
-            fail "Failed to fill qbuf for test"
-        }
+        # Wait for qbuf to be as expected.
+        wait_for_qbuf_size qbuf-client $qbsize
 
         # Make the other two obuf-clients pass obuf limit and also pass maxmemory-clients
         # We use two obuf-clients to make sure that even if client eviction is attempted
@@ -629,5 +648,339 @@ start_server {} {
     }
 }
 
-} ;# tags
+# Regression: BLPOP reexec → evictClients() freeing a same-key successor
+# must not UAF the ready-key waiter list (same class as #4198, no module).
+start_server {} {
+    test {BLPOP + maxmemory-clients: successor eviction during ready-key reexec} {
+        r flushdb
+        r client no-evict on
+        r config set maxmemory-clients 100mb
+        r config set client-output-buffer-limit "normal 0 0 0"
+        # Disable copy avoidance so unread replies stay in client output buffers
+        r config set min-io-threads-avoid-copy-reply 0
+        r config set min-string-size-avoid-copy-reply 0
+        r config set min-string-size-avoid-copy-reply-threaded 0
 
+        r setrange fat 300000 x
+
+        # First waiter (served first). Must not be the eviction victim.
+        set rdA [valkey_deferring_client]
+        $rdA client no-evict on
+        $rdA flush
+        assert_equal OK [$rdA read]
+        $rdA client setname blpop_a
+        $rdA flush
+        assert_equal OK [$rdA read]
+        $rdA blpop mylist 0
+        $rdA flush
+
+        # Second waiter: inflate server-side output buffer, then block as successor.
+        set rdB [valkey_deferring_client]
+        $rdB client setname blpop_b
+        $rdB flush
+        assert_equal OK [$rdB read]
+        while {[client_field blpop_b tot-mem] < 2000000} {
+            $rdB get fat
+            $rdB flush
+        }
+        # Leave GET replies unread so tot-mem stays large while blocked.
+        $rdB blpop mylist 0
+        $rdB flush
+
+        wait_for_blocked_clients_count 2
+        assert {[client_field blpop_b tot-mem] >= 2000000}
+
+        # 128KiB is the server's minimum client-eviction limit.
+        set low_limit [expr {128 * 1024}]
+        r multi
+        r config set maxmemory-clients $low_limit
+        r lpush mylist v1
+        assert_equal {OK 1} [r exec]
+
+        # Surviving here (especially under ASan) means the ready-key iterator
+        # did not UAF when the successor was freed mid-iteration.
+        assert_equal PONG [r ping]
+        assert_equal {mylist v1} [$rdA read]
+        assert {![client_exists blpop_b]}
+
+        catch {$rdA close}
+        catch {$rdB close}
+    }
+}
+
+# A blocked client served after another client's command made its key ready is re-executed under
+# server.current_client = <blocked client>, and processCommand() evicts clients first. The client that
+# made the key ready is still executing then, and must not be freed: it is not server.current_client,
+# so freeClient() would free it right away and the outer command would go on to use it.
+start_server {} {
+    test {BLMPOP + maxmemory-clients: eviction during ready-key reexec does not free the executing client} {
+        r flushdb
+        r client no-evict on
+        r config set maxmemory-clients 100mb
+        r config set client-output-buffer-limit "normal 0 0 0"
+        # Disable copy avoidance so unread replies stay in client output buffers
+        r config set min-io-threads-avoid-copy-reply 0
+        r config set min-string-size-avoid-copy-reply 0
+        r config set min-string-size-avoid-copy-reply-threaded 0
+
+        r setrange fat 300000 x
+        # Many small elements: a BLMPOP of half of them is a ~2MB reply that is copied into the
+        # output buffer of the client that gets it.
+        set count 20000
+        # Load from a short-lived client: r is no-evict, so its memory is only refreshed by
+        # clientsCron, and a stale charge for this ~4MB command could drop after the total is sampled.
+        set loader [valkey_client]
+        $loader rpush src {*}[lrepeat [expr {$count * 2}] [string repeat e 100]]
+        $loader close
+        wait_for_condition 50 100 {
+            [s connected_clients] == 1
+        } else {
+            fail "loader client did not disconnect"
+        }
+
+        # Two blocked clients on the same key. The first one served adds its reply to the clients'
+        # memory, the second one is the one whose command evicts.
+        set rdA [valkey_deferring_client]
+        set rdB [valkey_deferring_client]
+        foreach {name rd} [list waiter_a $rdA waiter_b $rdB] {
+            $rd client setname $name
+            $rd flush
+            assert_equal OK [$rd read]
+            $rd blmpop 0 1 mylist left count $count
+            $rd flush
+        }
+        wait_for_blocked_clients_count 2
+
+        # The largest client, holding GET replies it does not read. Its commands are what ready the key.
+        set rdX [valkey_deferring_client]
+        $rdX client setname executing
+        $rdX flush
+        assert_equal OK [$rdX read]
+        set gets 0
+        while {[client_field executing tot-mem] < [mb 3]} {
+            $rdX get fat
+            $rdX flush
+            incr gets
+            wait_for_condition 100 10 {
+                [client_field executing tot-cmds] >= $gets + 1
+            } else {
+                fail "executing client did not run its GET"
+            }
+        }
+
+        # The first served reply (~2.17MB) pushes the total over the limit while the executing client is
+        # still mid-command. The margin must stay below one reply to keep covering that path, and above
+        # both replies minus the executing client's memory so waiter_a is not evicted too.
+        set total [s mem_clients_normal]
+        r config set maxmemory-clients [expr {$total + [mb 1] + [kb 512]}]
+        set evicted [s evicted_clients]
+
+        $rdX rename src mylist
+        $rdX flush
+
+        # Evicting the executing client here would free it under its own command: the server
+        # crashes, or reports a use after free under ASan. Once the command is done it is an
+        # ordinary eviction candidate, so the client itself may be evicted shortly after.
+        wait_for_condition 100 10 {
+            [s evicted_clients] > $evicted
+        } else {
+            fail "no client was evicted"
+        }
+        assert_equal PONG [r ping]
+        assert_equal 0 [r exists src]
+        foreach rd [list $rdA $rdB] {
+            set reply [$rd read]
+            assert_equal mylist [lindex $reply 0]
+            assert_equal $count [llength [lindex $reply 1]]
+        }
+        wait_for_condition 100 10 {
+            ![client_exists executing]
+        } else {
+            fail "executing client was not evicted"
+        }
+
+        catch {$rdA close}
+        catch {$rdB close}
+        catch {$rdX close}
+    }
+}
+
+start_server {} {
+    # Disable copy avoidance
+    r config set min-io-threads-avoid-copy-reply 0
+    r config set min-string-size-avoid-copy-reply 0
+    r config set min-string-size-avoid-copy-reply-threaded 0
+
+    test "a client pending an async free doesn't cause over-eviction of other clients" {
+        r debug replybuffer resizing 0
+        r client setname control
+        r client no-evict on
+        r config set maxmemory-clients 0
+
+        # A large client we'll protect (simulating a deferred/async close), plus two
+        # small clients that must survive once the protected client's memory is accounted for.
+        set big_size [mb 2]
+        set small_size [kb 100]
+
+        set rr_big [valkey_client]
+        $rr_big client setname big_client
+        $rr_big write [join [list "*2\r\n\$$big_size\r\n" [string repeat v $big_size]] ""]
+        $rr_big flush
+        wait_for_condition 200 10 {
+            [client_field big_client tot-mem] >= $big_size
+        } else {
+            fail "Failed to fill qbuf for big_client"
+        }
+
+        set small_rrs {}
+        for {set j 0} {$j < 2} {incr j} {
+            set rr [valkey_client]
+            lappend small_rrs $rr
+            $rr client setname small_client$j
+            $rr write [join [list "*2\r\n\$$small_size\r\n" [string repeat v $small_size]] ""]
+            $rr flush
+            wait_for_condition 200 10 {
+                [client_field small_client$j tot-mem] >= $small_size
+            } else {
+                fail "Failed to fill qbuf for small_client$j"
+            }
+        }
+
+        set big_mem [client_field big_client tot-mem]
+        set small0_mem [client_field small_client0 tot-mem]
+        set small1_mem [client_field small_client1 tot-mem]
+        set control_mem [client_field control tot-mem]
+
+        # Protect big_client so freeClient() can only defer to an async close.
+        # Fetch its id via CLIENT LIST (rr_big's own connection is mid-parse, see above).
+        set big_id [client_field big_client id]
+        r debug protect-client $big_id
+
+        # Set the limit so freeing just the big client's memory suffices; the
+        # small clients must not need to be touched.
+        set limit [expr {$control_mem + $small0_mem + $small1_mem + 1024}]
+        r config set maxmemory-clients $limit
+
+        # The big client should be marked for (async) close: flags contains 'A'.
+        wait_for_condition 50 100 {
+            [string match {*A*} [client_field big_client flags]]
+        } else {
+            fail "protected big client was not scheduled for close"
+        }
+
+        # Still present (only unlinked once actually freed), and the small clients
+        # must not have been evicted to compensate.
+        assert {[client_exists big_client]}
+        assert {[client_exists small_client0]}
+        assert {[client_exists small_client1]}
+
+        r debug replybuffer resizing 1
+        catch {$rr_big close}
+        foreach rr $small_rrs {$rr close}
+    } {} {needs:debug tls:skip}
+}
+
+# The caller of a yielding script is protected, so this was never a use after free: before the
+# processing_command skip, eviction marked it close_asap mid-script and its reply was dropped.
+# Now it is left alone until the script returns and evicted afterwards.
+start_server {} {
+    test {Yielding EVAL caller is not evicted mid-script by another client's command} {
+        r flushdb
+        r client no-evict on
+        r config set maxmemory-clients 100mb
+        r config set client-output-buffer-limit "normal 0 0 0"
+        r config set busy-reply-threshold 10
+        r config set min-io-threads-avoid-copy-reply 0
+        r config set min-string-size-avoid-copy-reply 0
+        r config set min-string-size-avoid-copy-reply-threaded 0
+        r setrange fat 1000000 x
+
+        # The largest client: holds ~30MB of unread GET replies, then runs a long script. It must stay
+        # larger than the pusher below, so it is always the first eviction candidate.
+        set rdX [valkey_deferring_client]
+        $rdX client setname executing
+        $rdX flush
+        assert_equal OK [$rdX read]
+        set gets 0
+        while {[client_field executing tot-mem] < [mb 30]} {
+            $rdX get fat
+            $rdX flush
+            incr gets
+            wait_for_condition 100 10 {
+                [client_field executing tot-cmds] >= $gets + 1
+            } else {
+                fail "executing client did not run its GET"
+            }
+        }
+
+        set rdW [valkey_deferring_client]
+        $rdW client setname pusher
+        $rdW flush
+        assert_equal OK [$rdW read]
+
+        set total [s mem_clients_normal]
+        r config set maxmemory-clients [expr {$total + [mb 1]}]
+        set evicted [s evicted_clients]
+
+        # The script yields past busy-reply-threshold, records evicted_clients at its end, and returns.
+        # It keeps yielding until the pusher's replies have pushed the total 1MB past the limit, so
+        # the post-script eviction does not depend on how many replies the server got through in a
+        # fixed time. INFO is checked only every 10ms, so the loop stays cheap and the server still
+        # reads the pusher's socket often (the Lua hook is the only yield point). A 3 second cap
+        # keeps a stuck pusher from hanging the test.
+        $rdX eval {
+            local limit = tonumber(ARGV[1])
+            local t0 = redis.call('TIME')
+            local start = t0[1] * 1000000 + t0[2]
+            local last = start
+            while true do
+                -- Pure Lua work between redis.call()s, so the 100000-instruction hook fires often.
+                for _ = 1, 1000 do end
+                local t = redis.call('TIME')
+                local now = t[1] * 1000000 + t[2]
+                if now - start > 3000000 then break end
+                if now - last > 10000 then
+                    last = now
+                    local mem = string.match(redis.call('INFO', 'memory'), 'mem_clients_normal:(%d+)')
+                    if tonumber(mem) > limit then break end
+                end
+            end
+            local info = redis.call('INFO', 'stats')
+            redis.call('SET', 'evicted_during_script', string.match(info, 'evicted_clients:(%d+)'))
+            return 'done'
+        } 0 [expr {$total + [mb 2]}]
+        $rdX flush
+        wait_for_condition 100 10 {
+            [catch {r ping} e] && [string match {BUSY*} $e]
+        } else {
+            fail "script did not start"
+        }
+
+        # While the script yields, the pusher's unread -BUSY replies push the total over the limit.
+        # Its commands run evictClients() with the executing client counted as pending, so the
+        # pusher is not evicted, and the script ends once the pusher's memory is over the limit.
+        # The kernel socket buffers may absorb some replies, which is why the script waits on the
+        # memory condition rather than on time.
+        $rdW write [string repeat "PING\r\n" 200000]
+        $rdW flush
+
+        wait_for_condition 100 50 {
+            ![catch {r exists evicted_during_script} e] && $e
+        } else {
+            fail "script did not finish"
+        }
+        # The pusher's commands must have run while the script was still running.
+        catch {$rdW read} e
+        assert_match {BUSY*} $e
+        assert_equal $evicted [r get evicted_during_script]
+        wait_for_condition 100 10 {
+            ![client_exists executing]
+        } else {
+            fail "executing client was not evicted after its script (limit [r config get maxmemory-clients], mem_clients_normal [s mem_clients_normal], evicted_clients [s evicted_clients])"
+        }
+        catch {$rdX close}
+        catch {$rdW close}
+    }
+}
+
+} ;# tags

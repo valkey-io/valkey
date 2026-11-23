@@ -57,14 +57,16 @@ static uint64_t getSlotStat(int slot, slotStatType stat_type) {
     return slot_stat;
 }
 
-/* Compare by stat in ascending order. If stat is the same, compare by slot in ascending order. */
+/* Compare by stat in ascending order. If stat is the same, compare by slot in ascending order.
+ * Note: subtraction of uint64_t values cast to int truncates when the difference exceeds
+ * INT_MAX, potentially inverting the sort order. Use three-way comparison instead. */
 static int slotStatForSortAscCmp(const void *a, const void *b) {
     slotStatForSort entry_a = *((slotStatForSort *)a);
     slotStatForSort entry_b = *((slotStatForSort *)b);
     if (entry_a.stat == entry_b.stat) {
         return entry_a.slot - entry_b.slot;
     }
-    return entry_a.stat - entry_b.stat;
+    return (entry_a.stat > entry_b.stat) - (entry_a.stat < entry_b.stat);
 }
 
 /* Compare by stat in descending order. If stat is the same, compare by slot in ascending order. */
@@ -74,10 +76,10 @@ static int slotStatForSortDescCmp(const void *a, const void *b) {
     if (entry_b.stat == entry_a.stat) {
         return entry_a.slot - entry_b.slot;
     }
-    return entry_b.stat - entry_a.stat;
+    return (entry_b.stat > entry_a.stat) - (entry_b.stat < entry_a.stat);
 }
 
-static void collectAndSortSlotStats(slotStatForSort slot_stats[], slotStatType order_by, int desc) {
+static int collectAndSortSlotStats(slotStatForSort slot_stats[], slotStatType order_by, int desc) {
     int i = 0;
 
     for (int slot = 0; slot < CLUSTER_SLOTS; slot++) {
@@ -88,6 +90,7 @@ static void collectAndSortSlotStats(slotStatForSort slot_stats[], slotStatType o
         }
     }
     qsort(slot_stats, i, sizeof(slotStatForSort), (desc) ? slotStatForSortDescCmp : slotStatForSortAscCmp);
+    return i;
 }
 
 static void addReplySlotStat(client *c, int slot) {
@@ -121,8 +124,7 @@ static void addReplySlotsRange(client *c, unsigned char *assigned_slots, int sta
     }
 }
 
-static void addReplySortedSlotStats(client *c, slotStatForSort slot_stats[], long limit) {
-    int num_slots_assigned = getMyShardSlotCount();
+static void addReplySortedSlotStats(client *c, slotStatForSort slot_stats[], int num_slots_assigned, long limit) {
     int len = min(limit, num_slots_assigned);
     addReplyArrayLen(c, len); /* Top level RESP reply format is defined as an array, due to ordering invariance. */
 
@@ -192,8 +194,8 @@ void clusterSlotStatsAddNetworkBytesOutForShardedPubSubInternalPropagation(clien
  * Response is ordered based on the sort result. */
 static void addReplyOrderBy(client *c, slotStatType order_by, long limit, int desc) {
     slotStatForSort slot_stats[CLUSTER_SLOTS];
-    collectAndSortSlotStats(slot_stats, order_by, desc);
-    addReplySortedSlotStats(c, slot_stats, limit);
+    int num_slots_assigned = collectAndSortSlotStats(slot_stats, order_by, desc);
+    addReplySortedSlotStats(c, slot_stats, num_slots_assigned, limit);
 }
 
 /* Resets applicable slot statistics. */
@@ -329,4 +331,12 @@ void clusterSlotStatsCommand(client *c) {
 
 int clusterSlotStatsEnabled(int slot) {
     return server.cluster_slot_stats_enabled && server.cluster_enabled && slot != -1;
+}
+
+int testOnlySlotStatForSortAscCmp(const void *a, const void *b) {
+    return slotStatForSortAscCmp(a, b);
+}
+
+int testOnlySlotStatForSortDescCmp(const void *a, const void *b) {
+    return slotStatForSortDescCmp(a, b);
 }

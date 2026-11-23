@@ -5,20 +5,10 @@ proc log_file_matches {log pattern} {
     string match $pattern $content
 }
 
-# Wait until the process enters a paused state.
-proc wait_process_paused idx {
-    set pid [srv $idx pid]
-    wait_for_condition 50 1000 {
-        [string match "T*" [exec ps -o state= -p $pid]]
-    } else {
-        fail "Process $pid didn't stop, current state is [exec ps -o state= -p $pid]"
-    }
-}
-
 # Wait until the process enters a paused state, then resume the process.
 proc wait_and_resume_process idx {
     set pid [srv $idx pid]
-    wait_process_paused $idx
+    wait_process_paused $pid
     resume_process $pid
 }
 
@@ -222,7 +212,7 @@ start_server {tags {"dual-channel-replication external:skip"}} {
             set primary_port [srv 0 port]
 
             $primary config set repl-diskless-sync yes
-            # Set primary shared replication buffer size to a bit more then the size of 
+            # Set primary shared replication buffer size to a bit more than the size of
             # a replication buffer block.
             $primary config set client-output-buffer-limit "replica 1100k 0 0"
             $primary config set dual-channel-replication-enabled $enable
@@ -625,7 +615,7 @@ start_server {tags {"dual-channel-replication external:skip"}} {
                 set loglines [lindex $res 1]
                 incr $loglines
                 wait_and_resume_process -2
-                verify_replica_online $primary 0 700
+                verify_replica_online $primary 0 [expr {$::valgrind ? 7000 : 700}]
                 wait_for_condition 50 1000 {
                     [status $replica1 master_link_status] == "up"
                 } else {
@@ -641,7 +631,7 @@ start_server {tags {"dual-channel-replication external:skip"}} {
                 set loglines [lindex $res 1]
                 incr $loglines
                 wait_and_resume_process -1
-                verify_replica_online $primary 0 700
+                verify_replica_online $primary 0 [expr {$::valgrind ? 7000 : 700}]
                 wait_for_condition 50 1000 {
                     [status $replica2 master_link_status] == "up"
                 } else {
@@ -837,19 +827,27 @@ start_server {tags {"dual-channel-replication external:skip"}} {
             resume_process $replica_pid
             set res [wait_for_log_messages -1 {"*Unable to partial resync with replica * for lack of backlog*"} $loglines 200 100]
             set loglines [lindex $res 1]
+
+            # Waiting for the primary to enter the paused state, that is, make sure that bgsave is triggered.
+            wait_process_paused [srv -1 pid]
+            wait_for_log_messages 0 {"*Done loading RDB*"} $replica_loglines 5000 10
+            $replica replicaof no one
+            # Resume the primary and make sure the sync is dropped.
+            resume_process [srv -1 pid]
+            $primary debug pause-after-fork 0
+            wait_for_condition 500 1000 {
+                [s -1 rdb_bgsave_in_progress] eq 0
+            } else {
+                fail "Primary should abort sync"
+            }
         }
-        # Waiting for the primary to enter the paused state, that is, make sure that bgsave is triggered.
-        wait_process_paused -1
-        wait_for_log_messages 0 {"*Done loading RDB*"} $replica_loglines 5000 10
-        $replica replicaof no one
-        # Resume the primary and make sure the sync is dropped.
+        # On failure the test skips its own resume_process, leaving the primary armed with
+        # pause-after-fork. It then stops itself when the fork lands and blocks the commands below,
+        # which have no read timeout. Resume, disarm, resume again in case the fork landed in
+        # between. No-ops when the test passed.
         resume_process [srv -1 pid]
         $primary debug pause-after-fork 0
-        wait_for_condition 500 1000 {
-            [s -1 rdb_bgsave_in_progress] eq 0
-        } else {
-            fail "Primary should abort sync"
-        }
+        resume_process [srv -1 pid]
         stop_write_load $load_handle0
         stop_write_load $load_handle1
         stop_write_load $load_handle2
@@ -1633,14 +1631,15 @@ start_server {tags {"dual-channel-replication external:skip"}} {
         $primary config set repl-diskless-sync-delay 0
         $replica config set dual-channel-replication-enabled yes
 
-        # A hash with field-level TTLs (HEXPIRE) is hashtable-encoded with
-        # volatile fields, which can only be serialized in RDB version >= 80.
+        # A small hash with field-level TTLs (HEXPIRE) keeps the listpack
+        # encoding with tagged expiry metadata, which can only be serialized
+        # in RDB version >= 81 (or as HASH_2 triplets for RDB 80 targets).
         # The primary must learn the replica's version over the RDB connection
         # to pick a new enough RDB version; otherwise it falls back to RDB 11
         # and the full sync fails with "Can't store key ... in RDB version 11".
         $primary hset myhash field1 value1 field2 value2 field3 value3
         $primary hexpire myhash 3600 FIELDS 3 field1 field2 field3
-        assert_encoding hashtable myhash
+        assert_encoding listpack myhash
 
         test "Dual channel full sync succeeds with hash field expiration data" {
             set sync_full [s 0 sync_full]
@@ -1657,6 +1656,167 @@ start_server {tags {"dual-channel-replication external:skip"}} {
             # The hash and its field TTLs made it across.
             assert_equal [lsort [$replica hgetall myhash]] [lsort {field1 value1 field2 value2 field3 value3}]
             assert_range [lindex [$replica httl myhash FIELDS 1 field1] 0] 1 3600
+        }
+    }
+}
+
+start_server {tags {"dual-channel-replication external:skip"}} {
+    set primary [srv 0 client]
+    set primary_host [srv 0 host]
+    set primary_port [srv 0 port]
+
+    $primary config set dual-channel-replication-enabled yes
+    $primary config set repl-diskless-sync yes
+    $primary config set repl-diskless-sync-delay 0
+    $primary config set client-output-buffer-limit "replica 1100k 0 0"
+    $primary config set repl-backlog-size 1mb
+    $primary debug populate 20000 key 100
+
+    start_server {} {
+        set replica [srv 0 client]
+
+        $replica config set dual-channel-replication-enabled yes
+        $replica config set loglevel debug
+        # A small local buffer makes the replica stop reading the main channel early.
+        $replica config set client-output-buffer-limit "replica 256k 0 0"
+        $replica config set loading-process-events-interval-bytes 1024
+        # Hold the RDB load until the test releases it. Events are served every
+        # 1 KB of RDB (~30 keys, ~60ms here), so the replica keeps reading the
+        # main channel and sending keepalives; the full load would take ~40s.
+        $replica config set key-load-delay 2000
+
+        test "Replica aborts streaming local buffer when primary drops main channel" {
+            set loglines [count_log_lines 0]
+            set cob_disconnections [s -1 client_output_buffer_limit_disconnections]
+            $replica replicaof $primary_host $primary_port
+            wait_for_log_messages 0 {"*Loading RDB produced by*"} $loglines 1000 10
+
+            # Fill the replica's local buffer first, so it stops reading the main
+            # channel and won't see the primary close it.
+            for {set i 0} {$i < 100} {incr i} {
+                populate 10 fillkey$i 10000 -1
+                if {[count_log_message 0 "Replication buffer limit reached"] > 0} break
+                after 100
+            }
+            wait_for_log_messages 0 {"*Replication buffer limit reached*"} $loglines 100 100
+
+            # Then overrun the primary's output buffer limit so it drops the main
+            # channel while the RDB is loading. Write in 1 MB chunks until it does,
+            # since socket buffers absorb a varying amount before the limit is reached.
+            for {set i 0} {$i < 50} {incr i} {
+                populate 100 bigkey$i 10000 -1
+                if {[s -1 client_output_buffer_limit_disconnections] > $cob_disconnections} break
+            }
+            wait_for_condition 100 100 {
+                [s -1 client_output_buffer_limit_disconnections] > $cob_disconnections
+            } else {
+                fail "Primary should disconnect the replica main channel due to COB overrun"
+            }
+
+            # The drop happened while the replica was still loading.
+            assert_equal 1 [s 0 loading] "Replica finished loading before the primary dropped the main channel"
+            # Give the replica's keepalive writes time to fail, so the link is
+            # already marked broken when streaming starts.
+            after 3000
+            set sync_full [s -1 sync_full]
+
+            # Release the load; the replica now streams its local buffer on a dead link.
+            $replica config set key-load-delay 0
+
+            # The replica notices the broken link while streaming its local buffer.
+            wait_for_log_messages 0 {"*Primary connection lost while streaming local replication buffer*"} $loglines 1000 10
+
+            # Relax the limits and let the replica resync.
+            $replica config set client-output-buffer-limit "replica 0 0 0"
+            $primary config set client-output-buffer-limit "replica 0 0 0"
+            wait_for_condition 500 100 {
+                [s 0 master_link_status] eq "up"
+            } else {
+                fail "Replica didn't resync"
+            }
+            # The replica reconnected and did a new full sync.
+            assert_morethan [s -1 sync_full] $sync_full
+            wait_for_ofs_sync $primary $replica
+            assert_equal [$primary debug digest] [$replica debug digest]
+        }
+    }
+}
+
+foreach compression {no lz4} {
+    start_server {tags {"dual-channel-replication external:skip"}} {
+        set primary [srv 0 client]
+        set primary_host [srv 0 host]
+        set primary_port [srv 0 port]
+
+        $primary config set dual-channel-replication-enabled yes
+        $primary config set repl-diskless-sync yes
+        $primary config set repl-diskless-sync-delay 0
+        $primary config set repl-compression $compression
+        $primary config set client-output-buffer-limit "replica 0 0 0"
+        $primary debug populate 20000 key 10
+        # Each SUNIONSTORE of this set takes a while to apply, so streaming the
+        # buffered ones takes long enough to break the link in the middle of it.
+        # SUNIONSTORE is idempotent, so the result doesn't depend on where the
+        # resync resumes. Valgrind runs each union ~100x slower, so a smaller
+        # set keeps both the flood and the gaps between link checks short.
+        set bigset_members [expr {$::valgrind ? 1000 : 10000}]
+        for {set i 0} {$i < $bigset_members} {incr i} {lappend members m$i}
+        $primary sadd bigset {*}$members
+
+        start_server {} {
+            set replica [srv 0 client]
+
+            $replica config set dual-channel-replication-enabled yes
+            $replica config set repl-compression $compression
+            $replica config set loglevel debug
+            $replica config set client-output-buffer-limit "replica 0 0 0"
+            $replica config set loading-process-events-interval-bytes 1024
+            # Hold the RDB load until the test releases it. Events are served
+            # every 1 KB of RDB, so the replica keeps reading the main channel.
+            # Hold it long enough (~200s) for slow builds to buffer the commands.
+            $replica config set key-load-delay 10000
+
+            test "Replica aborts streaming when the primary link breaks mid-stream (repl-compression $compression)" {
+                set loglines [count_log_lines 0]
+                $replica replicaof $primary_host $primary_port
+                wait_for_log_messages 0 {"*Loading RDB produced by*"} $loglines 1000 10
+
+                # Buffer slow commands on the replica while it is still loading.
+                # Streaming them takes ~3 s natively (~5 s under valgrind), long
+                # enough for the kill below to land mid-stream. The long name of
+                # a missing key adds easily compressed bytes to each. With lz4 a
+                # link check runs once per 1 MB decoded, so under valgrind, where
+                # each union is slow, a longer name keeps that to ~16 commands.
+                set rd [valkey_deferring_client -1]
+                set pad [string repeat x [expr {$::valgrind ? 64000 : 4000}]]
+                set n [expr {$::valgrind ? 150 : 3000}]
+                for {set i 0} {$i < $n} {incr i} {$rd sunionstore dst bigset $pad}
+                for {set i 0} {$i < $n} {incr i} {$rd read}
+                $rd close
+                assert_equal 1 [s 0 loading]
+                set syncs [expr {[s -1 sync_full] + [s -1 sync_partial_ok]}]
+
+                # Release the load, then kill the main channel while the replica
+                # streams its buffer. Kill only after the load is over: losing
+                # the link during a disk-based load is a different path.
+                $replica config set key-load-delay 0
+                wait_for_log_messages 0 {"*Done loading RDB*"} $loglines 1000 10
+                assert_equal 0 [s 0 loading]
+                assert_morethan [$primary client kill type replica] 0
+
+                wait_for_log_messages 0 {"*Primary connection lost while streaming local replication buffer*"} $loglines 1000 10
+                verify_no_log_message 0 "*Successfully streamed replication data into memory*" $loglines
+
+                wait_for_condition 500 100 {
+                    [s 0 master_link_status] eq "up"
+                } else {
+                    fail "Replica didn't resync"
+                }
+                # The replica reconnected (full or partial resync).
+                assert_morethan [expr {[s -1 sync_full] + [s -1 sync_partial_ok]}] $syncs
+                wait_for_ofs_sync $primary $replica
+                assert_equal [$primary debug digest] [$replica debug digest]
+            }
         }
     }
 }

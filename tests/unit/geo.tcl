@@ -143,7 +143,7 @@ start_server {tags {"geo"}} {
         verify_geo_edge_response_generic "WRONGTYPE*"
     }
 
-    test {GEO with non existing src key} {
+    test {GEO with nonexistent src key} {
         r del src{t}
 
         verify_geo_edge_response_bylonlat {} 0
@@ -157,7 +157,7 @@ start_server {tags {"geo"}} {
         verify_geo_edge_response_bylonlat {} 0
     }
 
-    test {GEO BYMEMBER with non existing member} {
+    test {GEO BYMEMBER with nonexistent member} {
         r del src{t}
         r geoadd src{t} 13.361389 38.115556 "Palermo" 15.087269 37.502669 "Catania"
 
@@ -222,6 +222,22 @@ start_server {tags {"geo"}} {
         } err
         set err
     } {*valid*}
+
+    test {GEOADD out of range coordinates} {
+        r del range_check
+        # Valid longitudes are limited to [-180,+180]
+        assert_error "*invalid longitude,latitude pair*" {r geoadd range_check -190 40.747533 "out of range"}
+        assert_error "*invalid longitude,latitude pair*" {r geoadd range_check 190 40.747533 "out of range"}
+        # Valid latitudes are limited to [-85.05112878,+85.05112878]
+        assert_error "*invalid longitude,latitude pair*" {r geoadd range_check -73.9454966 -86 "out of range"}
+        assert_error "*invalid longitude,latitude pair*" {r geoadd range_check -73.9454966 86 "out of range"}
+        # The failing pair is reported even when it is not the first one.
+        assert_error "*invalid longitude,latitude pair 181.000000,38.000000*" {
+            r geoadd range_check -73.9454966 40.747533 "in range" 181 38 "out of range"
+        }
+        # GEOADD is all-or-nothing
+        assert_equal 0 [r exists range_check]
+    }
 
     test {GEOADD multi add} {
         r geoadd nyc -73.9733487 40.7648057 "central park n/q/r" -73.9903085 40.7362513 "union square" -74.0131604 40.7126674 "wtc one" -73.7858139 40.6428986 "jfk" -73.9375699 40.7498929 "q4" -73.9564142 40.7480973 4545
@@ -404,6 +420,23 @@ start_server {tags {"geo"}} {
         lindex [r geohash points test] 0
     } {ezs42e44yx0}
 
+    test {GEOHASH returns null for a missing member} {
+        r del points
+        r geoadd points -5.6 42.6 test
+        set protocols {2 3}
+        if {$::force_resp3} {
+            set protocols {3}
+        }
+        foreach resp $protocols {
+            set rd [valkey_client]
+            test_defer [list $rd close]
+            $rd hello $resp
+            $rd readraw 1
+            assert_equal {*1} [$rd geohash points missing]
+            assert_equal [expr {$resp == 2 ? {$-1} : {_}}] [$rd read]
+        }
+    }
+
     test {GEOHASH with only key as argument} {
         r del points
         r geoadd points 10 20 a 30 40 b
@@ -459,6 +492,20 @@ start_server {tags {"geo"}} {
         assert {$m eq {}}
     }
 
+    test {GEODIST invalid unit} {
+        r del points
+        r geoadd points 13.361389 38.115556 "Palermo" \
+                        15.087269 37.502669 "Catania"
+        assert_error "*unsupported unit*" {r geodist points Palermo Catania yards}
+    }
+
+    test {GEODIST too many arguments} {
+        r del points
+        r geoadd points 13.361389 38.115556 "Palermo" \
+                        15.087269 37.502669 "Catania"
+        assert_error "*syntax error*" {r geodist points Palermo Catania km extra}
+    }
+
     test {GEORADIUS STORE option: syntax error} {
         r del points{t}
         r geoadd points{t} 13.361389 38.115556 "Palermo" \
@@ -505,6 +552,25 @@ start_server {tags {"geo"}} {
         set res [r zrange points2{t} 0 -1 withscores]
         assert {[lindex $res 1] < 1}
         assert {[lindex $res 3] > 166}
+    }
+
+    test {GEORADIUS COMMAND GETKEYS extracts the last STORE destination} {
+        # Regression test for the duplicate-STORE ACL bypass: key extraction
+        # must report the LAST (effective) STORE/STOREDIST key, matching what
+        # the command implementation actually writes to.
+        assert_equal {src} [r command getkeys georadius src 0 0 1 km]
+        assert_equal {src dst} [r command getkeys georadius src 0 0 1 km STORE dst]
+        assert_equal {src dst} [r command getkeys georadius src 0 0 1 km STOREDIST dst]
+        assert_equal {src b} [r command getkeys georadius src 0 0 1 km STORE a STORE b]
+        assert_equal {src b} [r command getkeys georadius src 0 0 1 km STOREDIST a STOREDIST b]
+        assert_equal {src b} [r command getkeys georadius src 0 0 1 km STORE a STOREDIST b]
+    }
+
+    test {GEORADIUSBYMEMBER COMMAND GETKEYS extracts the last STORE destination} {
+        assert_equal {src} [r command getkeys georadiusbymember src member 1 km]
+        assert_equal {src dst} [r command getkeys georadiusbymember src member 1 km STORE dst]
+        assert_equal {src b} [r command getkeys georadiusbymember src member 1 km STORE a STORE b]
+        assert_equal {src b} [r command getkeys georadiusbymember src member 1 km STORE a STOREDIST b]
     }
 
     test {GEOSEARCHSTORE STORE option: plain usage} {
@@ -573,7 +639,61 @@ start_server {tags {"geo"}} {
         }
     }
 
+    test {GEOSEARCH repeated BYPOLYGON uses the last polygon} {
+        r del points "{points}dest"
+        r geoadd points 0.5 0.5 first 10.5 10.5 last
+        set first {BYPOLYGON 4 0 0 1 0 1 1 0 1}
+        set last {BYPOLYGON 4 10 10 11 10 11 11 10 11}
+        assert_equal {last} [r geosearch points {*}$first {*}$last]
+        assert_equal 1 [r geosearchstore "{points}dest" points {*}$first {*}$last]
+        assert_equal {last} [r zrange "{points}dest" 0 -1]
+        assert_error {ERR COUNT must be > 0} {
+            r geosearch points {*}$first {*}$last COUNT 0
+        }
+        r del points "{points}dest"
+    }
+
+    test {GEOSEARCH repeated BYPOLYGON releases previous vertices} {
+        r del missing{points}
+        set polygon [concat {BYPOLYGON 1024} [lrepeat 2048 0]]
+        set command [concat {GEOSEARCH missing{points}} $polygon {BYPOLYGON 3 0 0 1 0 0 1}]
+        # Warm the query buffer and command accounting before sampling memory.
+        for {set i 0} {$i < 8} {incr i} {
+            assert_equal {} [r {*}$command]
+        }
+        set before [s used_memory]
+        for {set i 0} {$i < 32} {incr i} {
+            assert_equal {} [r {*}$command]
+        }
+        # Leaking the first polygon would retain 512 KiB. Allow unrelated overhead.
+        assert_lessthan [expr {[s used_memory] - $before}] 262144
+    } {} {external:skip}
+
+    test {GEORADIUS/GEOSEARCH out of range coordinates} {
+        r del points
+        r geoadd points 13.361389 38.115556 "Palermo"
+
+        assert_error "*invalid longitude,latitude pair*" {r georadius points 181 38 100 km}
+        assert_error "*invalid longitude,latitude pair*" {r georadius_ro points 13 86 100 km}
+        assert_error "*invalid longitude,latitude pair*" {r geosearch points fromlonlat 181 38 byradius 100 km}
+        assert_error "*invalid longitude,latitude pair*" {r geosearch points fromlonlat 13 86 bybox 100 100 km}
+        # A bad vertex is reported wherever it appears in the polygon.
+        assert_error "*invalid longitude,latitude pair 181.000000,40.000000*" {
+            r geosearch points bypolygon 3 13 38 14 39 181 40
+        }
+    }
+
+    test {GEOSEARCHSTORE out of range coordinates} {
+        r del points{t} dest{t}
+        r geoadd points{t} 13.361389 38.115556 "Palermo"
+        assert_error "*invalid longitude,latitude pair*" {
+            r geosearchstore dest{t} points{t} fromlonlat 181 38 byradius 100 km
+        }
+        assert_equal 0 [r exists dest{t}]
+    }
+
     test {GEOSEARCH BYPOLYGON standard operations} {
+        r del points
         r geoadd points 151.20932132005692 -33.877723137822436 "146, Elizabeth Street, Koreatown, Sydney, Sydney CBD, Sydney, Council of the City of Sydney, New South Wales, 2000, Australia"
         r geoadd points 151.2119820713997 -33.87697539508043 "Connaught Centre, 187, Liverpool Street, Koreatown, Sydney, Sydney CBD, Sydney, Council of the City of Sydney, New South Wales, 2000, Australia"
         r geoadd points 151.2119820713997 -33.87156123068408 "St James, Archibald Fountain Plaza/Area, Koreatown, Sydney, Sydney CBD, Sydney, Council of the City of Sydney, New South Wales, 2000, Australia"
@@ -646,12 +766,22 @@ start_server {tags {"geo"}} {
         assert_equal {{146, Elizabeth Street, Koreatown, Sydney, Sydney CBD, Sydney, Council of the City of Sydney, New South Wales, 2000, Australia} {St James, Archibald Fountain Plaza/Area, Koreatown, Sydney, Sydney CBD, Sydney, Council of the City of Sydney, New South Wales, 2000, Australia} {Kings Cross Centre, 82-94, Darlinghurst Road, Potts Point, Sydney, Council of the City of Sydney, New South Wales, 2011, Australia}} [r GEOSEARCH points BYPOLYGON  5 151.2154285314146 -33.867438205607186 151.20024487595015 -33.88138572784347 151.2374118848648 -33.87601765283626 151.19695829592922 -33.87272872054441 151.2278336546125 -33.88345323146266]
     }
 
+    test {GEOSEARCH BYPOLYGON whose vertex centroid is a pole} {
+        r del points
+        r geoadd points 0 45 a 10 -20 b 0 -60 c
+        set north [r geosearch points BYPOLYGON 4 -90 -30 90 -30 90 85 -90 85]
+        set south [r geosearch points BYPOLYGON 4 -90 -1 90 -1 90 -85 -90 -85]
+        assert_equal {{a b} {b c}} [list [lsort $north] [lsort $south]]
+    }
+
     test {GEOSEARCH with exact zero distances} {
         r del points
         # These are full precision coordinates, so the distance should 0.0000
         r geoadd points -122.40710645914077759 37.79430076631935975 position
         assert_equal {{position 0.0000}} [r GEOSEARCH points FROMMEMBER position BYRADIUS 0 mi ASC WITHDIST]
         assert_equal {{position 0.0000}} [r GEOSEARCH points FROMLONLAT -122.40710645914077759 37.79430076631935975 BYRADIUS 0 mi ASC WITHDIST]
+        assert_equal {{position 0.0000}} [r GEOSEARCH points FROMMEMBER position BYBOX 0 0 mi ASC WITHDIST]
+        assert_equal {{position 0.0000}} [r GEOSEARCH points FROMLONLAT -122.40710645914077759 37.79430076631935975 BYBOX 0 0 mi ASC WITHDIST]
     }
 
     foreach {type} {byradius bybox} {
@@ -751,7 +881,7 @@ start_server {tags {"geo"}} {
                     }
                 }
 
-                # Make sure this is a real error and not a rounidng issue.
+                # Make sure this is a real error and not a rounding issue.
                 if {[llength $diff] == $rounding_errors} {
                     set res $res2; # Error silenced
                 }

@@ -211,7 +211,7 @@ typedef struct {
     unsigned int todo_send_ae_ack : 1;
     unsigned int todo_send_vote_response : 1;
     unsigned int todo_broadcast_vote_request : 1;
-    unsigned int slot_migration_pause : 1;
+    unsigned int slot_change_pending : 1;
     uint64_t persist_log_from;     /* First index to persist in next batch */
     uint64_t last_rewrite_applied; /* last_applied at last full rewrite */
 
@@ -458,7 +458,10 @@ static int clusterRaftQuorum(void) {
 }
 
 static bool clusterRaftIsSlotChangePending(void) {
-    return RAFT_STATE()->slot_migration_pause;
+    clusterRaftState *rs = RAFT_STATE();
+    if (!rs->slot_change_pending && clusterIsAnySlotExportFailoverGranted())
+        rs->slot_change_pending = 1;
+    return rs->slot_change_pending;
 }
 
 static int clusterRaftLogFullyApplied(void) {
@@ -470,29 +473,29 @@ static int clusterRaftLogFullyApplied(void) {
  * Export timeout or cancellation must not clear an unresolved handoff.
  * Arm only at FAILOVER-GRANTED: earlier pauses cannot be followed by a
  * proposal, and a sibling still snapshotting is not a granted handoff. */
-static void clusterRaftSyncSlotMigrationPause(void) {
+static void clusterRaftSyncSlotChangePending(void) {
     clusterRaftState *rs = RAFT_STATE();
-    if (!rs->slot_migration_pause && !getPausedActionsWithPurpose(PAUSE_DURING_SLOT_MIGRATION)) return;
-    if (!rs->slot_migration_pause && clusterIsAnySlotExportFailoverGranted()) rs->slot_migration_pause = 1;
-    if (!rs->slot_migration_pause) return;
+    if (!rs->slot_change_pending && !getPausedActionsWithPurpose(PAUSE_DURING_SLOT_MIGRATION)) return;
+    if (!rs->slot_change_pending && clusterIsAnySlotExportFailoverGranted()) rs->slot_change_pending = 1;
+    if (!rs->slot_change_pending) return;
     if (!clusterIsAnySlotExportFailoverGranted() && rs->role == RAFT_ROLE_LEADER && clusterRaftLogFullyApplied() &&
         clusterRaftLeaderHasFreshQuorum(monotonicMs())) {
-        rs->slot_migration_pause = 0;
+        rs->slot_change_pending = 0;
     }
 }
 
 static void clusterRaftOnSlotOwnershipApplied(void) {
     clusterUpdateSlotExportsOnOwnershipChange();
     clusterUpdateSlotImportsOnOwnershipChange();
-    if (RAFT_STATE()->slot_migration_pause && !clusterIsAnySlotExportFailoverGranted() && clusterRaftLogFullyApplied())
-        RAFT_STATE()->slot_migration_pause = 0;
+    if (RAFT_STATE()->slot_change_pending && !clusterIsAnySlotExportFailoverGranted() && clusterRaftLogFullyApplied())
+        RAFT_STATE()->slot_change_pending = 0;
 }
 
-static void clusterRaftReleaseSlotMigrationPauseIfCaughtUp(void) {
+static void clusterRaftReleaseSlotChangePendingIfCaughtUp(void) {
     clusterRaftState *rs = RAFT_STATE();
-    if (!rs->slot_migration_pause || clusterIsAnySlotExportFailoverGranted()) return;
+    if (!rs->slot_change_pending || clusterIsAnySlotExportFailoverGranted()) return;
     if (!clusterRaftLogFullyApplied()) return;
-    rs->slot_migration_pause = 0;
+    rs->slot_change_pending = 0;
 }
 
 /* True if there are any nodes other than myself without the JOINING flag. */
@@ -2072,7 +2075,7 @@ static int clusterRaftProcessAppendEntries(clusterLink *link, int argc, sds *arg
         if (rs->commit_index > raftLogLastIndex()) rs->commit_index = raftLogLastIndex();
     }
     raftApplyCommitted();
-    clusterRaftReleaseSlotMigrationPauseIfCaughtUp();
+    clusterRaftReleaseSlotChangePendingIfCaughtUp();
 
     /* Forgotten: this link is unbound. Do not ACK. */
     if (!link->node) {
@@ -2955,7 +2958,7 @@ static void clusterRaftCron(void) {
 
     clusterRaftAssertLearnerRole();
     /* Synchronize the handoff hold after slot-migration timeout handling. */
-    clusterRaftSyncSlotMigrationPause();
+    clusterRaftSyncSlotChangePending();
 
     clusterRaftReapJoiningStubs();
 
@@ -3176,7 +3179,7 @@ static void clusterRaftCheckSlotCoverage(void) {
 static void clusterRaftBeforeSleep(bool blocked) {
     UNUSED(blocked);
     clusterRaftState *rs = RAFT_STATE();
-    clusterRaftSyncSlotMigrationPause();
+    clusterRaftSyncSlotChangePending();
 
     if (rs->todo_connect_nodes) {
         rs->todo_connect_nodes = 0;

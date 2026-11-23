@@ -111,6 +111,27 @@ start_multiple_servers 2 {overrides {cluster-enabled yes cluster-protocol raft}}
     }
 }
 
+start_multiple_servers 2 {overrides {cluster-enabled yes cluster-protocol raft}} {
+    test "Raft MEET: both nodes see each other as primary" {
+        set r0 [srv 0 client]
+        set r1 [srv -1 client]
+        set r0_id [$r0 CLUSTER MYID]
+        set r1_id [$r1 CLUSTER MYID]
+
+        # r0 adds r1 through its own MEET handshake, and r1 adds r0 from the
+        # incoming HELLO. Both ways must end with the master flag.
+        $r0 CLUSTER MEET [srv -1 host] [srv -1 port]
+        raft_add_voter $r0 $r1_id
+
+        wait_for_condition 50 100 {
+            [raft_node_has_flag $r0 $r1_id master] &&
+            [raft_node_has_flag $r1 $r0_id master]
+        } else {
+            fail "Missing master flag: [raft_cluster_nodes_line $r0 $r1_id] / [raft_cluster_nodes_line $r1 $r0_id]"
+        }
+    }
+}
+
 start_multiple_servers 4 {overrides {cluster-enabled yes cluster-protocol raft}} {
     test "Raft MEET: merging two clusters is rejected" {
         # Form two separate 2-node clusters.

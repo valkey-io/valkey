@@ -120,6 +120,10 @@ typedef struct clusterBusType {
      * to the callback, which is called when the change is applied. */
     void (*slotChange)(slotRange *ranges, int numranges, clusterNode *target, void *ctx, void (*callback)(void *ctx, const char *error));
 
+    /* Keep the migration write pause while a handoff is unresolved, even if
+     * its export job has finished. If NULL, only migration jobs hold it. */
+    bool (*shouldHoldSlotMigrationPause)(void);
+
     /* Clean up any protocol-specific manual failover state. Called when the
      * node's role changes and any in-progress manual failover state is no
      * longer relevant. */

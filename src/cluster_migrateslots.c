@@ -5,6 +5,7 @@
  */
 
 #include "cluster_migrateslots.h"
+#include "cluster_bus.h"
 #include "bio.h"
 #include "io_threads.h"
 #include "module.h"
@@ -124,7 +125,6 @@ static sds generateSlotMigrationJobDescription(slotMigrationJob *job, clusterNod
 static slotMigrationJob *clusterLookupMigrationJob(sds name);
 static sds generateSyncSlotsEstablishCommand(slotMigrationJob *job);
 static void clusterCleanupSlotMigrationLog(size_t max_len);
-static void slotExportTryUnpause(void);
 
 /* Create an empty list of slot ranges. */
 list *createSlotRangeList(void) {
@@ -1933,12 +1933,10 @@ int checkSlotExportOwnership(slotMigrationJob *job, bool *migration_done) {
 }
 
 /* Called within topology updates to update any slot exports immediately
- * when the ownership changes. Will unpause if all paused slot migration jobs
- * are now done. */
+ * when ownership changes, then try to release the write pause. */
 void clusterUpdateSlotExportsOnOwnershipChange(void) {
     listNode *ln;
     listIter li;
-    int paused = 0;
     listRewind(server.cluster->slot_migration_jobs, &li);
     while ((ln = listNext(&li))) {
         slotMigrationJob *job = (slotMigrationJob *)ln->value;
@@ -1950,13 +1948,8 @@ void clusterUpdateSlotExportsOnOwnershipChange(void) {
         } else if (migration_done) {
             finishSlotMigrationJob(job, SLOT_MIGRATION_JOB_SUCCESS, NULL);
         }
-        if (job->mf_end) {
-            paused++;
-        }
     }
-    if (!paused && getPausedActionsWithPurpose(PAUSE_DURING_SLOT_MIGRATION)) {
-        unpauseActions(PAUSE_DURING_SLOT_MIGRATION);
-    }
+    slotExportTryUnpause();
 }
 
 bool clusterIsAnySlotExporting(void) {
@@ -2498,7 +2491,7 @@ void finishSlotMigrationJob(slotMigrationJob *job,
                             char *message) {
     updateSlotMigrationJobStatusMessage(job, message);
     if (job->type == SLOT_MIGRATION_EXPORT) {
-        /* If we finish the export, we should not remain paused */
+        /* This job no longer needs a pause. */
         job->mf_end = 0;
         slotExportTryUnpause();
     }
@@ -2725,8 +2718,10 @@ void clusterSlotMigrationCron(void) {
     slotExportTryUnpause();
 }
 
-static void slotExportTryUnpause(void) {
+void slotExportTryUnpause(void) {
     if (getPausedActionsWithPurpose(PAUSE_DURING_SLOT_MIGRATION) == 0) return;
+    if (clusterCurrentBus->shouldHoldSlotMigrationPause &&
+        clusterCurrentBus->shouldHoldSlotMigrationPause()) return;
     listNode *ln;
     listIter li;
     listRewind(server.cluster->slot_migration_jobs, &li);

@@ -458,12 +458,16 @@ static int clusterRaftQuorum(void) {
 }
 
 static void clusterRaftHoldSlotMigrationPause(void) {
-    pauseActions(PAUSE_DURING_SLOT_OWNERSHIP_CHANGE, LLONG_MAX, PAUSE_ACTIONS_CLIENT_WRITE_SET);
+    pauseActions(PAUSE_DURING_SLOT_MIGRATION, LLONG_MAX, PAUSE_ACTIONS_CLIENT_WRITE_SET);
+}
+
+static bool clusterRaftShouldHoldSlotMigrationPause(void) {
+    return RAFT_STATE()->slot_migration_pause;
 }
 
 static void clusterRaftDropSlotMigrationPause(void) {
     RAFT_STATE()->slot_migration_pause = 0;
-    unpauseActions(PAUSE_DURING_SLOT_OWNERSHIP_CHANGE);
+    slotExportTryUnpause();
 }
 
 static int clusterRaftLogFullyApplied(void) {
@@ -471,7 +475,7 @@ static int clusterRaftLogFullyApplied(void) {
     return rs->last_applied >= raftLogLastIndex();
 }
 
-/* Keep a separate pause until SLOT_CHANGE is applied, so export timeout or
+/* Keep writes paused until SLOT_CHANGE is applied, so export timeout or
  * cancellation cannot let through writes that applying the change drops.
  * Arm only at FAILOVER-GRANTED: earlier pauses cannot be followed by a
  * proposal, and a sibling still snapshotting is not a granted handoff. */
@@ -5021,6 +5025,7 @@ clusterBusType clusterRaftBus = {
     .initNodeData = clusterRaftInitNodeData,
     .freeNodeData = clusterRaftFreeNodeData,
     .slotChange = clusterRaftSlotChange,
+    .shouldHoldSlotMigrationPause = clusterRaftShouldHoldSlotMigrationPause,
     .cancelManualFailover = clusterRaftCancelManualFailover,
     .cancelAutomaticFailover = clusterRaftCancelAutomaticFailover,
     .forgetNode = clusterRaftForgetNode,

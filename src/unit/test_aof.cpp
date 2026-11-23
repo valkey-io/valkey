@@ -6,7 +6,6 @@
 
 #include "generated_wrappers.hpp"
 
-#include <atomic>
 #include <cerrno>
 #include <cstdio>
 #include <cstdlib>
@@ -223,24 +222,28 @@ class AofBioRecoveryTest : public ::testing::Test {
         bioKillThreads();
     }
 
-    struct ScopedFd {
-        int fd;
-        explicit ScopedFd(int f) :
-            fd(f) {
+    int open_fds[8];
+    int num_open_fds = 0;
+
+    int trackFd(int fd) {
+        if (fd >= 0 && num_open_fds < 8) {
+            open_fds[num_open_fds++] = fd;
         }
-        ~ScopedFd() {
-            if (fd >= 0) close(fd);
+        return fd;
+    }
+
+    int releaseTrackedFd(int fd) {
+        for (int i = 0; i < num_open_fds; i++) {
+            if (open_fds[i] == fd) {
+                open_fds[i] = open_fds[--num_open_fds];
+                break;
+            }
         }
-        int release() {
-            int f = fd;
-            fd = -1;
-            return f;
-        }
-        ScopedFd(const ScopedFd &) = delete;
-        ScopedFd &operator=(const ScopedFd &) = delete;
-    };
+        return fd;
+    }
 
     void SetUp() override {
+        num_open_fds = 0;
         orig_cwd[0] = 0;
         ASSERT_NE(getcwd(orig_cwd, sizeof(orig_cwd)), nullptr);
         snprintf(tmpdir, sizeof(tmpdir), "/tmp/valkey_aof_unit_XXXXXX");
@@ -284,6 +287,10 @@ class AofBioRecoveryTest : public ::testing::Test {
         bioDrainWorker(BIO_AOF_FSYNC);
         bioDrainWorker(BIO_CLOSE_AOF);
         bioDrainWorker(BIO_CLOSE_FILE);
+        for (int i = 0; i < num_open_fds; i++) {
+            close(open_fds[i]);
+        }
+        num_open_fds = 0;
         if (server.aof_fd != -1) {
             close(server.aof_fd);
             server.aof_fd = -1;
@@ -327,22 +334,19 @@ class AofBioRecoveryTest : public ::testing::Test {
 
     void initAofDirAndOpen() {
         ASSERT_EQ(mkdir("appendonlydir", 0755), 0);
-        {
-            ScopedFd bfd(createTempFile("appendonlydir/appendonly.aof.1.base.rdb"));
-            ASSERT_GE(bfd.fd, 0);
-        }
-        {
-            ScopedFd ifd(createTempFile("appendonlydir/appendonly.aof.1.incr.aof"));
-            ASSERT_GE(ifd.fd, 0);
-        }
-        {
-            ScopedFd mfd(open("appendonlydir/appendonly.aof.manifest", O_WRONLY | O_CREAT | O_TRUNC, 0644));
-            ASSERT_GE(mfd.fd, 0);
-            const char manifest[] =
-                "file appendonly.aof.1.base.rdb seq 1 type b\n"
-                "file appendonly.aof.1.incr.aof seq 1 type i\n";
-            ASSERT_EQ(write(mfd.fd, manifest, sizeof(manifest) - 1), (ssize_t)(sizeof(manifest) - 1));
-        }
+        int bfd = trackFd(createTempFile("appendonlydir/appendonly.aof.1.base.rdb"));
+        ASSERT_GE(bfd, 0);
+        close(releaseTrackedFd(bfd));
+        int ifd = trackFd(createTempFile("appendonlydir/appendonly.aof.1.incr.aof"));
+        ASSERT_GE(ifd, 0);
+        close(releaseTrackedFd(ifd));
+        int mfd = trackFd(open("appendonlydir/appendonly.aof.manifest", O_WRONLY | O_CREAT | O_TRUNC, 0644));
+        ASSERT_GE(mfd, 0);
+        const char manifest[] =
+            "file appendonly.aof.1.base.rdb seq 1 type b\n"
+            "file appendonly.aof.1.incr.aof seq 1 type i\n";
+        ASSERT_EQ(write(mfd, manifest, sizeof(manifest) - 1), (ssize_t)(sizeof(manifest) - 1));
+        close(releaseTrackedFd(mfd));
         aofLoadManifestFromDisk();
         aofOpenIfNeededOnServerStart();
         ASSERT_GE(server.aof_fd, 0);
@@ -351,9 +355,10 @@ class AofBioRecoveryTest : public ::testing::Test {
     void createRewriteBaseTempFile(pid_t pid) {
         char tmpbase[128];
         snprintf(tmpbase, sizeof(tmpbase), "temp-rewriteaof-bg-%d.aof", (int)pid);
-        ScopedFd bfd(createTempFile(tmpbase));
-        ASSERT_GE(bfd.fd, 0);
-        ASSERT_EQ(fsync(bfd.fd), 0);
+        int bfd = trackFd(createTempFile(tmpbase));
+        ASSERT_GE(bfd, 0);
+        ASSERT_EQ(fsync(bfd), 0);
+        close(releaseTrackedFd(bfd));
     }
 };
 
@@ -598,19 +603,19 @@ TEST_F(AofBioRecoveryTest, AppendfsyncAlwaysDoesNotPublishAcrossPendingOrFailedB
     EXPECT_EQ(server.fsynced_reploff_pending, 100);
 }
 
-static std::atomic<int> g_eio_fsync_calls{0};
+static int g_eio_fsync_calls = 0;
 
 static int failAofFsyncWithEio(int) {
-    g_eio_fsync_calls.fetch_add(1, std::memory_order_relaxed);
+    g_eio_fsync_calls++;
     errno = EIO;
     return -1;
 }
 
 TEST_F(AofBioRecoveryTest, BioAofFsyncEioLatchesGenerationAndSuppressesSubsequentFsyncs) {
-    ScopedFd fd(createTempFile("eio_fsync.incr.aof"));
-    ASSERT_GE(fd.fd, 0);
-    ScopedFd close_fd(dup(fd.fd));
-    ASSERT_GE(close_fd.fd, 0);
+    int fd = trackFd(createTempFile("eio_fsync.incr.aof"));
+    ASSERT_GE(fd, 0);
+    int close_fd = trackFd(dup(fd));
+    ASSERT_GE(close_fd, 0);
 
     server.aof_bio_fsync_status = C_OK;
     server.aof_bio_fsync_errno = 0;
@@ -618,27 +623,27 @@ TEST_F(AofBioRecoveryTest, BioAofFsyncEioLatchesGenerationAndSuppressesSubsequen
     server.aof_fd_gen = 7;
     server.fsynced_reploff = 200;
     server.fsynced_reploff_pending = 200;
-    g_eio_fsync_calls.store(0, std::memory_order_relaxed);
+    g_eio_fsync_calls = 0;
 
     {
         MockValkey mock;
         EXPECT_CALL(mock, aofFsync(::testing::_)).WillRepeatedly(::testing::Invoke(failAofFsyncWithEio));
 
-        bioCreateFsyncJob(fd.fd, 500, 0);
+        bioCreateFsyncJob(fd, 500, 0);
         bioDrainWorker(BIO_AOF_FSYNC);
 
         EXPECT_EQ(server.aof_bio_fsync_status, C_ERR);
         EXPECT_EQ(server.aof_bio_fsync_errno, EIO);
         EXPECT_EQ(server.aof_bio_fsync_error_gen, 7ULL);
         EXPECT_EQ(server.fsynced_reploff_pending, 200);
-        EXPECT_EQ(g_eio_fsync_calls.load(std::memory_order_relaxed), 1);
+        EXPECT_EQ(g_eio_fsync_calls, 1);
 
-        bioCreateFsyncJob(fd.fd, 600, 0);
-        bioCreateCloseAofJob(close_fd.release(), 650, 0);
+        bioCreateFsyncJob(fd, 600, 0);
+        bioCreateCloseAofJob(releaseTrackedFd(close_fd), 650, 0);
         bioDrainWorker(BIO_AOF_FSYNC);
         bioDrainWorker(BIO_CLOSE_AOF);
 
-        EXPECT_EQ(g_eio_fsync_calls.load(std::memory_order_relaxed), 1);
+        EXPECT_EQ(g_eio_fsync_calls, 1);
         EXPECT_EQ(server.aof_bio_fsync_status, C_ERR);
         EXPECT_EQ(server.aof_bio_fsync_error_gen, 7ULL);
         EXPECT_EQ(server.fsynced_reploff_pending, 200);
@@ -646,10 +651,10 @@ TEST_F(AofBioRecoveryTest, BioAofFsyncEioLatchesGenerationAndSuppressesSubsequen
 }
 
 TEST_F(AofBioRecoveryTest, BioCloseAofEioLatchesGenerationAndSuppressesSubsequentFsyncs) {
-    ScopedFd close_fd(createTempFile("eio_close.incr.aof"));
-    ASSERT_GE(close_fd.fd, 0);
-    ScopedFd next_fd(createTempFile("eio_next.incr.aof"));
-    ASSERT_GE(next_fd.fd, 0);
+    int close_fd = trackFd(createTempFile("eio_close.incr.aof"));
+    ASSERT_GE(close_fd, 0);
+    int next_fd = trackFd(createTempFile("eio_next.incr.aof"));
+    ASSERT_GE(next_fd, 0);
 
     server.aof_bio_fsync_status = C_OK;
     server.aof_bio_fsync_errno = 0;
@@ -657,26 +662,26 @@ TEST_F(AofBioRecoveryTest, BioCloseAofEioLatchesGenerationAndSuppressesSubsequen
     server.aof_fd_gen = 9;
     server.fsynced_reploff = 300;
     server.fsynced_reploff_pending = 300;
-    g_eio_fsync_calls.store(0, std::memory_order_relaxed);
+    g_eio_fsync_calls = 0;
 
     {
         MockValkey mock;
         EXPECT_CALL(mock, aofFsync(::testing::_)).WillRepeatedly(::testing::Invoke(failAofFsyncWithEio));
 
-        bioCreateCloseAofJob(close_fd.release(), 800, 0);
+        bioCreateCloseAofJob(releaseTrackedFd(close_fd), 800, 0);
         bioDrainWorker(BIO_CLOSE_AOF);
 
         EXPECT_EQ(server.aof_bio_fsync_status, C_ERR);
         EXPECT_EQ(server.aof_bio_fsync_errno, EIO);
         EXPECT_EQ(server.aof_bio_fsync_error_gen, 9ULL);
         EXPECT_EQ(server.fsynced_reploff_pending, 300);
-        EXPECT_EQ(g_eio_fsync_calls.load(std::memory_order_relaxed), 1);
+        EXPECT_EQ(g_eio_fsync_calls, 1);
 
         server.aof_fd_gen = 10;
-        bioCreateFsyncJob(next_fd.fd, 900, 0);
+        bioCreateFsyncJob(next_fd, 900, 0);
         bioDrainWorker(BIO_AOF_FSYNC);
 
-        EXPECT_EQ(g_eio_fsync_calls.load(std::memory_order_relaxed), 1);
+        EXPECT_EQ(g_eio_fsync_calls, 1);
         EXPECT_EQ(server.aof_bio_fsync_status, C_ERR);
         EXPECT_EQ(server.aof_bio_fsync_error_gen, 9ULL);
         EXPECT_EQ(server.fsynced_reploff_pending, 300);

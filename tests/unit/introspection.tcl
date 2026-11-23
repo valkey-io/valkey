@@ -1938,6 +1938,15 @@ start_server {tags {"introspection"}} {
         }
     } {} {external:skip}
 
+    test {config file - relative include after a failed dir is fatal} {
+        set tmp [file normalize [tmpdir include_relative]]
+        set bad [file join $tmp nonexistent]
+        set conf [file normalize [tmpfile override.conf]]
+        write_file $conf "dir $bad\ninclude conf.d/*.conf\ndir $tmp\nport 0\n"
+        catch {exec $::VALKEY_SERVER_BIN $conf} err
+        assert_match "*Can't include a relative path after failing to chdir to '$bad'*" $err
+    } {} {external:skip}
+
     test {config file - save after include replaces the included rules} {
         set base [file normalize [tmpfile base.conf]]
         write_file $base "save 900 1\n"

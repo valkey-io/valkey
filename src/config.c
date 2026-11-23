@@ -594,6 +594,14 @@ void loadServerConfigFromString(sds config) {
 
         /* Execute config directives */
         if (!strcasecmp(argv[0], "include") && argc == 2) {
+            /* A relative path would resolve against the directory we failed
+             * to leave, so it could load the wrong file or match nothing. */
+            if (pending_dir[0] != '\0' && argv[1][0] != '/') {
+                snprintf(buf, sizeof(buf), "Can't include a relative path after failing to chdir to '%s': %s",
+                         pending_dir, pending_dir_err);
+                err = buf;
+                goto loaderr;
+            }
             loadServerConfig(argv[1], 0, NULL);
         } else if (!strcasecmp(argv[0], "rename-command") && argc == 3) {
             struct serverCommand *cmd = lookupCommandBySds(argv[1]);

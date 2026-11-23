@@ -934,6 +934,49 @@ test "Raft proto: leader backs off next_index to the follower's last index on re
     }
 }
 
+test "Raft proto: successful AE_ACK continues catch-up without a heartbeat" {
+    # A learner ACK does not advance commit. After the leader already
+    # committed more log, the next AE used to wait for a heartbeat.
+    start_server {overrides {cluster-enabled yes cluster-protocol raft cluster-node-timeout 20000}} {
+        set fd [raft_join_fake_follower [string repeat "a" 40] [string repeat "b" 40]]
+
+        set last [raft_ack_until_idle $fd]
+
+        R 0 MULTI
+        for {set j 0} {$j < 10} {incr j} {
+            R 0 config set cluster-announce-hostname "tail-$j.com"
+        }
+        R 0 EXEC
+        set new_last [CI 0 cluster_raft_last_applied]
+        set tail [expr {$new_last - $last}]
+        assert_equal 10 $tail
+
+        # Drain the pipelined AEs, then reject to put the leader back in
+        # probing mode, where sending doesn't advance next_index.
+        while {![catch {raft_recv $fd 500}]} {}
+        set term [CI 0 cluster_raft_current_term]
+        raft_send $fd "AE_ACK $term 0 $last 0"
+        set reply [raft_recv $fd 1000]
+        assert_match "AE *" $reply
+        set fields [raft_ae_header $reply]
+        assert_equal $last [lindex $fields 3]
+        assert_equal $tail [lindex $fields 6]
+
+        # Report partial progress on the probe. The ACK must trigger the
+        # next AE, without waiting for a heartbeat or a new proposal.
+        raft_send $fd "AE_ACK $term 1 [expr {$last + 1}] 0"
+
+        # Heartbeat interval is election_timeout/10 (>= 2s here).
+        set reply [raft_recv $fd 1000]
+        assert_match "AE *" $reply
+        set fields [raft_ae_header $reply]
+        assert_equal [expr {$last + 1}] [lindex $fields 3]
+        assert_equal [expr {$tail - 1}] [lindex $fields 6]
+
+        close $fd
+    }
+}
+
 test "Raft proto: leader doesn't resend entries in flight" {
     # The leader drops a link without AE_ACKs after half the node timeout.
     start_server {overrides {cluster-enabled yes cluster-protocol raft cluster-node-timeout 5000}} {

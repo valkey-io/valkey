@@ -2083,6 +2083,7 @@ static int clusterRaftProcessAppendEntriesResponse(clusterLink *link, int argc, 
 
     if (success) {
         /* Follower accepted — update matchIndex/nextIndex. */
+        uint64_t prev_match = rd->match_index;
         rd->match_index = follower_last_index;
         if (!rd->replicating || rd->next_index < follower_last_index + 1)
             rd->next_index = follower_last_index + 1;
@@ -2130,6 +2131,13 @@ static int clusterRaftProcessAppendEntriesResponse(clusterLink *link, int argc, 
         /* If commit advanced, broadcast so followers learn the new commit. */
         if (rs->last_applied > prev_commit) {
             rs->todo_broadcast_ae = 1;
+        }
+        /* This ACK made progress and the peer is still behind: don't wait for a heartbeat. */
+        if (rs->role == RAFT_ROLE_LEADER && !rs->todo_broadcast_ae &&
+            !(node->flags & CLUSTER_NODE_JOINING) &&
+            follower_last_index > prev_match &&
+            rd->next_index <= raftLogLastIndex()) {
+            clusterRaftSendAppendEntries(node->link, node);
         }
     } else {
         /* Follower rejected — back off nextIndex, at most to just past its last entry. */

@@ -2335,6 +2335,9 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
         }
     } else if (rdbtype == RDB_TYPE_SET_2) {
         hashtable *dupSearchHashtable = NULL;
+        /* The listpack path searches every member read. The hashtable path finds
+         * a repeat in the set itself, so it only keeps the members it drops. */
+        bool search_all = false;
 
         if ((len = rdbLoadLen(rdb, NULL)) == RDB_LENERR) return NULL;
         if (len == 0) goto emptykey;
@@ -2352,6 +2355,7 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
             /* An expired member is dropped before it reaches the listpack, so the
              * duplicate search must see every member read. */
             dupSearchHashtable = hashtableCreate(&setHashtableType);
+            search_all = true;
         }
 
         long volatile_members = 0;
@@ -2372,7 +2376,7 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
                 return NULL;
             }
 
-            if (dupSearchHashtable) {
+            if (search_all) {
                 sds sdsele_dup = sdsdup(sdsele);
                 if (!hashtableAdd(dupSearchHashtable, sdsele_dup)) {
                     rdbReportCorruptRDB("Duplicate set members detected");
@@ -2386,6 +2390,19 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
 
             if (iAmPrimary() && !(rdbflags & RDBFLAGS_AOF_PREAMBLE) && now != 0 && itemexpiry != EXPIRY_NONE &&
                 itemexpiry < now) {
+                if (!search_all) {
+                    setTypeIgnoreTTL(o, true);
+                    bool seen = hashtableFind(objectGetVal(o), sdsele, NULL);
+                    setTypeIgnoreTTL(o, false);
+                    if (!dupSearchHashtable) dupSearchHashtable = hashtableCreate(&setHashtableType);
+                    if (seen || !hashtableAdd(dupSearchHashtable, sdsele)) {
+                        rdbReportCorruptRDB("Duplicate set members detected");
+                        sdsfree(sdsele);
+                        hashtableRelease(dupSearchHashtable);
+                        decrRefCount(o);
+                        return NULL;
+                    }
+                }
                 if ((rdbflags & RDBFLAGS_FEED_REPL) && server.repl_backlog) {
                     robj keyobj, memberobj;
                     initStaticStringObject(keyobj, key);
@@ -2396,7 +2413,7 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
                     argv[2] = &memberobj;
                     replicationFeedReplicas(dbid, argv, 3);
                 }
-                sdsfree(sdsele);
+                if (search_all) sdsfree(sdsele);
                 continue;
             }
 
@@ -2432,6 +2449,13 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
                 }
             }
 
+            if (!search_all && dupSearchHashtable && hashtableFind(dupSearchHashtable, sdsele, NULL)) {
+                rdbReportCorruptRDB("Duplicate set members detected");
+                sdsfree(sdsele);
+                hashtableRelease(dupSearchHashtable);
+                decrRefCount(o);
+                return NULL;
+            }
             smember *m = smemberCreate(sdsele, elelen, itemexpiry);
             sdsfree(sdsele);
             /* The volatile-set validator hides expired entries, so checkCandidateInBucket

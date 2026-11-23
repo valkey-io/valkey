@@ -2490,6 +2490,9 @@ static int clusterRaftProcessPreVoteResponse(clusterLink *link, int argc, sds *a
     /* argv: PRE_VOTE <term> <granted> */
     if (argc < 3) return 1;
 
+    /* Any reply shows that the peer is alive, see clusterRaftBecomeLeader(). */
+    if (link->node) RAFT_NODE(link->node)->last_ack_time = monotonicMs();
+
     clusterRaftState *rs = RAFT_STATE();
     uint64_t msg_term = strtoull(argv[1], NULL, 10);
     int granted = atoi(argv[2]);
@@ -2581,10 +2584,13 @@ static void clusterRaftBecomeLeader(void) {
         RAFT_NODE(peer)->pending_fail_change = 0;
         /* For the old leader, backdate last_ack_time to when we last
          * heard from it, so failure detection kicks in faster. This
-         * matters if the old leader is also a primary. 0 means never
-         * checked, so use now if we haven't heard from a leader. */
+         * matters if the old leader is also a primary. Its vote replies
+         * count too: if it voted for us, it's alive. 0 means never
+         * checked, so use now if we haven't heard from it. */
         if (memcmp(peer->name, old_leader, CLUSTER_NAMELEN) == 0) {
-            RAFT_NODE(peer)->last_ack_time = rs->last_leader_contact ? rs->last_leader_contact : monotonicMs();
+            mstime_t contact = rs->last_leader_contact;
+            if (RAFT_NODE(peer)->last_ack_time > contact) contact = RAFT_NODE(peer)->last_ack_time;
+            RAFT_NODE(peer)->last_ack_time = contact ? contact : monotonicMs();
         } else {
             RAFT_NODE(peer)->last_ack_time = monotonicMs();
         }
@@ -2602,6 +2608,9 @@ static void clusterRaftBecomeLeader(void) {
 static int clusterRaftProcessRequestVoteResponse(clusterLink *link, int argc, sds *argv) {
     /* argv: VOTE <term> <granted> */
     if (argc < 3) return 1;
+
+    /* Any reply shows that the peer is alive, see clusterRaftBecomeLeader(). */
+    if (link->node) RAFT_NODE(link->node)->last_ack_time = monotonicMs();
 
     clusterRaftState *rs = RAFT_STATE();
     uint64_t msg_term = strtoull(argv[1], NULL, 10);

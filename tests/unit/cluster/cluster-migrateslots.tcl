@@ -1493,8 +1493,12 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster network} overrides
             assert_match {*Unpaused before migration completed*} [dict get [get_migration_by_name 0 $jobname] message]
             assert_match {*Connection lost to source*} [dict get [get_migration_by_name 2 $jobname] message]
 
-            # Validate no longer paused
-            assert_match "none" [s -0 paused_reason]
+            # The migration cron releases the pause after the protocol hold ends.
+            wait_for_condition 100 10 {
+                [s -0 paused_reason] eq "none"
+            } else {
+                fail "Source remained paused after export timeout"
+            }
 
             # Cleanup for the next test
             set_debug_prevent_failover 0
@@ -1521,7 +1525,11 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster network} overrides
             wait_for_migration_field 0 $jobname state cancelled
             wait_for_migration_field 2 $jobname state failed
 
-            assert_match "none" [s -0 paused_reason]
+            wait_for_condition 100 10 {
+                [s -0 paused_reason] eq "none"
+            } else {
+                fail "Source remained paused after export cancellation"
+            }
 
             # Cleanup for the next test
             set_debug_prevent_failover 0

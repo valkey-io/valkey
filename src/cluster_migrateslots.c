@@ -125,6 +125,7 @@ static sds generateSlotMigrationJobDescription(slotMigrationJob *job, clusterNod
 static slotMigrationJob *clusterLookupMigrationJob(sds name);
 static sds generateSyncSlotsEstablishCommand(slotMigrationJob *job);
 static void clusterCleanupSlotMigrationLog(size_t max_len);
+static void slotExportTryUnpause(void);
 
 /* Create an empty list of slot ranges. */
 list *createSlotRangeList(void) {
@@ -1653,15 +1654,17 @@ void clusterCommandSyncSlotsRequestFailover(client *c) {
         return;
     }
 
-    /* Renew our pause to help ensure we don't unpause before the gossip is
-     * propagated. If the existing pause is longer than this, it will be
-     * honored */
+    /* Allow time for ownership propagation. A protocol hold may outlive the
+     * job's timeout, so keep mf_end separate from the actual write pause. */
     mstime_t prop_deadline = mstime() + CLUSTER_OPERATION_TIMEOUT;
     if (c->slot_migration_job->mf_end < prop_deadline) {
         c->slot_migration_job->mf_end = prop_deadline;
-        pauseActions(PAUSE_DURING_SLOT_MIGRATION, prop_deadline,
-                     PAUSE_ACTIONS_CLIENT_WRITE_SET);
     }
+    mstime_t pause_end = clusterCurrentBus->isSlotChangePending
+                             ? LLONG_MAX
+                             : c->slot_migration_job->mf_end;
+    pauseActions(PAUSE_DURING_SLOT_MIGRATION, pause_end,
+                 PAUSE_ACTIONS_CLIENT_WRITE_SET);
 
     sendSyncSlotsMessage(c->slot_migration_job, "FAILOVER-GRANTED");
     updateSlotMigrationJobState(c->slot_migration_job,
@@ -2718,10 +2721,10 @@ void clusterSlotMigrationCron(void) {
     slotExportTryUnpause();
 }
 
-void slotExportTryUnpause(void) {
+static void slotExportTryUnpause(void) {
     if (getPausedActionsWithPurpose(PAUSE_DURING_SLOT_MIGRATION) == 0) return;
-    if (clusterCurrentBus->shouldHoldSlotMigrationPause &&
-        clusterCurrentBus->shouldHoldSlotMigrationPause()) return;
+    if (clusterCurrentBus->isSlotChangePending &&
+        clusterCurrentBus->isSlotChangePending()) return;
     listNode *ln;
     listIter li;
     listRewind(server.cluster->slot_migration_jobs, &li);

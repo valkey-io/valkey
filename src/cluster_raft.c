@@ -457,17 +457,8 @@ static int clusterRaftQuorum(void) {
     return server.cluster->size / 2 + 1;
 }
 
-static void clusterRaftHoldSlotMigrationPause(void) {
-    pauseActions(PAUSE_DURING_SLOT_MIGRATION, LLONG_MAX, PAUSE_ACTIONS_CLIENT_WRITE_SET);
-}
-
-static bool clusterRaftShouldHoldSlotMigrationPause(void) {
+static bool clusterRaftIsSlotChangePending(void) {
     return RAFT_STATE()->slot_migration_pause;
-}
-
-static void clusterRaftDropSlotMigrationPause(void) {
-    RAFT_STATE()->slot_migration_pause = 0;
-    slotExportTryUnpause();
 }
 
 static int clusterRaftLogFullyApplied(void) {
@@ -475,8 +466,8 @@ static int clusterRaftLogFullyApplied(void) {
     return rs->last_applied >= raftLogLastIndex();
 }
 
-/* Keep writes paused until SLOT_CHANGE is applied, so export timeout or
- * cancellation cannot let through writes that applying the change drops.
+/* Track the protocol hold; the migration code owns the actual write pause.
+ * Export timeout or cancellation must not clear an unresolved handoff.
  * Arm only at FAILOVER-GRANTED: earlier pauses cannot be followed by a
  * proposal, and a sibling still snapshotting is not a granted handoff. */
 static void clusterRaftSyncSlotMigrationPause(void) {
@@ -486,26 +477,22 @@ static void clusterRaftSyncSlotMigrationPause(void) {
     if (!rs->slot_migration_pause) return;
     if (!clusterIsAnySlotExportFailoverGranted() && rs->role == RAFT_ROLE_LEADER && clusterRaftLogFullyApplied() &&
         clusterRaftLeaderHasFreshQuorum(monotonicMs())) {
-        clusterRaftDropSlotMigrationPause();
-        return;
+        rs->slot_migration_pause = 0;
     }
-    clusterRaftHoldSlotMigrationPause();
 }
 
 static void clusterRaftOnSlotOwnershipApplied(void) {
     clusterUpdateSlotExportsOnOwnershipChange();
     clusterUpdateSlotImportsOnOwnershipChange();
     if (RAFT_STATE()->slot_migration_pause && !clusterIsAnySlotExportFailoverGranted() && clusterRaftLogFullyApplied())
-        clusterRaftDropSlotMigrationPause();
-    else if (RAFT_STATE()->slot_migration_pause)
-        clusterRaftHoldSlotMigrationPause();
+        RAFT_STATE()->slot_migration_pause = 0;
 }
 
 static void clusterRaftReleaseSlotMigrationPauseIfCaughtUp(void) {
     clusterRaftState *rs = RAFT_STATE();
     if (!rs->slot_migration_pause || clusterIsAnySlotExportFailoverGranted()) return;
     if (!clusterRaftLogFullyApplied()) return;
-    clusterRaftDropSlotMigrationPause();
+    rs->slot_migration_pause = 0;
 }
 
 /* True if there are any nodes other than myself without the JOINING flag. */
@@ -5025,7 +5012,7 @@ clusterBusType clusterRaftBus = {
     .initNodeData = clusterRaftInitNodeData,
     .freeNodeData = clusterRaftFreeNodeData,
     .slotChange = clusterRaftSlotChange,
-    .shouldHoldSlotMigrationPause = clusterRaftShouldHoldSlotMigrationPause,
+    .isSlotChangePending = clusterRaftIsSlotChangePending,
     .cancelManualFailover = clusterRaftCancelManualFailover,
     .cancelAutomaticFailover = clusterRaftCancelAutomaticFailover,
     .forgetNode = clusterRaftForgetNode,

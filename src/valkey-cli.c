@@ -2800,7 +2800,15 @@ static int parseOptions(int argc, char **argv) {
                 i += wargc;
             }
         } else if (!strcmp(argv[i], "--cluster-slots") && !lastarg) {
-            config.cluster_manager_command.slots = atoi(argv[++i]);
+            const char *arg = argv[++i];
+            char *end;
+            errno = 0;
+            long slots = strtol(arg, &end, 10);
+            if (arg == end || *end != '\0' || errno == ERANGE || slots < 1 || slots > CLUSTER_MANAGER_SLOTS) {
+                fprintf(stderr, "Invalid --cluster-slots: expected an integer between 1 and %d.\n", CLUSTER_MANAGER_SLOTS);
+                exit(1);
+            }
+            config.cluster_manager_command.slots = (int)slots;
         } else if (!strcmp(argv[i], "--cluster-timeout") && !lastarg) {
             config.cluster_manager_command.timeout = atoi(argv[++i]);
         } else if (!strcmp(argv[i], "--cluster-pipeline") && !lastarg) {

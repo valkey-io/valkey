@@ -664,6 +664,9 @@ void loadServerConfigFromString(sds config) {
     }
 
     if (--config_load_depth > 0) {
+        /* Keep the existing reset so `save` lines after an include still
+         * replace the included rules. */
+        reading_config_file = 0;
         sdsfreesplitres(lines, totlines);
         return;
     }
@@ -3047,7 +3050,7 @@ static int setConfigDirOption(standardConfig *config, sds *argv, int argc, const
         return 0;
     }
     if (chdir(argv[0]) == -1) {
-        if (reading_config_file) {
+        if (config_load_depth > 0) {
             snprintf(pending_dir, sizeof(pending_dir), "%s", argv[0]);
             snprintf(pending_dir_err, sizeof(pending_dir_err), "%s", strerror(errno));
             return 1;

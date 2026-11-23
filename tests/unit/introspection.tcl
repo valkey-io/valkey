@@ -1938,6 +1938,14 @@ start_server {tags {"introspection"}} {
         }
     } {} {external:skip}
 
+    test {config file - save after include replaces the included rules} {
+        set base [file normalize [tmpfile base.conf]]
+        write_file $base "save 900 1\n"
+        start_server [list config_lines [list include $base save "60 100"]] {
+            assert_equal {save {60 100}} [r config get save]
+        }
+    } {} {external:skip}
+
     test {config file - non-existent dir as the final value is fatal} {
         set base [file normalize [tmpfile base.conf]]
         set tmp [file normalize [tmpdir include_fatal]]

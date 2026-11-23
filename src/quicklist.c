@@ -113,39 +113,36 @@ static quicklistNode *_quicklistMergeNodes(quicklist *quicklist, quicklistNode *
 /* Memory accounting.
  *
  * quicklist->entries_alloc_bytes is the sum of the allocated size of the entry
- * of every node that is linked in the list. The allocated size is computed from
- * the node state, so an update does not need to ask the allocator:
+ * of every node that is linked in the list.
+ *
+ * With jemalloc the allocated size is computed from the node state, so an
+ * update does not need to ask the allocator:
  * - A RAW entry (packed listpack or plain value) is allocated with exactly
  *   node->sz bytes. The listpack code always reallocs to lpBytes(), and
  *   quicklistNodeUpdateSz() keeps node->sz equal to it.
  * - An LZF entry is allocated with sizeof(quicklistLZF) + lzf->sz bytes
  *   (here node->sz is the uncompressed size).
+ * je_nallocx() turns that byte count into the size class, which is exactly
+ * what zmalloc_size() returns for such a block. It does not look up the
+ * pointer, so it is cheap. Other allocators have no such call, and some keep
+ * a bigger block when they shrink one, so there we ask zmalloc_size().
  *
  * A node's entry is added when the node is linked (__quicklistInsertNode())
- * and removed when it is unlinked (__quicklistDelNode()). A change to the
- * listpack of a linked node is counted in quicklistLinkedNodeUpdateSz(): at
- * that point node->sz still holds the old size, so no "before" read is
- * needed. Nodes that are not linked yet are not tracked until they are
- * inserted. */
+ * and removed when it is unlinked (__quicklistDelNode()). Each change to the
+ * entry of a linked node reads quicklistNodeEntryAllocSize() before the change
+ * and updates the counter after it. Nodes that are not linked yet are not
+ * tracked until they are inserted. */
 
-/* Usable size of a block of 'bytes' bytes. With jemalloc this is the size
- * class of the request (je_nallocx() does not look up any pointer), which is
- * exactly what zmalloc_size() returns for such a block. Other allocators have
- * no such call, so we count the requested bytes. */
-static inline size_t quicklistAllocSizeFor(size_t bytes) {
-    if (bytes == 0) return 0;
-#if defined(USE_JEMALLOC)
-    return je_nallocx(bytes, 0);
-#else
-    return bytes;
-#endif
-}
-
-/* Allocated size of the entry of 'node', computed from the node state. */
+/* Allocated size of the entry of 'node'. */
 static inline size_t quicklistNodeEntryAllocSize(const quicklistNode *node) {
-    if (node->encoding == QUICKLIST_NODE_ENCODING_LZF)
-        return quicklistAllocSizeFor(sizeof(quicklistLZF) + ((const quicklistLZF *)node->entry)->sz);
-    return quicklistAllocSizeFor(node->sz);
+#if defined(USE_JEMALLOC)
+    size_t bytes = node->encoding == QUICKLIST_NODE_ENCODING_LZF
+                       ? sizeof(quicklistLZF) + ((const quicklistLZF *)node->entry)->sz
+                       : node->sz;
+    return bytes ? je_nallocx(bytes, 0) : 0;
+#else
+    return node->entry ? zmalloc_size(node->entry) : 0;
+#endif
 }
 
 /* Update the counter after the entry of a linked node was replaced (compress,
@@ -178,19 +175,14 @@ size_t quicklistMemUsage(const quicklist *ql) {
     return zmalloc_size((void *)ql) + ql->len * quicklistNodeAllocSize() + ql->entries_alloc_bytes;
 }
 
-/* Same as quicklistMemUsage(), but walks all nodes. O(N), for debug asserts
- * and tests only. With jemalloc it asks the allocator for the real size of
- * each entry, so it also checks that the size computed from the node state is
+/* Same as quicklistMemUsage(), but walks all nodes and asks the allocator for
+ * the real size of each entry. O(N), for debug asserts and tests only. With
+ * jemalloc this also checks that the sizes computed from the node state are
  * right. */
 size_t quicklistMemUsageDebug(const quicklist *ql) {
     size_t size = zmalloc_size((void *)ql);
-    for (const quicklistNode *node = ql->head; node; node = node->next) {
-#if defined(USE_JEMALLOC)
+    for (const quicklistNode *node = ql->head; node; node = node->next)
         size += quicklistNodeAllocSize() + zmalloc_size(node->entry);
-#else
-        size += quicklistNodeAllocSize() + quicklistNodeEntryAllocSize(node);
-#endif
-    }
     return size;
 }
 
@@ -647,13 +639,11 @@ static int _quicklistNodeAllowMerge(const quicklistNode *a, const quicklistNode 
     } while (0)
 
 /* Refresh node->sz after the listpack of a linked node changed, and add the
- * change of its allocated size to the counter. node->sz still holds the old
- * size here, so we do not need to read it before the change. */
-static inline void quicklistLinkedNodeUpdateSz(quicklist *quicklist, quicklistNode *node) {
-    size_t before = quicklistNodeEntryAllocSize(node);
+ * change of its allocated size to the counter. 'before' is
+ * quicklistNodeEntryAllocSize() of the node before the change. */
+static inline void quicklistLinkedNodeUpdateSz(quicklist *quicklist, quicklistNode *node, size_t before) {
     node->sz = lpBytes(node->entry);
-    quicklist->entries_alloc_bytes -= before;
-    quicklist->entries_alloc_bytes += quicklistNodeEntryAllocSize(node);
+    quicklistTrackEntry(quicklist, node, before);
 }
 
 static quicklistNode *__quicklistCreateNode(int container, void *value, size_t sz) {
@@ -691,8 +681,9 @@ int quicklistPushHead(quicklist *quicklist, void *value, size_t sz) {
     }
 
     if (likely(_quicklistNodeAllowInsert(quicklist->head, quicklist->fill, sz))) {
+        size_t before = quicklistNodeEntryAllocSize(quicklist->head);
         quicklist->head->entry = lpPrepend(quicklist->head->entry, value, sz);
-        quicklistLinkedNodeUpdateSz(quicklist, quicklist->head);
+        quicklistLinkedNodeUpdateSz(quicklist, quicklist->head, before);
     } else {
         quicklistNode *node = quicklistCreateNode();
         node->entry = lpPrepend(lpNew(0), value, sz);
@@ -717,8 +708,9 @@ int quicklistPushTail(quicklist *quicklist, void *value, size_t sz) {
     }
 
     if (likely(_quicklistNodeAllowInsert(quicklist->tail, quicklist->fill, sz))) {
+        size_t before = quicklistNodeEntryAllocSize(quicklist->tail);
         quicklist->tail->entry = lpAppend(quicklist->tail->entry, value, sz);
-        quicklistLinkedNodeUpdateSz(quicklist, quicklist->tail);
+        quicklistLinkedNodeUpdateSz(quicklist, quicklist->tail, before);
     } else {
         quicklistNode *node = quicklistCreateNode();
         node->entry = lpAppend(lpNew(0), value, sz);
@@ -737,8 +729,9 @@ int quicklistPushTail(quicklist *quicklist, void *value, size_t sz) {
 void quicklistAppendListpack(quicklist *quicklist, unsigned char *zl) {
     quicklistNode *node = quicklistCreateNode();
 
-    /* The listpack may have spare room (for example after RDB load), but the
-     * memory counter needs its allocation to be exactly lpBytes(). */
+    /* The listpack may have spare room (for example after RDB load), but with
+     * jemalloc the memory counter needs its allocation to be exactly
+     * lpBytes(). */
     node->entry = lpShrinkToFit(zl);
     node->count = lpLength(node->entry);
     node->sz = lpBytes(node->entry);
@@ -794,8 +787,8 @@ static void __quicklistDelNode(quicklist *quicklist, quicklistNode *node) {
     /* Update len first, so in __quicklistCompress we know exactly len */
     quicklist->len--;
     quicklist->count -= node->count;
-    /* For the node that lost its listpack in lpMerge(), entry is NULL but
-     * node->sz still holds the old size, which is the value the counter has. */
+    /* For the node that lost its listpack in lpMerge(), this is 0:
+     * _quicklistListpackMerge() already removed its size. */
     quicklist->entries_alloc_bytes -= quicklistNodeEntryAllocSize(node);
 
     /* If we deleted a node within our compress depth, we
@@ -822,13 +815,15 @@ static int quicklistDelIndex(quicklist *quicklist, quicklistNode *node, unsigned
         __quicklistDelNode(quicklist, node);
         return 1;
     }
+    size_t before = quicklistNodeEntryAllocSize(node);
     node->entry = lpDelete(node->entry, *p, p);
     node->count--;
+    /* Count the change before a possible delete: __quicklistDelNode() removes
+     * the size of the current entry. */
+    quicklistLinkedNodeUpdateSz(quicklist, node, before);
     if (node->count == 0) {
         gone = 1;
         __quicklistDelNode(quicklist, node);
-    } else {
-        quicklistLinkedNodeUpdateSz(quicklist, node);
     }
     quicklist->count--;
     /* If we deleted the node, the original node is no longer valid */
@@ -876,16 +871,16 @@ void quicklistReplaceEntry(quicklistIter *iter, quicklistEntry *entry, void *dat
     quicklist *quicklist = iter->quicklist;
     quicklistNode *node = entry->node;
     unsigned char *newentry;
+    size_t before = quicklistNodeEntryAllocSize(node);
 
     if (likely(!QL_NODE_IS_PLAIN(entry->node) && !isLargeElement(sz, quicklist->fill) &&
                (newentry = lpReplace(entry->node->entry, &entry->zi, data, sz)) != NULL)) {
         entry->node->entry = newentry;
-        quicklistLinkedNodeUpdateSz(quicklist, entry->node);
+        quicklistLinkedNodeUpdateSz(quicklist, entry->node, before);
         /* entry->node is uncompressed (promoted above if it was LZF) */
         quicklistCompress(quicklist, entry->node);
     } else if (QL_NODE_IS_PLAIN(entry->node)) {
         if (isLargeElement(sz, quicklist->fill)) {
-            size_t before = quicklistNodeEntryAllocSize(entry->node);
             zfree(entry->node->entry);
             entry->node->entry = zmalloc(sz);
             entry->node->sz = sz;
@@ -970,18 +965,30 @@ static quicklistNode *_quicklistListpackMerge(quicklist *quicklist, quicklistNod
 
     quicklistDecompressNode(quicklist, a);
     quicklistDecompressNode(quicklist, b);
+    size_t a_before = quicklistNodeEntryAllocSize(a);
+    size_t b_before = quicklistNodeEntryAllocSize(b);
     if ((lpMerge(&a->entry, &b->entry))) {
         /* We merged listpacks! Now remove the unused quicklistNode. */
         quicklistNode *keep = NULL, *nokeep = NULL;
+        size_t keep_before = 0, nokeep_before = 0;
         if (!a->entry) {
             nokeep = a;
             keep = b;
+            nokeep_before = a_before;
+            keep_before = b_before;
         } else if (!b->entry) {
             nokeep = b;
             keep = a;
+            nokeep_before = b_before;
+            keep_before = a_before;
         }
         keep->count = lpLength(keep->entry);
-        quicklistLinkedNodeUpdateSz(quicklist, keep);
+        quicklistLinkedNodeUpdateSz(quicklist, keep, keep_before);
+        /* lpMerge() freed the listpack of 'nokeep' and set its entry to NULL.
+         * Remove its old size here, and set sz to 0 so that
+         * __quicklistDelNode() removes nothing more. */
+        quicklist->entries_alloc_bytes -= nokeep_before;
+        nokeep->sz = 0;
         keep->recompress = 0; /* Prevent 'keep' from being recompressed if
                                * it becomes head or tail after merging. */
 
@@ -1089,9 +1096,10 @@ static quicklistNode *_quicklistSplitNode(quicklist *quicklist, quicklistNode *n
 
     /* 'node' is linked, so its size change is tracked. 'new_node' is not
      * linked yet; its entry is counted when the caller inserts it. */
+    size_t before = quicklistNodeEntryAllocSize(node);
     node->entry = lpDeleteRange(node->entry, orig_start, orig_extent);
     node->count = lpLength(node->entry);
-    quicklistLinkedNodeUpdateSz(quicklist, node);
+    quicklistLinkedNodeUpdateSz(quicklist, node, before);
 
     new_node->entry = lpDeleteRange(new_node->entry, new_start, new_extent);
     new_node->count = lpLength(new_node->entry);
@@ -1173,16 +1181,18 @@ static void _quicklistInsert(quicklistIter *iter, quicklistEntry *entry, void *v
     if (!full && after) {
         D("Not full, inserting after current position.");
         quicklistDecompressNodeForUse(quicklist, node);
+        size_t before = quicklistNodeEntryAllocSize(node);
         node->entry = lpInsertString(node->entry, value, sz, entry->zi, LP_AFTER, NULL);
         node->count++;
-        quicklistLinkedNodeUpdateSz(quicklist, node);
+        quicklistLinkedNodeUpdateSz(quicklist, node, before);
         quicklistRecompressOnly(quicklist, node);
     } else if (!full && !after) {
         D("Not full, inserting before current position.");
         quicklistDecompressNodeForUse(quicklist, node);
+        size_t before = quicklistNodeEntryAllocSize(node);
         node->entry = lpInsertString(node->entry, value, sz, entry->zi, LP_BEFORE, NULL);
         node->count++;
-        quicklistLinkedNodeUpdateSz(quicklist, node);
+        quicklistLinkedNodeUpdateSz(quicklist, node, before);
         quicklistRecompressOnly(quicklist, node);
     } else if (full && at_tail && avail_next && after) {
         /* If we are: at tail, next has free space, and inserting after:
@@ -1190,9 +1200,10 @@ static void _quicklistInsert(quicklistIter *iter, quicklistEntry *entry, void *v
         D("Full and tail, but next isn't full; inserting next node head");
         new_node = node->next;
         quicklistDecompressNodeForUse(quicklist, new_node);
+        size_t before = quicklistNodeEntryAllocSize(new_node);
         new_node->entry = lpPrepend(new_node->entry, value, sz);
         new_node->count++;
-        quicklistLinkedNodeUpdateSz(quicklist, new_node);
+        quicklistLinkedNodeUpdateSz(quicklist, new_node, before);
         quicklistRecompressOnly(quicklist, new_node);
         quicklistRecompressOnly(quicklist, node);
     } else if (full && at_head && avail_prev && !after) {
@@ -1201,9 +1212,10 @@ static void _quicklistInsert(quicklistIter *iter, quicklistEntry *entry, void *v
         D("Full and head, but prev isn't full, inserting prev node tail");
         new_node = node->prev;
         quicklistDecompressNodeForUse(quicklist, new_node);
+        size_t before = quicklistNodeEntryAllocSize(new_node);
         new_node->entry = lpAppend(new_node->entry, value, sz);
         new_node->count++;
-        quicklistLinkedNodeUpdateSz(quicklist, new_node);
+        quicklistLinkedNodeUpdateSz(quicklist, new_node, before);
         quicklistRecompressOnly(quicklist, new_node);
         quicklistRecompressOnly(quicklist, node);
     } else if (full && ((at_tail && !avail_next && after) || (at_head && !avail_prev && !after))) {
@@ -1314,8 +1326,9 @@ int quicklistDelRange(quicklist *quicklist, const long start, const long count) 
             __quicklistDelNode(quicklist, node);
         } else {
             quicklistDecompressNodeForUse(quicklist, node);
+            size_t before = quicklistNodeEntryAllocSize(node);
             node->entry = lpDeleteRange(node->entry, offset, del);
-            quicklistLinkedNodeUpdateSz(quicklist, node);
+            quicklistLinkedNodeUpdateSz(quicklist, node, before);
             node->count -= del;
             quicklist->count -= del;
             quicklistDeleteIfEmpty(quicklist, node);

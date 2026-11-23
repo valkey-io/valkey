@@ -2574,6 +2574,20 @@ foreach compress {0 1} {
             r memory usage dst{t}
         } {*} {external:skip}
 
+        test "MEMORY USAGE of quicklist after a node merge (compress $compress)" {
+            ql_reset_config
+            # 3 full nodes of 4 values. Then the first node keeps only 1 value.
+            ql_fill mylist{t} 12
+            foreach i {1 2 3} { r lrem mylist{t} 0 [ql_val $i] }
+            assert_match {*ql_nodes:3*} [r debug object mylist{t}]
+            # The second node is full, so LINSERT splits it. The first half
+            # (2 values) then merges with the first node (1 value), so the
+            # node count stays 3.
+            r linsert mylist{t} after [ql_val 5] [ql_val new]
+            assert_match {*ql_nodes:3*} [r debug object mylist{t}]
+            r memory usage mylist{t}
+        } {*} {needs:debug external:skip}
+
         test "MEMORY USAGE of quicklist does not change on read commands (compress $compress)" {
             ql_reset_config
             ql_fill mylist{t} 100

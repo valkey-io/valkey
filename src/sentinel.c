@@ -2673,7 +2673,16 @@ void sentinelRefreshInstanceInfo(sentinelValkeyInstance *ri, const char *info) {
             if (!(ri->flags & SRI_PROMOTED) && sentinelPrimaryLooksSane(ri->primary) &&
                 sentinelValkeyInstanceNoDownFor(ri, wait_time) && mstime() - ri->role_reported_time > wait_time) {
                 int retval = sentinelSendReplicaOf(ri, ri->primary->addr);
-                if (retval == C_OK) sentinelEvent(LL_NOTICE, "+convert-to-slave", ri, "%@");
+                if (retval == C_OK) {
+                    sentinelEvent(LL_NOTICE, "+convert-to-slave", ri, "%@");
+                    /* Assume the demotion succeeds. Otherwise, if the instance
+                     * is promoted again before our next INFO, we would not see
+                     * a role change and would demote it at once, without
+                     * waiting for the new configuration. */
+                    ri->role_reported = SRI_REPLICA;
+                    ri->role_reported_time = mstime();
+                    ri->replica_conf_change_time = mstime();
+                }
             }
         }
     }

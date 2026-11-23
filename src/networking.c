@@ -3730,14 +3730,18 @@ void processClientIOWriteDone(client *c) {
     serverAssert(c->io_write_state == CLIENT_COMPLETED_IO);
     c->io_write_state = CLIENT_IDLE;
 
-    /* Don't post-process-writes to clients that are going to be closed anyway. */
-    if (c->flag.close_asap) return;
-
     int mask = 0;
     if (c->io_read_state == CLIENT_PENDING_IO || c->io_read_state == CLIENT_COMPLETED_IO)
         mask |= CONN_POSTPONE_READ;
 
     connSetPostponeUpdateState(c->conn, mask);
+
+    /* Closing client: skip post-write, but drop the write handler or it resends from a stale cursor. Must follow the postpone reset for TLS. */
+    if (c->flag.close_asap) {
+        connSetWriteHandler(c->conn, NULL);
+        return;
+    }
+
     if (postWriteToClient(c) == C_ERR) return;
 
     /* connUpdateState may sync-invoke handlers for some transports (e.g. RDMA)
@@ -4450,10 +4454,12 @@ int processCommandAndResetClient(client *c) {
  * the client. Returns C_ERR if the client is no longer valid after executing
  * the command, and C_OK for all other cases. */
 int processPendingCommandAndInputBuffer(client *c) {
-    /* Blocked and throttled clients are resumed via processUnblockedClients(); skip them here
-     * to avoid re-entering processCommand() while pending_command is intentionally left set.
-     * A throttled client has already passed its throttle check, so re-entry would execute it. */
-    if (c->flag.blocked || c->flag.throttled) return C_OK;
+    /* Blocked, throttled and unblocked clients are resumed via processUnblockedClients(); skip
+     * them here to avoid re-entering processCommand() while pending_command is intentionally left
+     * set. A throttled client has already passed its throttle check, so re-entry would execute it.
+     * An unblocked client is still queued in server.unblocked_clients, for example a postponed
+     * client released by CLIENT UNPAUSE earlier in the same IO read batch. */
+    if (c->flag.blocked || c->flag.unblocked || c->flag.throttled) return C_OK;
 
     /* Notice, this code is also called from 'processUnblockedClients'.
      * But in case of a module blocked client (see RM_Call 'K' flag) we do not reach this code path.

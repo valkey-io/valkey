@@ -2726,6 +2726,18 @@ static void clusterRaftInitLast(void) {
     }
 }
 
+/* The AEs in flight to a follower are lost with its outbound link, so resend
+ * from its last acknowledged entry. Done when the link is freed, since a new
+ * link may take long to connect, e.g. a TLS handshake with a paused process. */
+static void clusterRaftFreeFollowerLink(clusterNode *node) {
+    clusterNodeRaftData *rd = RAFT_NODE(node);
+    if (rd->replicating) {
+        rd->replicating = 0;
+        rd->next_index = rd->match_index + 1;
+    }
+    freeClusterLink(node->link);
+}
+
 /* Leader: detect node failures and propose NODE_FAIL. */
 static void clusterRaftDetectFailures(mstime_t now) {
     mstime_t node_timeout = server.cluster_node_timeout;
@@ -2745,7 +2757,7 @@ static void clusterRaftDetectFailures(mstime_t now) {
                 clusterNodeRaftData *rd = RAFT_NODE(node);
                 if (rd->last_ack_time > 0 &&
                     now - rd->last_ack_time > node_timeout) {
-                    freeClusterLink(node->link);
+                    clusterRaftFreeFollowerLink(node);
                     rd->last_ack_time = now;
                 }
             }
@@ -2930,7 +2942,7 @@ static void clusterRaftCron(void) {
             if ((node->data_received < node->link->ctime && link_age > stale) ||
                 (rs->role == RAFT_ROLE_LEADER && now - RAFT_NODE(node)->last_ack_time > stale &&
                  link_age > stale)) {
-                freeClusterLink(node->link);
+                clusterRaftFreeFollowerLink(node);
             }
         }
         dictReleaseIterator(di);
@@ -3529,7 +3541,7 @@ static void clusterRaftPostConnect(struct clusterLink *link) {
         connAddrSockName(link->conn, myself->ip, sizeof(myself->ip), NULL);
         serverLog(LL_NOTICE, "IP address for this node updated to %s", myself->ip);
     }
-    /* AEs queued on the old link are lost. */
+    /* AEs queued on an old link that wasn't freed by us are lost too. */
     clusterNodeRaftData *rd = link->node ? RAFT_NODE(link->node) : NULL;
     if (rd && rd->replicating) {
         rd->replicating = 0;

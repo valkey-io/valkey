@@ -3547,6 +3547,7 @@ void killRDBChild(void);
 int bg_unlink(const char *filename);
 
 /* AOF persistence */
+int aofFsync(int fd);
 void flushAppendOnlyFile(int force);
 void feedAppendOnlyFile(int dictid, robj **argv, int argc);
 sds catAppendOnlyGenericCommand(sds dst, int argc, robj **argv);

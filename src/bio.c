@@ -76,7 +76,7 @@
 
 static unsigned int bio_job_to_worker[] = {
     [BIO_CLOSE_FILE] = 0,
-    [BIO_AOF_FSYNC] = 1,
+    [BIO_AOF_FSYNC] = 1, /* Shared FIFO worker with BIO_CLOSE_AOF; backgroundRewriteDoneHandler() relies on this. */
     [BIO_CLOSE_AOF] = 1,
     [BIO_LAZY_FREE] = 2,
     [BIO_RDB_SAVE] = 3,
@@ -307,12 +307,15 @@ void *bioProcessBackgroundJobs(void *arg) {
                 /* The fd may be closed by main thread and reused for another
                  * socket, pipe, or file. We just ignore these errno because
                  * aof fsync did not really fail. */
-                if (valkey_fsync(job->fd_args.fd) == -1 && errno != EBADF && errno != EINVAL) {
+                if (aofFsync(job->fd_args.fd) == -1 && errno != EBADF && errno != EINVAL) {
                     atomic_store_explicit(&server.aof_bio_fsync_errno, errno, memory_order_relaxed);
                     atomic_store_explicit(&server.aof_bio_fsync_error_gen, job->fd_args.aof_fd_gen,
                                           memory_order_relaxed);
                     atomic_store_explicit(&server.aof_bio_fsync_status, C_ERR, memory_order_release);
-                    serverLog(LL_WARNING, "Fail to fsync the AOF file: %s", strerror(errno));
+                    serverLog(LL_WARNING,
+                              "Fail to fsync the AOF file: %s. Writes will be rejected until a covering "
+                              "background AOF rewrite (BGREWRITEAOF) succeeds or AOF is reopened.",
+                              strerror(errno));
                 } else {
                     atomic_store_explicit(&server.fsynced_reploff_pending, job->fd_args.offset,
                                           memory_order_relaxed);

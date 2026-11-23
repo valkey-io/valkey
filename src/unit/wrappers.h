@@ -68,6 +68,7 @@ extern "C" {
  *       Example: serverLog(int level, const char *fmt, ...) should NOT be mocked.
  */
 unsigned long __wrap_bioPendingJobsOfType(int type);
+int __wrap_aofFsync(int fd);
 long long __wrap_aeCreateTimeEvent(aeEventLoop *eventLoop, long long milliseconds, aeTimeProc *proc, void *clientData, aeEventFinalizerProc *finalizerProc);
 int __wrap_aeDeleteTimeEvent(aeEventLoop *eventLoop, long long id);
 size_t __wrap_getClientOutputBufferMemoryUsage(client *c);

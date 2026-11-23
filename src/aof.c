@@ -902,6 +902,10 @@ int aofRewriteLimited(void) {
  * AOF file implementation
  * ------------------------------------------------------------------------- */
 
+int aofFsync(int fd) {
+    return valkey_fsync(fd);
+}
+
 /* Return true if an AOf fsync is currently already in progress in a
  * BIO thread. */
 int aofFsyncInProgress(void) {
@@ -3072,11 +3076,13 @@ void backgroundRewriteDoneHandler(int exitcode, int bysignal) {
         server.aof_lastbgrewrite_status = C_OK;
         server.stat_aofrw_consecutive_failures = 0;
 
-        /* Drain AOF BIO jobs unconditionally so an in-flight old-generation
-         * BIO_CLOSE_AOF failure cannot latch C_ERR after this rewrite commits,
-         * then clear any latched error covered by the replacement base. */
+        /* BIO_AOF_FSYNC and BIO_CLOSE_AOF share FIFO worker 1, so draining
+         * BIO_CLOSE_AOF waits for every pre-rotation job (aof_fd_gen <
+         * aof_rewrite_base_fd_gen) without blocking on an in-flight fsync of
+         * the new incremental file (AOF_WAIT_REWRITE already drained both
+         * queues before forking). Clear any latched error covered by the
+         * replacement base. */
         if (server.aof_state != AOF_OFF) {
-            bioDrainWorker(BIO_AOF_FSYNC);
             bioDrainWorker(BIO_CLOSE_AOF);
             if (atomic_load_explicit(&server.aof_bio_fsync_status, memory_order_acquire) == C_ERR &&
                 atomic_load_explicit(&server.aof_bio_fsync_error_gen, memory_order_relaxed) <

@@ -1951,7 +1951,8 @@ void clusterCommand(client *c) {
         if (!strcasecmp(sub, "meet") || !strcasecmp(sub, "addslots") ||
             !strcasecmp(sub, "addslotsrange") || !strcasecmp(sub, "delslots") ||
             !strcasecmp(sub, "delslotsrange") || !strcasecmp(sub, "flushslots") ||
-            !strcasecmp(sub, "setslot") || !strcasecmp(sub, "replicate") ||
+            (!strcasecmp(sub, "setslot") && c->argc >= 4 && !strcasecmp(objectGetVal(c->argv[3]), "node")) ||
+            !strcasecmp(sub, "replicate") ||
             !strcasecmp(sub, "failover") || !strcasecmp(sub, "forget") ||
             !strcasecmp(sub, "reset")) {
             addReplyError(c, "This cluster command is not allowed inside MULTI");

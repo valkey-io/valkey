@@ -2194,6 +2194,12 @@ struct valkeyServer {
     aofManifest *aof_manifest;          /* Used to track AOFs. */
     int aof_disable_auto_gc;            /* If disable automatically deleting HISTORY type AOFs?
                                            default no. (for testings). */
+    /* Monotonic generation of the current incremental AOF fd. */
+    uint64_t aof_fd_gen;
+    /* Incremental AOF fd generation that failed BIO fsync. */
+    _Atomic(uint64_t) aof_bio_fsync_error_gen;
+    /* aof_fd_gen after rotation; rewrite base covers gens < this. */
+    uint64_t aof_rewrite_base_fd_gen;
 
     /* RDB persistence */
     long long dirty;                      /* Changes to DB from the last save */

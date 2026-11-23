@@ -175,6 +175,114 @@ tags {"wait aof network external:skip"} {
             assert_equal [$master waitaof 1 0 0] {1 0}
         }
 
+        test {WAITAOF local everysec does not ack while fsync is deferred} {
+            r config set appendfsync always
+            $master set before_sync 1
+            assert_equal [$master waitaof 1 0 0] {1 0}
+
+            # Hold off background AOF fsync deterministically with an active BGSAVE child
+            # and no-appendfsync-on-rewrite yes so scheduling pauses cannot race the check.
+            r config set appendfsync everysec
+            set rd ""
+            set code [catch {
+                r config set no-appendfsync-on-rewrite yes
+                r config set rdb-key-save-delay 100000000
+                r bgsave
+                wait_for_condition 50 100 {
+                    [s rdb_bgsave_in_progress] == 1
+                } else {
+                    fail "bgsave did not start"
+                }
+                $master set deferred_sync 1
+                assert_equal [$master waitaof 1 0 50] {0 0}
+
+                set rd [valkey_deferring_client]
+                $rd set deferred_sync_blocked 1
+                $rd read
+                $rd waitaof 1 0 5000
+                wait_for_blocked_client
+
+                # Release the BGSAVE child so the covering everysec fsync can execute.
+                r config set rdb-key-save-delay 0
+                catch {exec kill -9 [get_child_pid 0]}
+                wait_for_condition 50 100 {
+                    [s rdb_bgsave_in_progress] == 0
+                } else {
+                    fail "bgsave child did not exit"
+                }
+                r config set no-appendfsync-on-rewrite no
+
+                assert_equal [$rd read] {1 0}
+            } err opts]
+            if {$rd ne ""} { catch {$rd close} }
+            catch {r config set rdb-key-save-delay 0}
+            catch {
+                if {[s rdb_bgsave_in_progress] == 1} {
+                    catch {exec kill -9 [get_child_pid 0]}
+                    wait_for_condition 50 100 {
+                        [s rdb_bgsave_in_progress] == 0
+                    } else {}
+                }
+            }
+            catch {r config set no-appendfsync-on-rewrite no}
+            if {$code != 0} {
+                return -options $opts $err
+            }
+        }
+
+        test {WAITAOF local everysec keeps durable prefix valid while newer write awaits fsync} {
+            set c_durable [valkey_client]
+            set c_pending [valkey_client]
+
+            r config set appendfsync always
+            $c_durable set durable_prefix 1
+            assert_equal [$c_durable waitaof 1 0 0] {1 0}
+
+            # Defer everysec fsync deterministically via active BGSAVE + no-appendfsync-on-rewrite.
+            r config set appendfsync everysec
+            set code [catch {
+                r config set no-appendfsync-on-rewrite yes
+                r config set rdb-key-save-delay 100000000
+                r bgsave
+                wait_for_condition 50 100 {
+                    [s rdb_bgsave_in_progress] == 1
+                } else {
+                    fail "bgsave did not start"
+                }
+                # Newer write on c_pending is not fsynced yet; c_durable must still observe
+                # its already-durable prefix while c_pending times out.
+                $c_pending set pending_suffix 1
+                assert_equal [$c_durable waitaof 1 0 50] {1 0}
+                assert_equal [$c_pending waitaof 1 0 50] {0 0}
+
+                r config set rdb-key-save-delay 0
+                catch {exec kill -9 [get_child_pid 0]}
+                wait_for_condition 50 100 {
+                    [s rdb_bgsave_in_progress] == 0
+                } else {
+                    fail "bgsave child did not exit"
+                }
+                r config set no-appendfsync-on-rewrite no
+
+                assert_equal [$c_pending waitaof 1 0 5000] {1 0}
+            } err opts]
+            catch {$c_durable close}
+            catch {$c_pending close}
+            catch {r config set rdb-key-save-delay 0}
+            catch {
+                if {[s rdb_bgsave_in_progress] == 1} {
+                    catch {exec kill -9 [get_child_pid 0]}
+                    wait_for_condition 50 100 {
+                        [s rdb_bgsave_in_progress] == 0
+                    } else {}
+                }
+            }
+            catch {r config set no-appendfsync-on-rewrite no}
+            if {$code != 0} {
+                return -options $opts $err
+            }
+        }
+
         test {WAITAOF local copy with appendfsync always} {
             r config set appendfsync always
             $master incr foo

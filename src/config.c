@@ -2889,6 +2889,7 @@ int updateAppendFsync(const char **err) {
          * between updates to `fsynced_reploff_pending` done in the main thread and those done on the
          * worker thread. */
         bioDrainWorker(BIO_AOF_FSYNC);
+        bioDrainWorker(BIO_CLOSE_AOF);
     }
     return 1;
 }

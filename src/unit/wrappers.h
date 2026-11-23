@@ -52,6 +52,8 @@ extern "C" {
 #include "throttle.h"
 #include "throttle_token_bucket.h"
 
+#include "bio.h"
+
 /**
  * The list of wrapper methods defined.  Each wrapper method must
  * conform to the same naming conventions (i.e. prefix with a
@@ -65,6 +67,7 @@ extern "C" {
  *       See: https://github.com/google/googletest/blob/master/googlemock/docs/gmock_faq.md#can-i-mock-a-variadic-function
  *       Example: serverLog(int level, const char *fmt, ...) should NOT be mocked.
  */
+unsigned long __wrap_bioPendingJobsOfType(int type);
 long long __wrap_aeCreateTimeEvent(aeEventLoop *eventLoop, long long milliseconds, aeTimeProc *proc, void *clientData, aeEventFinalizerProc *finalizerProc);
 int __wrap_aeDeleteTimeEvent(aeEventLoop *eventLoop, long long id);
 size_t __wrap_getClientOutputBufferMemoryUsage(client *c);

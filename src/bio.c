@@ -122,6 +122,7 @@ typedef union bio_job {
         int type;
         int fd;                          /* Fd for file based background jobs */
         long long offset;                /* A job-specific offset, if applicable */
+        uint64_t aof_fd_gen;             /* Incremental AOF fd generation when job was queued */
         unsigned need_fsync : 1;         /* A flag to indicate that a fsync is required before
                                           * the file is closed. */
         unsigned need_reclaim_cache : 1; /* A flag to indicate that reclaim cache is required before
@@ -221,6 +222,7 @@ void bioCreateCloseAofJob(int fd, long long offset, int need_reclaim_cache) {
     bio_job *job = allocBioJob(0);
     job->fd_args.fd = fd;
     job->fd_args.offset = offset;
+    job->fd_args.aof_fd_gen = server.aof_fd_gen;
     job->fd_args.need_fsync = 1;
     job->fd_args.need_reclaim_cache = need_reclaim_cache;
 
@@ -231,6 +233,7 @@ void bioCreateFsyncJob(int fd, long long offset, int need_reclaim_cache) {
     bio_job *job = allocBioJob(0);
     job->fd_args.fd = fd;
     job->fd_args.offset = offset;
+    job->fd_args.aof_fd_gen = server.aof_fd_gen;
     job->fd_args.need_reclaim_cache = need_reclaim_cache;
 
     bioSubmitJob(BIO_AOF_FSYNC, job);
@@ -294,20 +297,27 @@ void *bioProcessBackgroundJobs(void *arg) {
             }
             close(job->fd_args.fd);
         } else if (job_type == BIO_AOF_FSYNC || job_type == BIO_CLOSE_AOF) {
-            /* The fd may be closed by main thread and reused for another
-             * socket, pipe, or file. We just ignore these errno because
-             * aof fsync did not really fail. */
-            if (valkey_fsync(job->fd_args.fd) == -1 && errno != EBADF && errno != EINVAL) {
-                int last_status = atomic_load_explicit(&server.aof_bio_fsync_status, memory_order_relaxed);
-
-                atomic_store_explicit(&server.aof_bio_fsync_errno, errno, memory_order_relaxed);
-                atomic_store_explicit(&server.aof_bio_fsync_status, C_ERR, memory_order_release);
-                if (last_status == C_OK) {
+            /* Keep a background AOF fsync error latched until a covering rewrite or
+             * AOF reopen clears it: retrying fdatasync() on the failed fd (such as via
+             * BIO_CLOSE_AOF) can return 0 under errseq_t without proving discarded pages
+             * reached disk, and syncing a newer incremental file does not cover the
+             * failed prefix until a replacement base commits. */
+            int last_status = atomic_load_explicit(&server.aof_bio_fsync_status, memory_order_acquire);
+            if (last_status == C_OK) {
+                /* The fd may be closed by main thread and reused for another
+                 * socket, pipe, or file. We just ignore these errno because
+                 * aof fsync did not really fail. */
+                if (valkey_fsync(job->fd_args.fd) == -1 && errno != EBADF && errno != EINVAL) {
+                    atomic_store_explicit(&server.aof_bio_fsync_errno, errno, memory_order_relaxed);
+                    atomic_store_explicit(&server.aof_bio_fsync_error_gen, job->fd_args.aof_fd_gen,
+                                          memory_order_relaxed);
+                    atomic_store_explicit(&server.aof_bio_fsync_status, C_ERR, memory_order_release);
                     serverLog(LL_WARNING, "Fail to fsync the AOF file: %s", strerror(errno));
+                } else {
+                    atomic_store_explicit(&server.fsynced_reploff_pending, job->fd_args.offset,
+                                          memory_order_relaxed);
+                    atomic_store_explicit(&server.aof_bio_fsync_status, C_OK, memory_order_release);
                 }
-            } else {
-                atomic_store_explicit(&server.aof_bio_fsync_status, C_OK, memory_order_relaxed);
-                atomic_store_explicit(&server.fsynced_reploff_pending, job->fd_args.offset, memory_order_relaxed);
             }
 
             if (job->fd_args.need_reclaim_cache) {

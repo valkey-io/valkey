@@ -491,6 +491,7 @@ start_cluster 2 1 [list tags {modules external:skip cluster} overrides [list loa
         # With the K flag the primary replicates SETSLOT first, blocks the call
         # until its replica acks, and only then applies it and replies.
         set rd [valkey_deferring_client]
+        test_defer { $rd close }
         $rd do_rm_call_async cluster setslot 0 migrating $target_id
         wait_for_slot_state 2 "\[0->-$target_id\]"
         wait_for_blocked_clients_count 0
@@ -498,8 +499,40 @@ start_cluster 2 1 [list tags {modules external:skip cluster} overrides [list loa
         wait_for_slot_state 0 "\[0->-$target_id\]"
         assert_equal OK [$rd read]
 
-        $rd close
         R 0 CLUSTER SETSLOT 0 STABLE
+        wait_for_slot_state 0 ""
+        wait_for_slot_state 2 ""
+    }
+
+    test "CLUSTER SETSLOT through an async RM_Call whose re-run is postponed by a pause is applied after unpause" {
+        set target_id [R 1 CLUSTER MYID]
+        wait_replica_online [Rn 0]
+        set replica_pid [srv -2 pid]
+
+        # Hold the replica's ack so that the pause is in effect when it arrives.
+        pause_process $replica_pid
+        set rd [valkey_deferring_client]
+        test_defer { $rd close }
+        $rd do_rm_call_async cluster setslot 3 migrating $target_id timeout 30000
+        wait_for_blocked_clients_count 1
+        R 0 client pause 60000 write
+        resume_process $replica_pid
+
+        # Once the replica has acked, the re-run of SETSLOT is postponed by the pause.
+        wait_for_condition 100 50 {
+            [regexp {slave0:[^\r\n]*offset=(\d+)} [R 0 info replication] -> ack] &&
+            $ack == [status [Rn 0] master_repl_offset]
+        } else {
+            fail "replica did not ack the SETSLOT"
+        }
+        wait_for_slot_state 2 "\[3->-$target_id\]"
+        assert_equal {} [get_open_slots 0]
+
+        R 0 client unpause
+        wait_for_slot_state 0 "\[3->-$target_id\]"
+        assert_equal OK [$rd read]
+
+        R 0 CLUSTER SETSLOT 3 STABLE
         wait_for_slot_state 0 ""
         wait_for_slot_state 2 ""
     }

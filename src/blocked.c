@@ -189,7 +189,6 @@ void processUnblockedClients(void) {
                         server.current_client = old_client;
                         continue;
                     }
-                    c->flag.replication_done = 0;
                     if (!c->flag.blocked) moduleCallCommandUnblockedHandler(c);
                     exitExecutionUnit();
                     afterCommand(c);

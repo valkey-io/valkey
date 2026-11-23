@@ -998,6 +998,8 @@ void clusterUpdateSlotImportsOnOwnershipChange(void) {
         if (strlen(job->source_node_name) == 0) continue;
         clusterNode *n = getClusterNodeBySlotRanges(job->slot_ranges, NULL);
         if (n && !memcmp(n->name, job->source_node_name, CLUSTER_NAMELEN)) continue;
+        /* A snapshot can publish our takeover before its proposal callback runs. */
+        if (n == server.cluster->myself && job->state == SLOT_IMPORT_AWAITING_CLUSTER_COMMIT) continue;
         if (n == server.cluster->myself) {
             finishSlotMigrationJob(job, SLOT_MIGRATION_JOB_FAILED,
                                    "Slots were unexpectedly assigned to myself "

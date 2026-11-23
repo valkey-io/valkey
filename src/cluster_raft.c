@@ -488,6 +488,8 @@ static void clusterRaftSyncSlotMigrationPause(void) {
 }
 
 static void clusterRaftOnSlotOwnershipApplied(void) {
+    clusterUpdateSlotExportsOnOwnershipChange();
+    clusterUpdateSlotImportsOnOwnershipChange();
     if (RAFT_STATE()->slot_migration_pause && !clusterIsAnySlotExportFailoverGranted() && clusterRaftLogFullyApplied())
         clusterRaftDropSlotMigrationPause();
     else if (RAFT_STATE()->slot_migration_pause)
@@ -1862,8 +1864,6 @@ static void raftLogApply(raftLogEntry *e) {
 
     if (e->type == RAFT_ENTRY_SLOT_CHANGE && entry_result == RAFT_RESULT_OK) {
         /* Complete our import callback before revalidating ownership. */
-        clusterUpdateSlotExportsOnOwnershipChange();
-        clusterUpdateSlotImportsOnOwnershipChange();
         clusterRaftOnSlotOwnershipApplied();
     }
 }

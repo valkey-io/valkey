@@ -1926,6 +1926,29 @@ start_server {tags {"introspection"}} {
         }
     } {} {external:skip}
 
+    test {config file - dir and logfile set again after include override the included values} {
+        set base [file normalize [tmpfile base.conf]]
+        set tmp [file normalize [tmpdir include_override]]
+        set bad [file join $tmp nonexistent]
+        write_file $base "dir $bad\nlogfile [file join $bad valkey.log]\n"
+        # The harness reads <dir>/stdout, so the final dir and logfile must match it.
+        start_server [list overrides [list dir $tmp] config_lines [list include $base dir $tmp logfile stdout]] {
+            assert_equal $tmp [lindex [r config get dir] 1]
+            assert_equal stdout [lindex [r config get logfile] 1]
+        }
+    } {} {external:skip}
+
+    test {config file - non-existent dir as the final value is fatal} {
+        set base [file normalize [tmpfile base.conf]]
+        set tmp [file normalize [tmpdir include_fatal]]
+        set bad [file join $tmp nonexistent]
+        write_file $base "dir $tmp\n"
+        set conf [file normalize [tmpfile override.conf]]
+        write_file $conf "include $base\ndir $bad\n"
+        catch {exec $::VALKEY_SERVER_BIN $conf} err
+        assert_match "*Can't chdir to '$bad': No such file or directory*" $err
+    } {} {external:skip}
+
     # Config file at this point is at a weird state, and includes all
     # known keywords. Might be a good idea to avoid adding tests here.
 }

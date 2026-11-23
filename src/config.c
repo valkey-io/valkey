@@ -492,6 +492,15 @@ static int updateClientOutputBufferLimit(sds *args, int arg_len, const char **er
  * abnormal aggregate `save T C` functionality. Remove in the future. */
 static int reading_config_file;
 
+/* Nesting depth of loadServerConfigFromString (include recurses), so the final
+ * checks only run once the outermost file is fully read. */
+static int config_load_depth;
+
+/* A `dir` that failed chdir while reading the config file. It is only fatal if
+ * no later `dir` line fixes it, so an included file can be overridden. */
+static char pending_dir[PATH_MAX];
+static char pending_dir_err[128];
+
 void loadServerConfigFromString(sds config) {
     deprecatedConfig deprecated_configs[] = {
         {"list-max-ziplist-entries", 2, 2},
@@ -511,6 +520,7 @@ void loadServerConfigFromString(sds config) {
     int argc;
 
     reading_config_file = 1;
+    config_load_depth++;
     lines = sdssplitlen(config, sdslen(config), "\n", 1, &totlines);
 
     for (i = 0; i < totlines; i++) {
@@ -651,6 +661,17 @@ void loadServerConfigFromString(sds config) {
         }
         sdsfreesplitres(argv, argc);
         argv = NULL;
+    }
+
+    if (--config_load_depth > 0) {
+        sdsfreesplitres(lines, totlines);
+        return;
+    }
+
+    if (pending_dir[0] != '\0') {
+        snprintf(buf, sizeof(buf), "Can't chdir to '%s': %s", pending_dir, pending_dir_err);
+        err = buf;
+        goto loaderr;
     }
 
     if (server.logfile[0] != '\0') {
@@ -3026,9 +3047,15 @@ static int setConfigDirOption(standardConfig *config, sds *argv, int argc, const
         return 0;
     }
     if (chdir(argv[0]) == -1) {
+        if (reading_config_file) {
+            snprintf(pending_dir, sizeof(pending_dir), "%s", argv[0]);
+            snprintf(pending_dir_err, sizeof(pending_dir_err), "%s", strerror(errno));
+            return 1;
+        }
         *err = strerror(errno);
         return 0;
     }
+    pending_dir[0] = '\0';
     return 1;
 }
 

@@ -42,6 +42,11 @@ typedef struct clusterBusType {
      * implementation typically sends an initial message (e.g. PING). */
     void (*postConnect)(struct clusterLink *link);
 
+    /* Called when a link that belongs to a node is freed, for whatever reason
+     * and whichever side closed it, while link->node is still set. Messages
+     * queued on it or in flight are lost. Optional. */
+    void (*onLinkFree)(struct clusterLink *link);
+
     /* Called after a config change updates myself's metadata (IP, ports,
      * hostname, flags, etc.). The protocol implementation should arrange for
      * the change to be persisted and propagated. The `updated` argument is a

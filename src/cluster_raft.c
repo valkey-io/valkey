@@ -721,6 +721,7 @@ static int clusterRaftProcessHi(clusterLink *link, int argc, sds *argv) {
         } else if (sender != link->node) {
             clusterNode *handshake = link->node;
             link->node = sender;
+            if (sender->link) freeClusterLink(sender->link);
             sender->link = link;
             handshake->link = NULL;
             clusterDelNode(handshake);
@@ -3543,16 +3544,22 @@ static void clusterRaftUnblockMeet(clusterNode *node) {
     sdsfree(addr);
 }
 
+/* The AEs sent to a follower on its outbound link are lost with it, so resend
+ * from its last acknowledged entry. Done when the link is freed, since a new
+ * link may take long to connect, e.g. a TLS handshake with a paused process. */
+static void clusterRaftOnLinkFree(struct clusterLink *link) {
+    if (link->node->link != link) return;
+    clusterNodeRaftData *rd = RAFT_NODE(link->node);
+    if (rd->replicating) {
+        rd->replicating = 0;
+        rd->next_index = rd->match_index + 1;
+    }
+}
+
 static void clusterRaftPostConnect(struct clusterLink *link) {
     if (myself->ip[0] == '\0' && server.cluster_announce_ip == NULL) {
         connAddrSockName(link->conn, myself->ip, sizeof(myself->ip), NULL);
         serverLog(LL_NOTICE, "IP address for this node updated to %s", myself->ip);
-    }
-    /* AEs queued on the old link are lost. */
-    clusterNodeRaftData *rd = link->node ? RAFT_NODE(link->node) : NULL;
-    if (rd && rd->replicating) {
-        rd->replicating = 0;
-        rd->next_index = rd->match_index + 1;
     }
     clusterRaftSendGreeting(link, "HELLO");
     if (link->node && nodeInHandshake(link->node)) {
@@ -4958,6 +4965,7 @@ clusterBusType clusterRaftBus = {
     .validateMessageHeader = clusterRaftValidateMessageHeader,
     .processMessage = clusterRaftProcessMessage,
     .postConnect = clusterRaftPostConnect,
+    .onLinkFree = clusterRaftOnLinkFree,
     .publishMessageLengthValid = clusterRaftPublishMessageLengthValid,
     .propagatePublish = clusterRaftPropagatePublish,
     .sendModuleMessage = clusterRaftSendModuleMessage,

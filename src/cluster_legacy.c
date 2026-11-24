@@ -2939,8 +2939,11 @@ static char *getLoadableIpExtension(char *value, int af) {
 }
 
 /* We previously validated the extensions, so this function just needs to
- * handle the extensions. */
-void clusterProcessPingExtensions(clusterMsg *hdr, clusterLink *link) {
+ * handle the extensions.
+ *
+ * The function returns 1 if the link is still valid after the extensions
+ * were processed, otherwise 0 if the link was freed. */
+int clusterProcessPingExtensions(clusterMsg *hdr, clusterLink *link) {
     clusterNode *sender = link->node ? link->node : clusterLookupNode(hdr->sender, CLUSTER_NAMELEN);
     char *ext_hostname = NULL;
     char *ext_humannodename = NULL;
@@ -3020,6 +3023,7 @@ void clusterProcessPingExtensions(clusterMsg *hdr, clusterLink *link) {
     if (ext_shardid == NULL) ext_shardid = clusterNodeGetPrimary(sender)->shard_id;
 
     updateShardId(sender, ext_shardid);
+    return 1;
 }
 
 static clusterNode *getNodeFromLinkAndMsg(clusterLink *link, clusterMsg *hdr) {
@@ -3665,7 +3669,8 @@ int clusterProcessPacket(clusterLink *link) {
         /* Get info from the gossip section */
         if (sender) {
             clusterProcessGossipSection(hdr, link);
-            clusterProcessPingExtensions(hdr, link);
+            /* The link was freed, it is no longer valid. */
+            if (!clusterProcessPingExtensions(hdr, link)) return 0;
         }
     } else if (type == CLUSTERMSG_TYPE_FAIL) {
         clusterNode *failing;

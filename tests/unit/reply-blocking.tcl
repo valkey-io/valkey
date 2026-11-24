@@ -1716,6 +1716,7 @@ start_server {tags {"repl durability external:skip"} overrides {appendonly yes a
                 fail "'$cmd' in db $db was held after the full sync"
             }
             fconfigure $fd -blocking 1
+            set got [string map [list "_\r\n" "\$-1\r\n"] $got]
             assert_equal $expected $got
             $rd close
         }
@@ -2093,7 +2094,13 @@ start_server {tags {"repl durability external:skip"} overrides {appendonly yes a
             after 10
         }
         fconfigure $fd -blocking 1
-        return $data
+        return [rb_resp2 $data]
+    }
+
+    # Map the RESP3 encodings these tests can see to RESP2, so raw replies
+    # compare the same in --force-resp3 runs.
+    proc rb_resp2 {data} {
+        return [string map [list "_\r\n" "\$-1\r\n"] $data]
     }
 
     # The command sent on rd is held: wait until n clients wait for the ack

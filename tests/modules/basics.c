@@ -1131,6 +1131,39 @@ fail:
     return VALKEYMODULE_OK;
 }
 
+/* TEST.REPL_DEL <key> <before|after>: deletes the key and replicates a DEL
+ * either before or after the delete. */
+int TestReplDel(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    if (argc != 3) return ValkeyModule_WrongArity(ctx);
+    int before = !strcmp(ValkeyModule_StringPtrLen(argv[2], NULL), "before");
+    ValkeyModuleKey *key = ValkeyModule_OpenKey(ctx, argv[1], VALKEYMODULE_WRITE);
+    if (key == NULL) return ValkeyModule_ReplyWithError(ctx, "ERR key is in use");
+    if (before) ValkeyModule_Replicate(ctx, "DEL", "s", argv[1]);
+    ValkeyModule_DeleteKey(key);
+    ValkeyModule_CloseKey(key);
+    if (!before) ValkeyModule_Replicate(ctx, "DEL", "s", argv[1]);
+    return ValkeyModule_ReplyWithSimpleString(ctx, "OK");
+}
+
+void ReplDelTimerCallback(ValkeyModuleCtx *ctx, void *data) {
+    ValkeyModuleString *keyname = data;
+    ValkeyModuleKey *key = ValkeyModule_OpenKey(ctx, keyname, VALKEYMODULE_WRITE);
+    if (key != NULL) {
+        ValkeyModule_Replicate(ctx, "DEL", "s", keyname);
+        ValkeyModule_DeleteKey(key);
+        ValkeyModule_CloseKey(key);
+    }
+    ValkeyModule_FreeString(NULL, keyname);
+}
+
+/* TEST.REPL_DEL_TIMER <key>: like TEST.REPL_DEL <key> before, but from a timer,
+ * outside of any command. */
+int TestReplDelTimer(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    if (argc != 2) return ValkeyModule_WrongArity(ctx);
+    ValkeyModule_CreateTimer(ctx, 1, ReplDelTimerCallback, ValkeyModule_CreateStringFromString(NULL, argv[1]));
+    return ValkeyModule_ReplyWithSimpleString(ctx, "OK");
+}
+
 int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     VALKEYMODULE_NOT_USED(argv);
     VALKEYMODULE_NOT_USED(argc);
@@ -1283,6 +1316,12 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
         return VALKEYMODULE_ERR;
 
     if (ValkeyModule_CreateCommand(ctx, "test.latency", TestLatency, "readonly", 0, 0, 0) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
+
+    if (ValkeyModule_CreateCommand(ctx, "test.repl_del", TestReplDel, "write", 1, 1, 1) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
+
+    if (ValkeyModule_CreateCommand(ctx, "test.repl_del_timer", TestReplDelTimer, "write", 1, 1, 1) == VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
 
     return VALKEYMODULE_OK;

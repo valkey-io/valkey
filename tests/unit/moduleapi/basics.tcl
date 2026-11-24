@@ -233,3 +233,54 @@ start_server {tags {"modules" "external:skip"} overrides {save "" forkless-infra
         waitForBgsave r
     }
 }
+
+start_server {tags {"modules repl external:skip"} overrides {save {} forkless-infrastructure-enabled yes forkless-policy prefer-forkless repl-diskless-sync yes repl-diskless-sync-delay 0}} {
+    r module load $testmodule forkless
+    set primary [srv 0 client]
+    set primary_host [srv 0 host]
+    set primary_port [srv 0 port]
+    $primary debug populate 1000 key 10
+
+    start_server {overrides {save {}}} {
+        set replica [srv 0 client]
+
+        test "Module replicating DEL before deleting the key during a forkless full sync" {
+            $primary config set rdb-key-save-delay 5000
+            $replica replicaof $primary_host $primary_port
+            wait_for_condition 500 10 {
+                [getInfoProperty [$primary info debug] forkless_dbentries_processed] >= 100
+            } else {
+                fail "forkless full sync did not start"
+            }
+            assert_equal forkless [getInfoProperty [$primary info persistence] rdb_current_bgsave_type]
+
+            # Spread the deletes so that some keys were already sent and some were not.
+            set deleted {}
+            for {set i 0} {$i < 1000} {incr i 25} {
+                switch [expr {$i % 3}] {
+                    0 { assert_equal OK [$primary test.repl_del key:$i before] }
+                    1 { assert_equal OK [$primary test.repl_del key:$i after] }
+                    2 { assert_equal OK [$primary test.repl_del_timer key:$i] }
+                }
+                lappend deleted key:$i
+            }
+            # Wait for the timers with DBSIZE: a lookup of a deleted key would fire a key-miss
+            # notification, and the module writes a key for it.
+            wait_for_condition 100 10 {
+                [$primary dbsize] == [expr {1000 - [llength $deleted]}]
+            } else {
+                fail "the module did not delete all keys on the primary"
+            }
+            assert_equal forkless [getInfoProperty [$primary info persistence] rdb_current_bgsave_type]
+
+            $primary config set rdb-key-save-delay 0
+            wait_for_sync $replica
+            wait_for_ofs_sync $primary $replica
+            foreach k $deleted {
+                assert_equal 0 [$replica exists $k]
+            }
+            assert_equal [$primary dbsize] [$replica dbsize]
+            assert_equal [$primary debug digest] [$replica debug digest]
+        }
+    }
+}

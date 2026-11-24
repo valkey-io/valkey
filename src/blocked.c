@@ -241,6 +241,13 @@ void unblockClient(client *c, int queue_for_reprocessing) {
     case BLOCKED_MODULE:
         if (moduleClientIsBlockedOnKeys(c)) unblockClientWaitingData(c);
         unblockClientFromModule(c);
+        /* A client a module blocked from its keyspace-notification callback
+         * has its reply parked in the deferred buffer. On a timeout or CLIENT
+         * UNBLOCK the module's unblock path no longer reaches the client, and
+         * resetClient() below skips the buffer while the client is still
+         * flagged blocked. Commit it here, so the reply keeps its durability
+         * boundary instead of going out with the next command. */
+        commitDeferredReplyBuffer(c, 0);
         break;
     case BLOCKED_POSTPONE:
         serverAssert(c->bstate->postponed_list_node);

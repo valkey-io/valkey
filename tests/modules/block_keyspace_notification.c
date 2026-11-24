@@ -24,6 +24,17 @@ typedef struct KeyspaceEventLog {
 
 KeyspaceEventLog *event_log = NULL;
 int unloaded = 0;
+/* When > 0, block with this timeout (ms) and a timeout callback, so the
+ * client can time out or be unblocked with CLIENT UNBLOCK. */
+static long long block_timeout_ms = 0;
+
+static int BlockTimeout_Reply(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    VALKEYMODULE_NOT_USED(ctx);
+    VALKEYMODULE_NOT_USED(argv);
+    VALKEYMODULE_NOT_USED(argc);
+    /* No reply of its own: the command's reply is already in the deferred buffer. */
+    return VALKEYMODULE_OK;
+}
 
 typedef struct BackgroundThreadData {
     KeyspaceEventData *event;
@@ -54,7 +65,8 @@ static int KeySpace_NotificationGeneric(ValkeyModuleCtx *ctx, int type,
     VALKEYMODULE_NOT_USED(type);
     ValkeyModuleString *retained_key = ValkeyModule_HoldString(ctx, key);
     ValkeyModuleBlockedClient *bc =
-        ValkeyModule_BlockClient(ctx, NULL, NULL, NULL, 0);
+        block_timeout_ms > 0 ? ValkeyModule_BlockClient(ctx, NULL, BlockTimeout_Reply, NULL, block_timeout_ms)
+                             : ValkeyModule_BlockClient(ctx, NULL, NULL, NULL, 0);
     if (bc == NULL) {
         ValkeyModule_Log(ctx, VALKEYMODULE_LOGLEVEL_NOTICE,
                          "Failed to block for event %s on %s!", event,
@@ -107,6 +119,13 @@ static int cmdClearEvents(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
     return VALKEYMODULE_OK;
 }
 
+static int cmdSetTimeout(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    if (argc != 2) return ValkeyModule_WrongArity(ctx);
+    if (ValkeyModule_StringToLongLong(argv[1], &block_timeout_ms) != VALKEYMODULE_OK)
+        return ValkeyModule_ReplyWithError(ctx, "ERR invalid timeout");
+    return ValkeyModule_ReplyWithSimpleString(ctx, "OK");
+}
+
 /* This function must be present on each Valkey module. It is used in order to
  * register the commands into the Valkey server. */
 int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
@@ -148,6 +167,8 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
         ValkeyModule_CreateCommand(ctx, "b_keyspace.events", cmdGetEvents, "",
                                    0, 0, 0) == VALKEYMODULE_ERR ||
         ValkeyModule_CreateCommand(ctx, "b_keyspace.clear", cmdClearEvents, "",
+                                   0, 0, 0) == VALKEYMODULE_ERR ||
+        ValkeyModule_CreateCommand(ctx, "b_keyspace.settimeout", cmdSetTimeout, "",
                                    0, 0, 0) == VALKEYMODULE_ERR) {
         return VALKEYMODULE_ERR;
     }

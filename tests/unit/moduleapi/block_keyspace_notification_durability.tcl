@@ -115,3 +115,37 @@ start_server {tags {"modules durability"} overrides {appendonly yes appendfsync 
         assert_equal {OK} [r module unload testblockingkeyspacenotif]
     }
 }
+
+start_server {tags {"modules durability"} overrides {appendonly yes appendfsync always bio-aof-offload-enabled yes}} {
+    r module load $testmodule
+
+    foreach how {timeout unblock} {
+        test "A KSN-blocked write reply stays held when the client is unblocked by $how" {
+            wait_for_blocked_clients_count 0
+            r b_keyspace.settimeout [expr {$how eq {timeout} ? 200 : 100000}]
+            r DEBUG reply-blocking-pause aof
+            set rd [valkey_deferring_client]
+            $rd client id
+            set id [$rd read]
+            $rd hset ksn:$how f v
+            wait_for_blocked_clients_count 1
+            if {$how eq {unblock}} { r client unblock $id timeout }
+            wait_for_blocked_clients_count 0
+            # A later command must not carry the write's reply out with it.
+            $rd ping
+            after 300
+            set fd [$rd channel]
+            fconfigure $fd -blocking 0
+            set got [read $fd]
+            fconfigure $fd -blocking 1
+            assert_equal "" $got
+            r DEBUG reply-blocking-resume aof
+            assert_equal 1 [$rd read]
+            assert_equal PONG [$rd read]
+            $rd close
+            r b_keyspace.settimeout 0
+            # Let the module's worker finish before the next test.
+            after 1100
+        }
+    }
+}

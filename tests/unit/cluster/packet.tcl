@@ -197,9 +197,15 @@ proc create_cluster_forgotten_node_packet {sender_name sender_port sender_cport 
     set CLUSTERMSG_EXT_HEADER_LEN 8
     set CLUSTERMSG_EXT_FORGOTTEN_NODE_LEN 48
 
-    set packet [create_cluster_meet_packet \
-        $sender_name $sender_port $sender_cport 0 1 $CLUSTERMSG_FLAG0_EXT_DATA]
+    set packet [create_cluster_meet_packet $sender_name $sender_port $sender_cport]
+    # type (uint16_t) - PING
     set packet [string replace $packet 12 13 [binary format S $CLUSTERMSG_TYPE_PING]]
+    # count (uint16_t) - no gossip messages
+    set packet [string replace $packet 14 15 [binary format S 0]]
+    # extensions (uint16_t) - one extension
+    set packet [string replace $packet 2214 2215 [binary format S 1]]
+    # mflags[0] - message carries extension data
+    set packet [string replace $packet 2253 2253 [binary format c $CLUSTERMSG_FLAG0_EXT_DATA]]
 
     set extension_len [expr {$CLUSTERMSG_EXT_HEADER_LEN + $CLUSTERMSG_EXT_FORGOTTEN_NODE_LEN}]
     append packet [binary format I $extension_len]

@@ -2616,3 +2616,140 @@ start_server {tags {"repl durability external:skip"} overrides {appendonly yes a
         verify_no_log_message 0 "*crashed by signal*" 0
     }
 }
+
+start_server {tags {"repl durability external:skip"} overrides {appendonly yes appendfsync always bio-aof-offload-enabled yes}} {
+    # Run a ~3s busy script that writes, while a MONITOR client with a backlog
+    # (so its write handler is installed) is drained, and return what the
+    # monitor received during the yield. $during runs once the script yields.
+    proc rb_busy_script_with_monitor {mon during} {
+        r config set busy-reply-threshold 10
+        set big [string repeat x 1000000]
+        for {set i 0} {$i < 4} {incr i} { r set rbmon:filler $big }
+        r DEBUG reply-blocking-pause aof
+        set busy [valkey_deferring_client]
+        $busy eval {
+            redis.call('set', KEYS[1], 'monitored-write')
+            local t = redis.call('time')
+            while true do
+                local n = redis.call('time')
+                if (n[1] - t[1]) * 1000000 + (n[2] - t[2]) > 3000000 then break end
+            end
+            return 1
+        } 1 rbmon:busy
+        wait_for_condition 100 20 {
+            [catch {r ping} e] == 1 && [string match {BUSY*} $e]
+        } else {
+            fail "script did not become busy"
+        }
+        uplevel 1 $during
+        set fd [$mon channel]
+        fconfigure $fd -blocking 0 -translation binary
+        set seen ""
+        set deadline [expr {[clock milliseconds] + 2000}]
+        while {[clock milliseconds] < $deadline} {
+            append seen [read $fd]
+            after 5
+        }
+        fconfigure $fd -blocking 1 -translation auto
+        wait_for_condition 200 50 {
+            [catch {r ping} e] == 0
+        } else {
+            fail "busy script did not finish"
+        }
+        r DEBUG reply-blocking-resume aof
+        assert_equal 1 [$busy read]
+        $busy close
+        r config set busy-reply-threshold 5000
+        return $seen
+    }
+
+    test "MONITOR with a write handler installed gets no busy-script lines during the yield" {
+        set mon [valkey_deferring_client]
+        $mon monitor
+        assert_equal OK [$mon read]
+        set seen [rb_busy_script_with_monitor $mon {}]
+        assert_equal -1 [string first "monitored-write" $seen]
+        $mon close
+        assert_equal PONG [r ping]
+    }
+
+    test "A command from the MONITOR client during the yield does not release its hold" {
+        set mon [valkey_deferring_client]
+        $mon monitor
+        assert_equal OK [$mon read]
+        set seen [rb_busy_script_with_monitor $mon {$mon client id}]
+        assert_equal -1 [string first "monitored-write" $seen]
+        $mon close
+        assert_equal PONG [r ping]
+    }
+
+    test "A transaction that demotes, then one that promotes, does not use a stale reply position" {
+        r set rbmulti:big [string repeat y 100000]
+        # The promoting transaction queues a SET while still a replica.
+        r config set replica-read-only no
+        set rd [valkey_deferring_client]
+        # The big reply is still queued when EXEC starts, so EXEC records a
+        # position inside a reply block that is freed once it is written.
+        $rd get rbmulti:big
+        $rd multi
+        $rd replicaof 127.0.0.1 1
+        $rd exec
+        assert_equal 100000 [string length [$rd read]]
+        assert_equal OK [$rd read]
+        assert_equal QUEUED [$rd read]
+        assert_equal OK [$rd read]
+        assert_equal slave [s role]
+        $rd ping
+        assert_equal PONG [$rd read]
+        # Promote inside a transaction that also writes, so the reply is held.
+        $rd multi
+        $rd replicaof no one
+        $rd set rbmulti:k v
+        $rd exec
+        assert_equal OK [$rd read]
+        assert_equal QUEUED [$rd read]
+        assert_equal QUEUED [$rd read]
+        assert_equal {OK OK} [$rd read]
+        $rd close
+        assert_equal master [s role]
+        r config set replica-read-only yes
+        assert_equal PONG [r ping]
+    }
+}
+
+start_server {tags {"repl durability external:skip"} overrides {appendonly yes appendfsync everysec bio-aof-offload-enabled yes}} {
+    test "MONITOR after a read replies when reply blocking is not active (appendfsync everysec)" {
+        set rd [valkey_deferring_client]
+        $rd get rbev:k
+        assert_equal {} [$rd read]
+        $rd monitor
+        assert_equal OK [$rd read]
+        $rd close
+    }
+}
+
+source tests/support/benchmark.tcl
+source tests/support/cli.tcl
+
+start_server {tags {"repl durability external:skip"} overrides {appendonly yes appendfsync always bio-aof-offload-enabled yes io-threads 4}} {
+    test "MONITOR clients with IO threads under write load do not crash" {
+        # Each write records the monitors' positions while their IO writes are
+        # in flight; completing those writes outside the IO response queue
+        # used to trip an assertion there.
+        set host [srv 0 host]
+        set port [srv 0 port]
+        set pids {}
+        for {set i 0} {$i < 2} {incr i} {
+            lappend pids [exec {*}[valkeycli $host $port] monitor > /dev/null 2>@1 &]
+        }
+        test_defer {foreach pid $pids {catch {exec kill $pid}}}
+        wait_for_condition 100 50 {
+            [regexp -all {flags=O} [r client list]] == 2
+        } else {
+            fail "monitors did not connect"
+        }
+        catch {exec {*}[valkeybenchmark $host $port {-t set,get -n 400000 -c 50 -P 16 -d 256 -q}]}
+        assert_equal PONG [r ping]
+        verify_no_log_message 0 "*ASSERTION FAILED*" 0
+    }
+}

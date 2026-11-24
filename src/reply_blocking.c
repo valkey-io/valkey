@@ -12,6 +12,9 @@ extern int ProcessingEventsWhileBlocked;
 
 /*============================ Internal prototypes ========================= */
 static void resetPreExecutionOffset(struct client *c);
+static void resetPosition(preExecutionOffsetPosition *pos);
+static void recordReplyPosition(struct client *c, preExecutionOffsetPosition *pos);
+static void blockClientAtPosition(client *c, const preExecutionOffsetPosition *pos, const long long blockingReplOffset);
 static void trackCommandPreExecutionPosition(struct client *c);
 static int unblockClientWaitingAck(struct client *c);
 static bool clientEligibleForResponseTracking(client *c);
@@ -117,40 +120,62 @@ int isPrimaryReplyBlockingEnabled(void) {
 
 /*================================= Client management ======================== */
 
-// Reset the pre-execution offset fields.
+static void resetPosition(preExecutionOffsetPosition *pos) {
+    pos->recorded = false;
+    pos->reply_block = NULL;
+    pos->byte_offset = 0;
+}
+
 static void resetPreExecutionOffset(struct client *c) {
-    c->reply_blocking_state.offset.recorded = false;
-    c->reply_blocking_state.offset.reply_block = NULL;
-    c->reply_blocking_state.offset.byte_offset = 0;
+    resetPosition(&c->reply_blocking_state.offset);
 }
 
 
-// Track the pre-execution position in the client reply COB.
-static void trackCommandPreExecutionPosition(struct client *c) {
+/* Record the current end of c's output in *pos. */
+static void recordReplyPosition(struct client *c, preExecutionOffsetPosition *pos) {
     /* A recorded position means the reply may be held, which needs the
      * per-client lists. A client created while reply blocking was off (e.g.
      * while a replica's AOF was stopped to load the primary's RDB) has none,
      * and an AOF restart turns the feature on without visiting every client. */
     replyBlockingClientInit(c);
-    resetPreExecutionOffset(c);
+    pos->reply_block = NULL;
+    pos->byte_offset = 0;
     list *reply = c->reply;
     int bufpos = c->bufpos;
 
     if (reply != NULL && listLength(reply) > 0) {
         listNode *last_reply_block = listLast(reply);
         clientReplyBlock *tail = listNodeValue(last_reply_block);
-        c->reply_blocking_state.offset.reply_block = last_reply_block;
-        c->reply_blocking_state.offset.byte_offset = tail->used;
+        pos->reply_block = last_reply_block;
+        pos->byte_offset = tail->used;
         /* In an encoded buffer the next reply could extend the current payload
          * header across the boundary; a write capped at the boundary would then
          * stop in the middle of it. Start a new header instead. */
         tail->last_header = NULL;
     } else if (bufpos > 0) {
-        c->reply_blocking_state.offset.reply_block = NULL;
-        c->reply_blocking_state.offset.byte_offset = bufpos;
+        pos->byte_offset = bufpos;
     }
     c->last_header = NULL;
-    c->reply_blocking_state.offset.recorded = true;
+    pos->recorded = true;
+}
+
+static void trackCommandPreExecutionPosition(struct client *c) {
+    recordReplyPosition(c, &c->reply_blocking_state.offset);
+}
+
+/* A completed write is about to free a reply block of c that it sent in full
+ * (or reset the static buffer, when reply_block is NULL). A position recorded
+ * there marks the end of that block, and nothing has been appended after it,
+ * so the same boundary is now the start of whatever follows. */
+static void movePositionPastFreedOutput(preExecutionOffsetPosition *pos, listNode *reply_block) {
+    if (!pos->recorded || pos->reply_block != reply_block) return;
+    pos->reply_block = reply_block ? reply_block->next : NULL;
+    pos->byte_offset = 0;
+}
+
+void replyBlockingBeforeWrittenOutputFreed(client *c, listNode *reply_block) {
+    movePositionPastFreedOutput(&c->reply_blocking_state.offset, reply_block);
+    movePositionPastFreedOutput(&c->reply_blocking_state.monitor_hold, reply_block);
 }
 
 /* If the client is currently waiting for reply-blocking acknowledgement,
@@ -213,6 +238,11 @@ static bool clientEligibleForResponseTracking(client *c) {
 
     if (c->cmd == NULL) return false;
 
+    /* A fake client (a module's VM_Call temp client, a script client) has no
+     * connection to hold a reply on, and may be pooled and reused while it
+     * would still be on clients_waiting_ack. */
+    if (c->flag.fake) return false;
+
     bool is_keyspace_global_cmd = IS_KEYSPACE_GLOBAL(c->cmd);
 
     if ((c->cmd->flags & CMD_ADMIN) && !(c->cmd->flags & CMD_WRITE) && !is_keyspace_global_cmd) {
@@ -227,7 +257,7 @@ static bool clientEligibleForResponseTracking(client *c) {
  * needs the recorded position to still exist, so nothing is written to it in
  * the meantime (e.g. from processEventsWhileBlocked() during a busy script). */
 bool isMonitorOutputHeld(const client *c) {
-    return c->flag.monitor && c->reply_blocking_state.offset.recorded;
+    return c->flag.monitor && c->reply_blocking_state.monitor_hold.recorded;
 }
 
 /* Record each MONITOR's COB position for client c's command. */
@@ -239,15 +269,13 @@ static void snapshotMonitors(client *c) {
     listRewind(server.monitors, &li);
     while ((ln = listNext(&li))) {
         client *monitor = ln->value;
-        /* The recorded position points into the monitor's reply list, so no
-         * write may free that block before finalize. Mark the monitor held
-         * first, then finish an in-flight I/O write here, so the post-write
-         * cleanup that frees blocks runs before the snapshot and does not
-         * dispatch a new write. */
-        monitor->reply_blocking_state.offset.recorded = true;
-        waitForClientIO(monitor);
-        if (monitor->io_write_state == CLIENT_COMPLETED_IO) processClientIOWriteDone(monitor);
-        trackCommandPreExecutionPosition(monitor);
+        /* A monitor running the command is held by its own position. */
+        if (monitor == c) continue;
+        /* An in-flight IO write may still complete and free the block the
+         * position points at; replyBlockingBeforeWrittenOutputFreed() then
+         * moves the position. While held, the monitor is not written at all
+         * (see clientHasPendingReplies() and writeToClient()). */
+        recordReplyPosition(monitor, &monitor->reply_blocking_state.monitor_hold);
     }
 }
 
@@ -261,12 +289,12 @@ static void finalizeMonitors(client *c, long long blockingReplOffset) {
     listRewind(server.monitors, &li);
     while ((ln = listNext(&li))) {
         client *monitor = ln->value;
-        if (!monitor->reply_blocking_state.offset.recorded) continue;
+        preExecutionOffsetPosition *hold = &monitor->reply_blocking_state.monitor_hold;
+        if (!hold->recorded) continue;
         if (blockingReplOffset != -1 && isPrimaryReplyBlockingEnabled()) {
-            blockClientOnReplOffset(monitor, blockingReplOffset);
-        } else {
-            resetPreExecutionOffset(monitor);
+            blockClientAtPosition(monitor, hold, blockingReplOffset);
         }
+        resetPosition(hold);
         /* Writes skipped while held dropped it from the pending-write queue. */
         if (clientHasPendingReplies(monitor)) putClientInPendingWriteQueue(monitor);
     }
@@ -309,14 +337,12 @@ static inline void initCmdMetrics(const client *c, struct blockedResponse *br) {
 
 
 // Block the last response if it exists in the client output buffer.
-static void blockLastResponseIfExist(const client *c, const long long blocked_offset) {
-    serverAssert(c->reply_blocking_state.offset.recorded);
+static void blockLastResponseIfExist(const client *c, const preExecutionOffsetPosition *pos, const long long blocked_offset) {
+    serverAssert(pos->recorded);
 
     bool has_new_response = false;
-    listNode *disallowed_reply_block =
-        c->reply_blocking_state.offset.reply_block;
-    size_t disallowed_byte_offset =
-        c->reply_blocking_state.offset.byte_offset;
+    listNode *disallowed_reply_block = pos->reply_block;
+    size_t disallowed_byte_offset = pos->byte_offset;
 
     if (disallowed_reply_block == NULL) {
         if ((size_t)c->bufpos > disallowed_byte_offset) {
@@ -393,29 +419,29 @@ static int isBlockingNeededForOffset(const client *c, const long long offset) {
     return previous_offset < offset;
 }
 
-// Block a given client on the specified replication offset if applicable.
-void blockClientOnReplOffset(client *c, const long long blockingReplOffset) {
+/* Hold c's output after *pos until blockingReplOffset is acknowledged.
+ *
+ * A client scheduled for async close is freed at the next beforeSleep and is
+ * refused all writes until then, so there is no reply to hold. Without a
+ * recorded start position (the command began before reply blocking was turned
+ * on, e.g. CONFIG SET appendfsync always) there is no boundary to hold at. */
+static void blockClientAtPosition(client *c, const preExecutionOffsetPosition *pos, const long long blockingReplOffset) {
     serverAssert(isPrimaryReplyBlockingEnabled());
-
-    /* A client scheduled for async close is freed at the next beforeSleep and
-     * is refused all writes until then, so there is no reply to hold. Without a
-     * recorded start position (the command began before reply blocking was
-     * turned on, e.g. CONFIG SET appendfsync always) there is no boundary to
-     * hold at either. */
-    if (!c->flag.close_asap && c->reply_blocking_state.offset.recorded &&
-        isBlockingNeededForOffset(c, blockingReplOffset)) {
-        /* A MONITOR client held on another client's write has no command. */
-        serverLog(LL_DEBUG, "client should be blocked at offset %lld, cmd=%s, is_write=%d",
-                  blockingReplOffset, c->cmd ? c->cmd->declared_name : "(none)",
-                  (c->cmd && (c->cmd->flags & CMD_WRITE)) ? 1 : 0);
-        blockLastResponseIfExist(c, blockingReplOffset);
-        if (c->reply_blocking_state.waiting_ack_node == NULL) {
-            listAddNodeTail(server.reply_blocking.clients_waiting_ack, c);
-            c->reply_blocking_state.waiting_ack_node = listLast(server.reply_blocking.clients_waiting_ack);
-            server.reply_blocking.clients_blocked++;
-        }
+    if (c->flag.close_asap || !pos->recorded || !isBlockingNeededForOffset(c, blockingReplOffset)) return;
+    /* A MONITOR client held on another client's write has no command. */
+    serverLog(LL_DEBUG, "client should be blocked at offset %lld, cmd=%s, is_write=%d", blockingReplOffset,
+              c->cmd ? c->cmd->declared_name : "(none)", (c->cmd && (c->cmd->flags & CMD_WRITE)) ? 1 : 0);
+    blockLastResponseIfExist(c, pos, blockingReplOffset);
+    if (c->reply_blocking_state.waiting_ack_node == NULL) {
+        listAddNodeTail(server.reply_blocking.clients_waiting_ack, c);
+        c->reply_blocking_state.waiting_ack_node = listLast(server.reply_blocking.clients_waiting_ack);
+        server.reply_blocking.clients_blocked++;
     }
+}
 
+/* Hold c's output after its recorded pre-execution position, then clear it. */
+void blockClientOnReplOffset(client *c, const long long blockingReplOffset) {
+    blockClientAtPosition(c, &c->reply_blocking_state.offset, blockingReplOffset);
     resetPreExecutionOffset(c);
 }
 
@@ -741,8 +767,11 @@ void beginCommandReplyBlocking(client *c) {
     c->reply_blocking_state.reply_blocking_flags = 0;
     c->reply_blocking_state.current_command_repl_offset = -1;
     c->reply_blocking_state.deferred_block_offset = -1;
+    /* A position left from an earlier command (e.g. one that demoted the
+     * server mid-transaction) may point at a freed reply block. */
+    resetPreExecutionOffset(c);
 
-    if (iAmPrimary() && clientEligibleForResponseTracking(c)) {
+    if (isPrimaryReplyBlockingEnabled() && clientEligibleForResponseTracking(c)) {
         trackCommandPreExecutionPosition(c);
 
         snapshotMonitors(c);
@@ -754,6 +783,7 @@ void beginCommandReplyBlocking(client *c) {
 // Perform post-processing after command execution for a given client.
 void finalizeCommandReplyBlocking(client *c) {
     if (!isPrimaryReplyBlockingEnabled() || c->cmd == NULL || c->flag.multi) {
+        resetPreExecutionOffset(c);
         finalizeMonitors(c, -1);
         return;
     }

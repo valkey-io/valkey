@@ -116,3 +116,35 @@ start_server {tags {"modules durability external:skip"} overrides {appendonly ye
         $rd close
     }
 }
+
+set bcmodule [file normalize tests/modules/blockedclient.so]
+
+start_server {tags {"modules durability external:skip"} overrides {appendonly yes appendfsync always bio-aof-offload-enabled yes}} {
+    r module load $bcmodule
+
+    test "A blocking VM_Call (K flag) served while the AOF is paused survives a demotion" {
+        r del rbk:list
+        set rd [valkey_deferring_client]
+        $rd do_rm_call_async blpop rbk:list 0
+        wait_for_blocked_clients_count 1
+        r debug reply-blocking-pause aof
+        set w [valkey_deferring_client]
+        $w lpush rbk:list a
+        wait_for_condition 50 20 {
+            [getInfoProperty [r info debug] reply_blocking_clients_waiting_ack] >= 1
+        } else {
+            fail "the LPUSH was not held"
+        }
+        # Demote before the write is acknowledged, then promote again.
+        r replicaof 127.0.0.1 1
+        r replicaof no one
+        r debug reply-blocking-resume aof
+        assert_equal {rbk:list a} [$rd read]
+        $w close
+        # The module temp-client pool must still be valid.
+        r lpush rbk:list b
+        assert_equal {rbk:list b} [r do_rm_call_async blpop rbk:list 0]
+        $rd close
+        assert_equal PONG [r ping]
+    }
+}

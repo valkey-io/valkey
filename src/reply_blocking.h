@@ -156,6 +156,12 @@ typedef struct clientReplyBlockingState {
      * to record the boundaries of the COB. */
     preExecutionOffsetPosition offset;
 
+    /* For a MONITOR client: the position in its output where another client's
+     * command began. Output after it is held until that command finishes.
+     * Kept apart from `offset`, which belongs to the monitor's own commands
+     * (it may send allow-busy commands while a script yields). */
+    preExecutionOffsetPosition monitor_hold;
+
     /* Replication offset to block this current command response */
     long long current_command_repl_offset;
 
@@ -212,6 +218,7 @@ void pauseAofReplyBlocking(void);
 void resumeAofReplyBlocking(void);
 bool isClientReplyBufferLimited(client *c);
 bool isMonitorOutputHeld(const client *c);
+void replyBlockingBeforeWrittenOutputFreed(client *c, struct listNode *reply_block);
 sds genReplyBlockingInfoString(sds info);
 
 /* Function store dirty tracking (reply-blocking for function store writes) */

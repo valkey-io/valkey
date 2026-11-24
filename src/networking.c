@@ -1878,6 +1878,8 @@ int clientHasUnsentOutput(client *c) {
 int clientHasPendingReplies(client *c) {
     if (isMonitorOutputHeld(c)) return 0;
     if (isClientReplyBufferLimited(c)) {
+        /* An IO thread may be updating io_last_written. */
+        if (c->io_write_state == CLIENT_PENDING_IO) return 1;
         /* Check if our first allowed reply boundary is in a position that comes
          * after the current position that valkey has written up to in the COB. */
         const blockedResponse *n = listNodeValue(listFirst(c->reply_blocking_state.blocked_responses));
@@ -3589,6 +3591,7 @@ static void _postWriteToClient(client *c) {
         if (!last_written || c->bufpos == c->io_last_written.bufpos) {
             /* If encoded then release references to bulk string objects */
             if (c->flag.buf_encoded) releaseBufReferences(c->buf, c->bufpos, c);
+            replyBlockingBeforeWrittenOutputFreed(c, NULL);
             /* Reset buffer metadata */
             c->bufpos = 0;
             c->flag.buf_encoded = 0;
@@ -3623,6 +3626,7 @@ static void _postWriteToClient(client *c) {
             c->reply_bytes -= o->size;
             /* If encoded then release references to bulk string objects */
             if (o->flag.buf_encoded) releaseBufReferences(o->buf, o->used, c);
+            replyBlockingBeforeWrittenOutputFreed(c, next);
             listDelNode(c->reply, next);
             /* If completely written buffer is last written then reset last written state */
             if (last_written) resetLastWrittenBuf(c);
@@ -3693,7 +3697,10 @@ int writeToClient(client *c) {
 
     if (getClientType(c) == CLIENT_TYPE_REPLICA) {
         writeToReplica(c);
-    } else {
+    } else if (!isMonitorOutputHeld(c)) {
+        /* A held MONITOR is not written, even from an installed write handler
+         * (e.g. while a busy script yields). postWriteToClient() removes the
+         * handler; finalizeMonitors() queues the write again. */
         _writeToClient(c);
     }
 

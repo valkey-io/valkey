@@ -424,3 +424,44 @@ start_server {tags {"regression"}} {
         $rd close
     }
 }
+
+start_server {tags {"regression needs:debug"} overrides {io-threads 2 io-threads-always-active yes}} {
+
+    test "Stale argc with DONT_PARSE should not crash" {
+        if {$::tls} {
+            set fd [::tls::socket [srv 0 host] [srv 0 port]]
+        } else {
+            set fd [socket [srv 0 host] [srv 0 port]]
+        }
+        fconfigure $fd -translation binary -buffering full
+
+        # Get client ID.
+        puts -nonewline $fd "CLIENT ID\r\n"
+        flush $fd
+        set cid [string trim [string range [gets $fd] 1 end]]
+
+        # Send PING + incomplete SET.
+        # IO thread parses PING, SET is incomplete → stale argc after consumeCommandQueue.
+        puts -nonewline $fd "PING\r\n*3\r\n\$3\r\nSET\r\n\$1\r\na\r\n\$10\r\nhello"
+        flush $fd
+        read $fd 7 ;# consume +PONG\r\n
+
+        # Simulate an event that marks the client for closure.
+        r DEBUG SET-CLOSE-AFTER-REPLY $cid
+        set net_in [get_field_in_client_list $cid [r client list id $cid] "tot-net-in"]
+
+        # Send more data → DONT_PARSE → stale argc > 0 → pending_command → crash.
+        puts -nonewline $fd "world\r\n"
+        flush $fd
+
+        # Wait until the server has read the 7 bytes above. The read is counted
+        # in the same main-thread pass that would hit the crash.
+        wait_for_condition 50 100 {
+            [get_field_in_client_list $cid [r client list id $cid] "tot-net-in"] == $net_in + 7
+        } else {
+            fail "server did not read the remaining bytes"
+        }
+        assert_equal [r PING] PONG
+        catch {close $fd}
+    }
+}

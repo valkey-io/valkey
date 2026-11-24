@@ -560,6 +560,8 @@ void debugCommand(client *c) {
             "    Force TLS write error for testing.",
             "BIO-DRAIN <type>",
             "    Wait for the specified bio job queue to become empty.",
+            "SET-CLOSE-AFTER-REPLY <id>",
+            "    Mark a client to be closed after its pending replies are written.",
             NULL};
         addExtendedReplyHelp(c, help, clusterDebugCommandExtendedHelp());
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "segfault")) {
@@ -1184,6 +1186,17 @@ void debugCommand(client *c) {
         }
         bioDrainWorker(type);
         addReply(c, shared.ok);
+    } else if (!strcasecmp(objectGetVal(c->argv[1]), "set-close-after-reply") && c->argc == 3) {
+        long long target_id;
+        if (getLongLongFromObjectOrReply(c, c->argv[2], &target_id, NULL) != C_OK) return;
+        client *target = lookupClientByID(target_id);
+        if (!target) {
+            addReplyError(c, "No such client");
+            return;
+        }
+        /* Queue the reply first, so it is not dropped when targeting ourselves. */
+        addReply(c, shared.ok);
+        target->flag.close_after_reply = 1;
     } else if (!handleDebugClusterCommand(c)) {
         addReplySubcommandSyntaxError(c);
         return;

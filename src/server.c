@@ -2467,6 +2467,7 @@ void initServerConfig(void) {
     server.aof_fd_gen = 0;
     atomic_store_explicit(&server.aof_bio_fsync_error_gen, 0, memory_order_relaxed);
     server.aof_rewrite_base_fd_gen = 0;
+    server.aof_committed_base_fd_gen = 0;
     server.aof_rewrite_time_last = -1;
     server.aof_rewrite_time_start = -1;
     server.aof_lastbgrewrite_status = C_OK;
@@ -5436,8 +5437,12 @@ int writeCommandsDeniedByDiskError(void) {
         /* AOF fsync error. */
         int aof_bio_fsync_status = atomic_load_explicit(&server.aof_bio_fsync_status, memory_order_acquire);
         if (aof_bio_fsync_status == C_ERR) {
-            server.aof_last_write_errno = atomic_load_explicit(&server.aof_bio_fsync_errno, memory_order_relaxed);
-            return DISK_ERROR_TYPE_AOF;
+            aofClearCoveredFsyncError();
+            aof_bio_fsync_status = atomic_load_explicit(&server.aof_bio_fsync_status, memory_order_acquire);
+            if (aof_bio_fsync_status == C_ERR) {
+                server.aof_last_write_errno = atomic_load_explicit(&server.aof_bio_fsync_errno, memory_order_relaxed);
+                return DISK_ERROR_TYPE_AOF;
+            }
         }
     }
 
@@ -6804,6 +6809,10 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
             save_perc = ((double)server.stat_current_save_keys_processed / server.stat_current_save_keys_total) * 100;
         }
         int aof_bio_fsync_status = atomic_load_explicit(&server.aof_bio_fsync_status, memory_order_acquire);
+        if (aof_bio_fsync_status == C_ERR) {
+            aofClearCoveredFsyncError();
+            aof_bio_fsync_status = atomic_load_explicit(&server.aof_bio_fsync_status, memory_order_acquire);
+        }
 
         /* Determine current bgsave type */
         const char *current_bgsave_type;

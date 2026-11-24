@@ -1177,6 +1177,26 @@ ssize_t aofWrite(int fd, const char *buf, size_t len) {
     return totwritten;
 }
 
+/* Clear a latched BIO fsync error once its generation is covered by a
+ * committed rewrite base and BIO_CLOSE_AOF is empty. BIO_AOF_FSYNC and
+ * BIO_CLOSE_AOF share FIFO worker 1, so BIO_CLOSE_AOF == 0 guarantees all
+ * pre-rotation jobs have finished. Reset aof_last_incr_fsync_offset before
+ * release-storing C_OK so the new incremental delta must be fsynced before
+ * fsynced_reploff_pending advances. */
+void aofClearCoveredFsyncError(void) {
+    if (server.aof_state == AOF_OFF || server.aof_committed_base_fd_gen == 0) return;
+    if (atomic_load_explicit(&server.aof_bio_fsync_status, memory_order_acquire) != C_ERR) return;
+    if (bioPendingJobsOfType(BIO_CLOSE_AOF) != 0) return;
+    if (atomic_load_explicit(&server.aof_bio_fsync_error_gen, memory_order_relaxed) <
+        server.aof_committed_base_fd_gen) {
+        server.aof_last_incr_fsync_offset = 0;
+        atomic_store_explicit(&server.aof_bio_fsync_errno, 0, memory_order_relaxed);
+        atomic_store_explicit(&server.aof_bio_fsync_error_gen, 0, memory_order_relaxed);
+        atomic_store_explicit(&server.aof_bio_fsync_status, C_OK, memory_order_release);
+        serverLog(LL_NOTICE, "Background AOF rewrite succeeded; cleared previous AOF fsync error state");
+    }
+}
+
 /* Write the append only file buffer on disk.
  *
  * Since we are required to write the AOF before replying to the client,
@@ -1200,6 +1220,8 @@ void flushAppendOnlyFile(int force) {
     ssize_t nwritten;
     int sync_in_progress = 0;
     mstime_t latency;
+
+    aofClearCoveredFsyncError();
 
     if (sdslen(server.aof_buf) == 0) {
         /* Check if we need to do fsync even the aof buffer is empty,
@@ -3076,23 +3098,11 @@ void backgroundRewriteDoneHandler(int exitcode, int bysignal) {
         server.aof_lastbgrewrite_status = C_OK;
         server.stat_aofrw_consecutive_failures = 0;
 
-        /* BIO_AOF_FSYNC and BIO_CLOSE_AOF share FIFO worker 1, so draining
-         * BIO_CLOSE_AOF waits for every pre-rotation job (aof_fd_gen <
-         * aof_rewrite_base_fd_gen) without blocking on an in-flight fsync of
-         * the new incremental file (AOF_WAIT_REWRITE already drained both
-         * queues before forking). Clear any latched error covered by the
-         * replacement base. */
         if (server.aof_state != AOF_OFF) {
-            bioDrainWorker(BIO_CLOSE_AOF);
-            if (atomic_load_explicit(&server.aof_bio_fsync_status, memory_order_acquire) == C_ERR &&
-                atomic_load_explicit(&server.aof_bio_fsync_error_gen, memory_order_relaxed) <
-                    server.aof_rewrite_base_fd_gen) {
-                server.aof_last_incr_fsync_offset = 0;
-                atomic_store_explicit(&server.aof_bio_fsync_errno, 0, memory_order_relaxed);
-                atomic_store_explicit(&server.aof_bio_fsync_error_gen, 0, memory_order_relaxed);
-                atomic_store_explicit(&server.aof_bio_fsync_status, C_OK, memory_order_release);
-                serverLog(LL_NOTICE, "Background AOF rewrite succeeded; cleared previous AOF fsync error state");
+            if (server.aof_rewrite_base_fd_gen > server.aof_committed_base_fd_gen) {
+                server.aof_committed_base_fd_gen = server.aof_rewrite_base_fd_gen;
             }
+            aofClearCoveredFsyncError();
         }
 
         serverLog(LL_NOTICE, "Background AOF rewrite finished successfully");

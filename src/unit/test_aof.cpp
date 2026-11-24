@@ -202,6 +202,44 @@ TEST_F(AofFsyncOffsetTest, DoesNotAdvanceWhenAppendfsyncNo) {
     EXPECT_EQ(server.fsynced_reploff_pending, 100);
 }
 
+static int g_gated_fd = -1;
+static int g_entered_pipe[2] = {-1, -1};
+static int g_release_pipe[2] = {-1, -1};
+
+static void closePipeFd(int *fd) {
+    if (*fd != -1) {
+        close(*fd);
+        *fd = -1;
+    }
+}
+
+static void cleanupBioFsyncGate(void) {
+    closePipeFd(&g_release_pipe[1]);
+    if (g_gated_fd != -1) {
+        bioDrainWorker(BIO_CLOSE_AOF);
+        g_gated_fd = -1;
+    }
+    closePipeFd(&g_release_pipe[0]);
+    closePipeFd(&g_entered_pipe[0]);
+    closePipeFd(&g_entered_pipe[1]);
+}
+
+static int gatedEioAofFsync(int fd) {
+    if (fd == g_gated_fd) {
+        char b = 1;
+        ssize_t n;
+        do {
+            n = write(g_entered_pipe[1], &b, 1);
+        } while (n == -1 && errno == EINTR);
+        do {
+            n = read(g_release_pipe[0], &b, 1);
+        } while (n == -1 && errno == EINTR);
+        errno = EIO;
+        return -1;
+    }
+    return valkey_fsync(fd);
+}
+
 class AofBioRecoveryTest : public ::testing::Test {
   protected:
     char tmpdir[128];
@@ -269,6 +307,7 @@ class AofBioRecoveryTest : public ::testing::Test {
         server.aof_fd_gen = 0;
         server.aof_bio_fsync_error_gen = 0;
         server.aof_rewrite_base_fd_gen = 0;
+        server.aof_committed_base_fd_gen = 0;
         server.aof_last_incr_size = 0;
         server.aof_last_incr_fsync_offset = 0;
         server.aof_current_size = 0;
@@ -284,6 +323,7 @@ class AofBioRecoveryTest : public ::testing::Test {
     }
 
     void TearDown() override {
+        cleanupBioFsyncGate();
         bioDrainWorker(BIO_AOF_FSYNC);
         bioDrainWorker(BIO_CLOSE_AOF);
         bioDrainWorker(BIO_CLOSE_FILE);
@@ -324,10 +364,23 @@ class AofBioRecoveryTest : public ::testing::Test {
 
     int createTempFile(const char *name) {
         int fd = open(name, O_RDWR | O_CREAT | O_TRUNC, 0644);
-        if (fd != -1) {
-            const char data[] = "*1\r\n$4\r\nPING\r\n";
-            ssize_t n = write(fd, data, sizeof(data) - 1);
-            (void)n;
+        if (fd == -1) return -1;
+        const char data[] = "*1\r\n$4\r\nPING\r\n";
+        size_t remaining = sizeof(data) - 1;
+        const char *p = data;
+        while (remaining > 0) {
+            ssize_t n = write(fd, p, remaining);
+            if (n < 0) {
+                if (errno == EINTR) continue;
+                close(fd);
+                return -1;
+            }
+            if (n == 0) {
+                close(fd);
+                return -1;
+            }
+            p += n;
+            remaining -= (size_t)n;
         }
         return fd;
     }
@@ -528,32 +581,141 @@ TEST_F(AofBioRecoveryTest, RewriteDoesNotClearErrorOnNewIncrGen) {
     EXPECT_EQ(server.aof_bio_fsync_status, C_ERR);
     EXPECT_EQ(server.aof_bio_fsync_error_gen, server.aof_rewrite_base_fd_gen);
     EXPECT_EQ(server.fsynced_reploff_pending, 100);
+
+    aofClearCoveredFsyncError();
+    flushAppendOnlyFile(0);
+    EXPECT_EQ(writeCommandsDeniedByDiskError(), DISK_ERROR_TYPE_AOF);
+    EXPECT_EQ(server.aof_bio_fsync_status, C_ERR);
+    EXPECT_EQ(server.aof_bio_fsync_error_gen, server.aof_rewrite_base_fd_gen);
+    EXPECT_EQ(server.fsynced_reploff_pending, 100);
 }
 
-TEST_F(AofBioRecoveryTest, BackgroundRewriteDoneDrainsBioCloseAndHandlesWaitRewrite) {
+TEST_F(AofBioRecoveryTest, BackgroundRewriteDoneDoesNotBlockAndClearsLateRetiredCloseError) {
     initAofDirAndOpen();
 
-    server.aof_state = AOF_WAIT_REWRITE;
+    server.aof_state = AOF_ON;
+    server.aof_bio_fsync_status = C_OK;
+    server.primary_repl_offset = 200;
+    server.fsynced_reploff = 100;
+    server.fsynced_reploff_pending = 100;
+
+    ASSERT_EQ(pipe(g_entered_pipe), 0);
+    ASSERT_EQ(pipe(g_release_pipe), 0);
+
+    server.child_pid = 42428;
+    createRewriteBaseTempFile(server.child_pid);
+
+    {
+        MockValkey mock;
+        EXPECT_CALL(mock, aofFsync(::testing::_)).WillRepeatedly(::testing::Invoke(gatedEioAofFsync));
+
+        char b = 0;
+        ssize_t n;
+        g_gated_fd = server.aof_fd;
+        if (openNewIncrAofForAppend() != C_OK) {
+            ADD_FAILURE() << "openNewIncrAofForAppend failed";
+            goto cleanup_gate;
+        }
+
+        do {
+            n = read(g_entered_pipe[0], &b, 1);
+        } while (n == -1 && errno == EINTR);
+        if (n != 1) {
+            ADD_FAILURE() << "failed waiting for gated aofFsync";
+            goto cleanup_gate;
+        }
+
+        backgroundRewriteDoneHandler(0, 0);
+
+        EXPECT_EQ(bioPendingJobsOfType(BIO_CLOSE_AOF), 1UL);
+        EXPECT_EQ(server.aof_lastbgrewrite_status, C_OK);
+        EXPECT_EQ(server.aof_committed_base_fd_gen, server.aof_rewrite_base_fd_gen);
+        EXPECT_EQ(server.aof_bio_fsync_status, C_OK);
+
+        server.aof_last_incr_size = 64;
+        server.aof_last_incr_fsync_offset = 64;
+        server.primary_repl_offset = 260;
+        flushAppendOnlyFile(0);
+        EXPECT_EQ(server.fsynced_reploff_pending, 100);
+
+        b = 1;
+        do {
+            n = write(g_release_pipe[1], &b, 1);
+        } while (n == -1 && errno == EINTR);
+        EXPECT_EQ(n, 1);
+        bioDrainWorker(BIO_CLOSE_AOF);
+
+        EXPECT_EQ(server.aof_bio_fsync_status, C_ERR);
+        EXPECT_EQ(server.aof_bio_fsync_error_gen, 1ULL);
+    cleanup_gate:
+        cleanupBioFsyncGate();
+    }
+
+    if (HasFailure()) return;
+
+    flushAppendOnlyFile(0);
+    EXPECT_EQ(server.aof_bio_fsync_status, C_OK);
+    EXPECT_EQ(server.aof_bio_fsync_error_gen, 0ULL);
+    EXPECT_EQ(server.aof_last_incr_fsync_offset, 0);
+    EXPECT_EQ(server.fsynced_reploff_pending, 100);
+
+    bioCreateFsyncJob(server.aof_fd, 260, 0);
+    bioDrainWorker(BIO_AOF_FSYNC);
+    EXPECT_EQ(server.fsynced_reploff_pending, 260);
+}
+
+TEST_F(AofBioRecoveryTest, DeferredClearWaitsForPendingBioCloseAndClearsOnceDrained) {
+    initAofDirAndOpen();
+
+    server.aof_state = AOF_ON;
     server.aof_bio_fsync_status = C_ERR;
     server.aof_bio_fsync_errno = EIO;
     server.aof_bio_fsync_error_gen = server.aof_fd_gen;
-    server.fsynced_reploff = 100;
-    server.fsynced_reploff_pending = 100;
-    server.primary_repl_offset = 200;
 
-    /* Leave the rotation BIO_CLOSE_AOF job in-flight for backgroundRewriteDoneHandler to drain. */
+    ASSERT_EQ(openNewIncrAofForAppend(), C_OK);
+    bioDrainWorker(BIO_CLOSE_AOF);
+
+    {
+        MockValkey mock;
+        EXPECT_CALL(mock, bioPendingJobsOfType(BIO_CLOSE_AOF)).WillRepeatedly(Return(1UL));
+        EXPECT_CALL(mock, bioPendingJobsOfType(BIO_AOF_FSYNC)).WillRepeatedly(Return(0UL));
+
+        server.child_pid = 42429;
+        createRewriteBaseTempFile(server.child_pid);
+
+        backgroundRewriteDoneHandler(0, 0);
+
+        EXPECT_EQ(server.aof_lastbgrewrite_status, C_OK);
+        EXPECT_EQ(server.aof_committed_base_fd_gen, server.aof_rewrite_base_fd_gen);
+        EXPECT_EQ(server.aof_bio_fsync_status, C_ERR);
+        EXPECT_EQ(writeCommandsDeniedByDiskError(), DISK_ERROR_TYPE_AOF);
+    }
+
+    EXPECT_EQ(writeCommandsDeniedByDiskError(), DISK_ERROR_TYPE_NONE);
+    EXPECT_EQ(server.aof_bio_fsync_status, C_OK);
+}
+
+TEST_F(AofBioRecoveryTest, BackgroundRewriteDoneTransitionsWaitRewriteToOn) {
+    initAofDirAndOpen();
+
+    close(server.aof_fd);
+    server.aof_fd = -1;
+    server.aof_state = AOF_WAIT_REWRITE;
+    server.fsynced_reploff = 0;
+    server.fsynced_reploff_pending = 200;
+
     ASSERT_EQ(openNewIncrAofForAppend(), C_OK);
 
-    server.child_pid = 42428;
+    server.child_pid = 42430;
     createRewriteBaseTempFile(server.child_pid);
 
     backgroundRewriteDoneHandler(0, 0);
 
     EXPECT_EQ(server.aof_lastbgrewrite_status, C_OK);
     EXPECT_EQ(server.aof_state, AOF_ON);
+    EXPECT_EQ(server.fsynced_reploff, 200);
     EXPECT_EQ(server.aof_bio_fsync_status, C_OK);
     EXPECT_EQ(bioPendingJobsOfType(BIO_CLOSE_AOF), 0UL);
-    EXPECT_EQ(bioPendingJobsOfType(BIO_AOF_FSYNC), 0UL);
 }
 
 TEST_F(AofBioRecoveryTest, AppendfsyncAlwaysDoesNotPublishAcrossPendingOrFailedBioClose) {

@@ -2200,6 +2200,8 @@ struct valkeyServer {
     _Atomic(uint64_t) aof_bio_fsync_error_gen;
     /* aof_fd_gen after rotation; rewrite base covers gens < this. */
     uint64_t aof_rewrite_base_fd_gen;
+    /* Highest committed rewrite base generation; errors with gen < this are covered. */
+    uint64_t aof_committed_base_fd_gen;
 
     /* RDB persistence */
     long long dirty;                      /* Changes to DB from the last save */
@@ -3548,6 +3550,7 @@ int bg_unlink(const char *filename);
 
 /* AOF persistence */
 int aofFsync(int fd);
+void aofClearCoveredFsyncError(void);
 void flushAppendOnlyFile(int force);
 void feedAppendOnlyFile(int dictid, robj **argv, int argc);
 sds catAppendOnlyGenericCommand(sds dst, int argc, robj **argv);

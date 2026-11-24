@@ -76,7 +76,7 @@
 
 static unsigned int bio_job_to_worker[] = {
     [BIO_CLOSE_FILE] = 0,
-    [BIO_AOF_FSYNC] = 1, /* Shared FIFO worker with BIO_CLOSE_AOF; backgroundRewriteDoneHandler() relies on this. */
+    [BIO_AOF_FSYNC] = 1, /* Shared FIFO worker with BIO_CLOSE_AOF; aofClearCoveredFsyncError() relies on this. */
     [BIO_CLOSE_AOF] = 1,
     [BIO_LAZY_FREE] = 2,
     [BIO_RDB_SAVE] = 3,

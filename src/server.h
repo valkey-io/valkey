@@ -4605,13 +4605,26 @@ serverDb *createDatabaseIfNeeded(int id);
 serverDb *createDatabaseInArrayIfNeeded(serverDb **dbarray, int id);
 void trackCreatedDatabase(int id);
 
+/* Returns the first position at or after pos in server.created_db_ids that
+ * holds an id greater than last_id, or created_db_count when there is none. */
+static inline int createdDbIndexAfter(int pos, int last_id) {
+    while (pos < server.created_db_count && server.created_db_ids[pos] <= last_id) pos++;
+    return pos;
+}
+
 /* Iterates over the databases that exist in server.db[], in ascending id order.
  * Databases are created lazily, and the NULL entries of server.db[] are not
- * visited. 'db' is a serverDb * declared by the caller. The loop body must not
- * create databases, because that inserts into the list being iterated. */
-#define forEachCreatedDb(db)                                                                           \
-    for (int _cdb_idx = 0;                                                                             \
-         _cdb_idx < server.created_db_count && ((db) = server.db[server.created_db_ids[_cdb_idx]], 1); \
+ * visited. 'db' is a serverDb * declared by the caller.
+ *
+ * The loop body may create databases, for example through a module callback.
+ * The loop remembers the id of the last visited database and moves to the
+ * first id greater than it, so every database that existed when the loop
+ * started is visited exactly once. A database created with an id greater than
+ * the current one is visited too; one created with a smaller id is not. */
+#define forEachCreatedDb(db)                                                                \
+    for (int _cdb_idx = 0, _cdb_last = -1;                                                  \
+         (_cdb_idx = createdDbIndexAfter(_cdb_idx, _cdb_last)) < server.created_db_count && \
+         ((db) = server.db[_cdb_last = server.created_db_ids[_cdb_idx]], 1);                \
          _cdb_idx++)
 void swapMainDbWithTempDb(serverDb **tempDb);
 sds getVersion(void);

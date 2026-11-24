@@ -78,7 +78,13 @@ PRE_VOTE <term> <granted>
 
 PROPOSE <entry>
     Forwards a proposal from a follower to the leader. The entry
-    uses the same format as log entries (type followed by data).
+    uses the same format as log entries (type followed by data). The
+    proposer completes the proposal when it applies an identical entry
+    that isn't older than the proposal: one after everything committed
+    or reported as unchanged when the proposal was made (on the leader,
+    after its whole log). One such entry completes every identical
+    proposal. A follower can still match an older identical entry that
+    was committed before the proposal, if it hadn't learned that yet.
 
 REJECT <reason> <entry>
     Reply to PROPOSE when the leader's pre-validation fails. <reason> is
@@ -98,13 +104,7 @@ UNCHANGED <index> <entry>
     (ReadIndex, Raft thesis 6.4). If its state has changed by then, or it
     hadn't applied its whole log, it appends the entry, which also
     succeeds when applied. The proposer replies OK to its client once it
-    has applied up to <index>, the leader's last applied index. A
-    proposal is only completed by an applied entry from an index above
-    everything committed or reported as unchanged when it was made (on
-    the leader, above its whole log), since an older identical entry
-    isn't its own. A follower can still match an older identical entry
-    that was committed before the proposal, if it hadn't learned that
-    yet.
+    has applied up to <index>, the leader's last applied index.
 
 FAILOVER_PREPARE
     Sent by a replica to its primary to request a coordinated failover.

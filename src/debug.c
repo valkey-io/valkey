@@ -559,6 +559,8 @@ void debugCommand(client *c) {
             "    Force TLS write error for testing.",
             "BIO-DRAIN <type>",
             "    Wait for the specified bio job queue to become empty.",
+            "SET-CLOSE-AFTER-REPLY <id>",
+            "    Mark a client to be closed after its pending replies are written.",
             NULL};
         addExtendedReplyHelp(c, help, clusterDebugCommandExtendedHelp());
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "segfault")) {

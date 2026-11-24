@@ -318,6 +318,15 @@ void restoreCommand(client *c) {
             rewriteClientCommandArgument(c, c->argc, shared.absttl);
         }
     }
+    if (rdbIsForeignVersion(rdbver)) {
+        rio native_payload;
+        createDumpPayload(&native_payload, obj, key, c->db->id);
+        robj *native_dump =
+            createStringObject(native_payload.io.buffer.ptr, sdslen(native_payload.io.buffer.ptr));
+        rewriteClientCommandArgument(c, 3, native_dump);
+        decrRefCount(native_dump);
+        sdsfree(native_payload.io.buffer.ptr);
+    }
     objectSetLRUOrLFU(obj, lfu_freq, lru_idle);
     signalModifiedKey(c, c->db, key);
     notifyKeyspaceEvent(NOTIFY_GENERIC, "restore", key, c->db->id);

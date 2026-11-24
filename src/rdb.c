@@ -77,6 +77,8 @@
 /* This macro tells if we are in the context of a RESTORE command, and not loading an RDB or AOF. */
 #define isRestoreContext() ((server.current_client == NULL || server.current_client->id == CLIENT_ID_AOF) ? 0 : 1)
 
+static unsigned long long rdb_stream_idmp_discarded_count;
+
 char *rdbFileBeingLoaded = NULL; /* used for rdb checking on read error */
 extern int rdbCheckMode;
 void rdbCheckError(const char *fmt, ...);
@@ -482,16 +484,21 @@ ssize_t rdbSaveLzfStringObject(rio *rdb, unsigned char *s, size_t len) {
 /* Load an LZF compressed string in RDB format. The returned value
  * changes according to 'flags'. For more info check the
  * rdbGenericLoadStringObject() function. */
-void *rdbLoadLzfStringObject(rio *rdb, int flags, size_t *lenptr) {
+void *rdbLoadLzfStringObject(rio *rdb,
+                             int flags,
+                             size_t *lenptr,
+                             bool *allocation_error) {
     int plain = flags & RDB_LOAD_PLAIN;
     int sds = flags & RDB_LOAD_SDS;
     uint64_t len, clen;
     unsigned char *c = NULL;
     char *val = NULL;
 
+    if (allocation_error) *allocation_error = false;
     if ((clen = rdbLoadLen(rdb, NULL)) == RDB_LENERR) return NULL;
     if ((len = rdbLoadLen(rdb, NULL)) == RDB_LENERR) return NULL;
     if ((c = ztrymalloc(clen)) == NULL) {
+        if (allocation_error) *allocation_error = true;
         serverLog(isRestoreContext() ? LL_VERBOSE : LL_WARNING, "rdbLoadLzfStringObject failed allocating %llu bytes",
                   (unsigned long long)clen);
         goto err;
@@ -504,6 +511,7 @@ void *rdbLoadLzfStringObject(rio *rdb, int flags, size_t *lenptr) {
         val = sdstrynewlen(SDS_NOINIT, len);
     }
     if (!val) {
+        if (allocation_error) *allocation_error = true;
         serverLog(isRestoreContext() ? LL_VERBOSE : LL_WARNING, "rdbLoadLzfStringObject failed allocating %llu bytes",
                   (unsigned long long)len);
         goto err;
@@ -614,12 +622,16 @@ ssize_t rdbSaveStringObject(rio *rdb, robj *obj) {
  *
  * On I/O error NULL is returned.
  */
-void *rdbGenericLoadStringObject(rio *rdb, int flags, size_t *lenptr) {
+static void *rdbGenericLoadStringObjectWithError(rio *rdb,
+                                                 int flags,
+                                                 size_t *lenptr,
+                                                 bool *allocation_error) {
     int plain = flags & RDB_LOAD_PLAIN;
     int sds = flags & RDB_LOAD_SDS;
     int isencoded;
     unsigned long long len;
 
+    if (allocation_error) *allocation_error = false;
     len = rdbLoadLen(rdb, &isencoded);
     if (len == RDB_LENERR) return NULL;
 
@@ -628,7 +640,7 @@ void *rdbGenericLoadStringObject(rio *rdb, int flags, size_t *lenptr) {
         case RDB_ENC_INT8:
         case RDB_ENC_INT16:
         case RDB_ENC_INT32: return rdbLoadIntegerObject(rdb, len, flags, lenptr);
-        case RDB_ENC_LZF: return rdbLoadLzfStringObject(rdb, flags, lenptr);
+        case RDB_ENC_LZF: return rdbLoadLzfStringObject(rdb, flags, lenptr, allocation_error);
         default: rdbReportCorruptRDB("Unknown RDB string encoding type %llu", len); return NULL;
         }
     }
@@ -636,6 +648,7 @@ void *rdbGenericLoadStringObject(rio *rdb, int flags, size_t *lenptr) {
     if (plain || sds) {
         void *buf = plain ? ztrymalloc(len) : sdstrynewlen(SDS_NOINIT, len);
         if (!buf) {
+            if (allocation_error) *allocation_error = true;
             serverLog(isRestoreContext() ? LL_VERBOSE : LL_WARNING,
                       "rdbGenericLoadStringObject failed allocating %llu bytes", len);
             return NULL;
@@ -652,6 +665,7 @@ void *rdbGenericLoadStringObject(rio *rdb, int flags, size_t *lenptr) {
     } else {
         robj *o = tryCreateStringObject(SDS_NOINIT, len);
         if (!o) {
+            if (allocation_error) *allocation_error = true;
             serverLog(isRestoreContext() ? LL_VERBOSE : LL_WARNING,
                       "rdbGenericLoadStringObject failed allocating %llu bytes", len);
             return NULL;
@@ -662,6 +676,10 @@ void *rdbGenericLoadStringObject(rio *rdb, int flags, size_t *lenptr) {
         }
         return o;
     }
+}
+
+void *rdbGenericLoadStringObject(rio *rdb, int flags, size_t *lenptr) {
+    return rdbGenericLoadStringObjectWithError(rdb, flags, lenptr, NULL);
 }
 
 robj *rdbLoadStringObject(rio *rdb) {
@@ -1963,10 +1981,25 @@ static int rdbLoadRedisStreamIdmpLen(rio *rdb, uint64_t *value) {
 
 /* Redis stream type 26 appends IDMP configuration, producer/IID mappings and
  * two counters to the type 21 payload. Valkey has no IDMP implementation.
- * Consume the entire trailer and warn if producer state or history is lost.
- * No allocation is based on the untrusted producer or entry counts. */
-static int rdbLoadRedisStreamIdmp(rio *rdb) {
+ * Consume the trailer and report whether any state is discarded. No allocation
+ * is based on the untrusted producer or entry counts. */
+static void rdbLogDiscardedRedisStreamIdmp(sds key) {
+    if (server.hide_user_data_from_log) {
+        serverLog(LL_WARNING,
+                  "Discarding Redis stream IDMP state: Valkey does not support "
+                  "idempotent message producers");
+    } else {
+        serverLog(LL_WARNING,
+                  "Discarding Redis stream IDMP state for key '%s': Valkey does not "
+                  "support idempotent message producers",
+                  key);
+    }
+}
+
+static int rdbLoadRedisStreamIdmp(rio *rdb, bool *discarded, bool *allocation_error) {
     uint64_t duration, max_entries, producers, added, duplicates;
+    *discarded = false;
+    *allocation_error = false;
     if (rdbLoadRedisStreamIdmpLen(rdb, &duration) != C_OK ||
         rdbLoadRedisStreamIdmpLen(rdb, &max_entries) != C_OK ||
         rdbLoadRedisStreamIdmpLen(rdb, &producers) != C_OK)
@@ -1975,17 +2008,26 @@ static int rdbLoadRedisStreamIdmp(rio *rdb) {
     if (duration < 1 || duration > 86400 || max_entries < 1 || max_entries > 10000)
         return C_ERR;
 
-    bool discarded = producers != 0 || duration != 100 || max_entries != 100;
+    bool has_discarded_state = producers != 0 || duration != 100 || max_entries != 100;
     while (producers--) {
-        sds producer = rdbGenericLoadStringObject(rdb, RDB_LOAD_SDS, NULL);
-        if (producer == NULL) return C_ERR;
+        bool string_allocation_error;
+        sds producer =
+            rdbGenericLoadStringObjectWithError(rdb, RDB_LOAD_SDS, NULL, &string_allocation_error);
+        if (producer == NULL) {
+            *allocation_error = string_allocation_error;
+            return C_ERR;
+        }
         sdsfree(producer);
 
         uint64_t entries;
         if (rdbLoadRedisStreamIdmpLen(rdb, &entries) != C_OK) return C_ERR;
         while (entries--) {
-            sds iid = rdbGenericLoadStringObject(rdb, RDB_LOAD_SDS, NULL);
-            if (iid == NULL) return C_ERR;
+            sds iid =
+                rdbGenericLoadStringObjectWithError(rdb, RDB_LOAD_SDS, NULL, &string_allocation_error);
+            if (iid == NULL) {
+                *allocation_error = string_allocation_error;
+                return C_ERR;
+            }
             sdsfree(iid);
 
             uint64_t ms, seq;
@@ -1998,11 +2040,7 @@ static int rdbLoadRedisStreamIdmp(rio *rdb) {
     if (rdbLoadRedisStreamIdmpLen(rdb, &added) != C_OK ||
         rdbLoadRedisStreamIdmpLen(rdb, &duplicates) != C_OK)
         return C_ERR;
-    if (discarded || added || duplicates) {
-        serverLog(LL_WARNING,
-                  "Discarding Redis stream IDMP state: Valkey does not support "
-                  "idempotent message producers");
-    }
+    *discarded = has_discarded_state || added || duplicates;
     return C_OK;
 }
 
@@ -3362,14 +3400,23 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
             }
             raxStop(&ri_cg_pel);
         }
-        if (rdbtype == RDB_TYPE_REDIS_STREAM_LISTPACKS_4 && rdbLoadRedisStreamIdmp(rdb) != C_OK) {
-            if (rioGetReadError(rdb) || rioGetAsyncCloseError(rdb)) {
-                rdbReportReadError("Redis stream IDMP metadata loading failed");
-            } else {
-                rdbReportCorruptRDB("Invalid Redis stream IDMP metadata");
+        if (rdbtype == RDB_TYPE_REDIS_STREAM_LISTPACKS_4) {
+            bool discarded, allocation_error;
+            if (rdbLoadRedisStreamIdmp(rdb, &discarded, &allocation_error) != C_OK) {
+                if (allocation_error || rioGetReadError(rdb) || rioGetAsyncCloseError(rdb)) {
+                    rdbReportReadError("Redis stream IDMP metadata loading failed");
+                } else {
+                    rdbReportCorruptRDB("Invalid Redis stream IDMP metadata");
+                }
+                decrRefCount(o);
+                return NULL;
             }
-            decrRefCount(o);
-            return NULL;
+            if (discarded) {
+                if (isRestoreContext() || rdbCheckMode || rdb_stream_idmp_discarded_count < 10) {
+                    rdbLogDiscardedRedisStreamIdmp(key);
+                }
+                if (!isRestoreContext() && !rdbCheckMode) rdb_stream_idmp_discarded_count++;
+            }
         }
     } else if (rdbtype == RDB_TYPE_MODULE_PRE_GA) {
         rdbReportCorruptRDB("Pre-release module format not supported");
@@ -3694,6 +3741,7 @@ int rdbLoadRioWithLoadingCtx(rio *rdb,
 
     rio *prev_rio = server.loading_rio;
     server.loading_rio = rdb;
+    rdb_stream_idmp_discarded_count = 0;
     retval = rdbLoadRioInternal(rdb, rdbflags, rsi, rdb_loading_ctx);
     server.loading_rio = prev_rio;
     if (retval == RDB_OK && streamReaderFinish(&stream_reader) == C_ERR) {
@@ -4308,6 +4356,11 @@ static int rdbLoadRioInternal(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadi
     } else {
         serverLog(LL_NOTICE, "Done loading RDB, keys loaded: %lld, keys expired: %lld, all fields expired hashes: %lld.",
                   server.rdb_last_load_keys_loaded, server.rdb_last_load_keys_expired, rdb_last_load_all_fields_expired);
+    }
+    if (rdb_stream_idmp_discarded_count) {
+        serverLog(LL_NOTICE,
+                  "Done loading RDB, discarded %llu Redis stream IDMP states.",
+                  rdb_stream_idmp_discarded_count);
     }
     ret = RDB_OK;
     goto cleanup;

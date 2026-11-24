@@ -24,7 +24,7 @@
  * - **zmalloc**: An abstraction layer over the memory allocator, providing
  *   a uniform allocation interface to the application code. It can delegate
  *   to various underlying allocators (e.g., libc, tcmalloc, jemalloc, or others).
- *   It is not dependant on defrag implementation logic and it's possible to use jemalloc
+ *   It is not dependent on defrag implementation logic and it's possible to use jemalloc
  *   version that does not support defrag.
  * - **allocator_defrag**: This file contains allocator-specific logic for
  *   defragmentation, invoked from `defrag.c` when memory defragmentation is needed.
@@ -157,10 +157,10 @@ void allocatorDefragFree(void *ptr, size_t size) {
 
 /* Get the bin index in bin array from the reg_size.
  *
- * these are reverse engineered mapping of reg_size -> binind. We need this information because the utilization query
+ * these are reverse engineered mapping of reg_size -> bin_index. We need this information because the utilization query
  * returns the size of the buffer and not the bin index, and we need the bin index to access it's usage information
  *
- * Note: In case future PR will return the binind (that is better API anyway) we can get rid of
+ * Note: In case future PR will return the bin_index (that is better API anyway) we can get rid of
  * these conversion functions
  */
 static inline unsigned jeSize2BinIndexLgQ3(size_t sz) {
@@ -279,9 +279,9 @@ int allocatorDefragInit(void) {
     je_res = je_mallctl("arenas.nbins", &je_cb.nbins, &sz, NULL, 0);
     assert(je_res == 0 && je_cb.nbins != 0);
 
-    je_cb.bin_info = je_calloc(je_cb.nbins, sizeof(jeBinInfo));
+    je_cb.bin_info = zcalloc_num(je_cb.nbins, sizeof(jeBinInfo));
     assert(je_cb.bin_info != NULL);
-    je_usage_info = je_calloc(je_cb.nbins, sizeof(jemallocBinUsageData));
+    je_usage_info = zcalloc_num(je_cb.nbins, sizeof(jemallocBinUsageData));
     assert(je_usage_info != NULL);
 
     for (unsigned j = 0; j < je_cb.nbins; j++) {
@@ -401,13 +401,13 @@ int allocatorShouldDefrag(void *ptr) {
         return 0;
     }
     /* get the index based on quantum used */
-    unsigned binind = jeSize2BinIndexLgQ3(region_size);
-    /* make sure binind is in range and reverse map is correct */
-    assert(binind < je_cb.nbins && region_size == je_cb.bin_info[binind].reg_size);
+    unsigned bin_index = jeSize2BinIndexLgQ3(region_size);
+    /* make sure bin_index is in range and reverse map is correct */
+    assert(bin_index < je_cb.nbins && region_size == je_cb.bin_info[bin_index].reg_size);
 
-    return makeDefragDecision(&je_cb.bin_info[binind],
-                              &je_usage_info[binind],
-                              je_cb.bin_info[binind].nregs - SLAB_NFREE(out, 0));
+    return makeDefragDecision(&je_cb.bin_info[bin_index],
+                              &je_usage_info[bin_index],
+                              je_cb.bin_info[bin_index].nregs - SLAB_NFREE(out, 0));
 }
 
 /* Utility function to get the fragmentation ratio from jemalloc.

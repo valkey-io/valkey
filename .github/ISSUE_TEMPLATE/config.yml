@@ -3,9 +3,6 @@ contact_links:
   - name: Questions?
     url: https://github.com/valkey-io/valkey/discussions
     about: Ask and answer questions on GitHub Discussions.
-  - name: Chat with us on Discord?
-    url: https://discord.gg/zbcPa5umUB
-    about: We are on Discord!
   - name: Chat with us on Matrix?
     url: https://matrix.to/#/#valkey:matrix.org
     about: We are on Matrix too!

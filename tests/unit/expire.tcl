@@ -67,7 +67,7 @@ start_server {tags {"expire"}} {
         list [r ttl x] [r persist x] [r ttl x] [r get x]
     } {50 1 -1 foo}
 
-    test {PERSIST returns 0 against non existing or non volatile keys} {
+    test {PERSIST returns 0 against nonexistent or non volatile keys} {
         r set x foo
         list [r persist foo] [r persist nokeyatall]
     } {0 0}
@@ -289,6 +289,24 @@ start_server {tags {"expire"}} {
         catch {r GETEX foo EX -9999999999999999} e
         set e
     } {ERR invalid expire time in 'getex' command}
+
+    test {GETEX and SET with relative expire overflow when basetime is added} {
+        r set foo bar
+
+        # The value fits in a long long, but adding the current time overflows.
+        assert_error "ERR invalid expire time in 'getex' command" {r GETEX foo PX 9223372036854775807}
+        assert_error "ERR invalid expire time in 'getex' command" {r GETEX foo PX 9223372036854770000}
+        # EX value passes the LLONG_MAX/1000 check but overflows once basetime is added.
+        assert_error "ERR invalid expire time in 'getex' command" {r GETEX foo EX 9223372036854775}
+
+        # SET shares the same expire parsing path.
+        assert_error "ERR invalid expire time in 'set' command" {r SET foo bar PX 9223372036854775807}
+        assert_error "ERR invalid expire time in 'set' command" {r SET foo bar EX 9223372036854775}
+
+        # The key must be untouched: still present, no TTL.
+        assert_equal {bar} [r get foo]
+        assert_equal {-1} [r ttl foo]
+    }
 
     test {GETEX with error expiration time} {
         r del foo
@@ -521,6 +539,9 @@ start_server {tags {"expire"}} {
         set encoded [r dump foo5]
         r restore foo6 100000 $encoded
         r restore foo7 [expr [clock milliseconds]+100000] $encoded absttl
+        # MSETEX and HSETEX with a repeated expire option
+        r msetex 1 foo8 bar ex 100 ex 200
+        r hsetex foo9 px 100000 px 200000 fields 1 f v
 
         assert_replication_stream $repl {
             {select *}
@@ -545,6 +566,8 @@ start_server {tags {"expire"}} {
             {set foo5 bar}
             {restore foo6 * * ABSTTL}
             {restore foo7 * * absttl}
+            {msetex 1 foo8 bar PXAT *}
+            {hsetex foo9 PXAT * fields 1 f v}
         }
         close_replication_stream $repl
     } {} {needs:repl}
@@ -610,7 +633,29 @@ start_server {tags {"expire"}} {
             }
         }
 
-        test {expired key which is created in writeable replicas should be deleted by active expiry} {
+        test {MSETEX and HSETEX with a repeated expire option are replicated with the last one} {
+            $replica replicaof $primary_host $primary_port
+            wait_for_sync $replica
+            $primary msetex 1 foo18 bar ex 100 ex 200
+            $primary msetex 1 foo19 bar px 100000 px 200000
+            $primary msetex 1 foo20 bar exat [expr [clock seconds]+100] exat [expr [clock seconds]+200]
+            $primary hsetex foo21 ex 100 ex 200 fields 1 f v
+            $primary hsetex foo22 px 100000 px 200000 fields 1 f v
+            $primary hsetex foo23 exat [expr [clock seconds]+100] exat [expr [clock seconds]+200] fields 1 f v
+            # Keys and values named like the option
+            $primary msetex 1 ex ex ex 100 ex 200
+            $primary hsetex px px 100000 px 200000 fields 1 f v
+            wait_for_ofs_sync $primary $replica
+
+            foreach key {foo18 foo19 foo20 ex} {
+                assert_equal [$primary pexpiretime $key] [$replica pexpiretime $key]
+            }
+            foreach key {foo21 foo22 foo23 px} {
+                assert_equal [$primary hpexpiretime $key FIELDS 1 f] [$replica hpexpiretime $key FIELDS 1 f]
+            }
+        }
+
+        test {expired key which is created in writable replicas should be deleted by active expiry} {
             $primary flushall
             $replica config set replica-read-only no
             foreach {yes_or_no} {yes no} {
@@ -791,7 +836,7 @@ start_server {tags {"expire"}} {
         assert_equal [r TTL foo] -2
     } {}
 
-    test {EXPIRE with negative expiry on a non-valitale key} {
+    test {EXPIRE with negative expiry on a non-volatile key} {
         r SET foo bar
         assert_equal [r EXPIRE foo -10 LT] 1
         assert_equal [r TTL foo] -2
@@ -976,6 +1021,49 @@ start_server {tags {"expire"}} {
             fail "key wasn't expired"
         }
     }
+
+    test {RESET clears the import-source flag} {
+        r config set import-mode yes
+        assert_equal [r client import-source on] {OK}
+        assert_match {*flags=I*} [r client list id [r client id]]
+
+        # RESET must make the connection resemble a fresh client, which
+        # includes dropping the import-source privilege.
+        r reset
+        assert_match {*flags=N*} [r client list id [r client id]]
+
+        r config set import-mode no
+    } {OK} {needs:reset}
+
+    test {RESET drops import-source expiration semantics} {
+        r flushall
+        r config set import-mode yes
+
+        r set foo1 1 PX 1
+        after 10
+
+        # While import-source is on, the expired key is visible.
+        assert_equal [r client import-source on] {OK}
+        assert_match {*flags=I*} [r client list id [r client id]]
+        assert_equal [r ttl foo1] {0}
+        assert_equal [r get foo1] {1}
+
+        # After RESET the connection must lose import-source semantics, so the
+        # logically-expired key looks missing again, exactly like a fresh client.
+        r reset
+        assert_match {*flags=N*} [r client list id [r client id]]
+        assert_equal [r get foo1] {}
+        assert_equal [r ttl foo1] {-2}
+
+        r config set import-mode no
+
+        # Verify all keys have expired (cleanup, mirrors the import-source tests).
+        wait_for_condition 40 100 {
+            [r dbsize] eq 0
+        } else {
+            fail "Keys did not actively expire."
+        }
+    } {} {needs:reset}
 
     test {replicaKeysWithExpire memory leak verification and cleanup} {
         # This test verifies the memory leak issue and cleanup mechanism for replicaKeysWithExpire

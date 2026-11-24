@@ -6,6 +6,30 @@ proc get_no_writes_function_code {args} {
     return [format "#!%s name=%s\nserver.register_function{function_name='%s', callback=function(KEYS, ARGV)\n %s \nend, flags={'no-writes'}}" [lindex $args 0] [lindex $args 1] [lindex $args 2] [lindex $args 3]]
 }
 
+start_server {tags {"scripting external:skip"}} {
+    # This test must run on a fresh server before any FUNCTION LOAD has
+    # executed, so it lives in its own start_server block.
+    test {FUNCTION - NUL byte in shebang engine name does not crash on first function load} {
+        # sdsnsplitargs decodes \xNN in quoted strings, so "lua\x00zz" produces
+        # an sds with a NUL at position 3. Without the fix, the per-engine
+        # stats entry is stored under that 6-byte key. libraryLink() looks it
+        # up under the registered engine name "LUA", gets NULL, and fires
+        # serverAssert(stats). The bug only manifests on the very first
+        # FUNCTION LOAD after startup, before any earlier load has created the
+        # "LUA" stats entry. Store a key before the attempt; if the server
+        # crashes the connection drops and the read below returns empty.
+        r set pre_crash_sentinel alive
+        catch {
+            r function load "#!\"lua\\x00zz\" name=nultest\nserver.register_function('nulfunc', function(KEYS, ARGV) return 1 end)"
+        }
+        # If the server crashed the connection may be dead; catch the read
+        # error and leave sentinel empty so the assert below fires gracefully.
+        set sentinel {}
+        catch {set sentinel [r get pre_crash_sentinel]}
+        assert_equal $sentinel alive
+    }
+}
+
 start_server {tags {"scripting"}} {
     test {FUNCTION - Basic usage} {
         r function load [get_function_code LUA test test {return 'hello'}]
@@ -26,7 +50,7 @@ start_server {tags {"scripting"}} {
         set _ $e
     } {*already exists*}
 
-    test {FUNCTION - Create an already exiting library raise error (case insensitive)} {
+    test {FUNCTION - Create an already exiting library raise error (case-insensitive)} {
         catch {
             r function load [get_function_code LUA test test {return 'hello1'}]
         } e
@@ -59,9 +83,28 @@ start_server {tags {"scripting"}} {
         r fcall test 0
     } {hello1}
 
-    test {FUNCTION - test function case insensitive} {
+    test {FUNCTION - test function case-insensitive} {
         r fcall TEST 0
     } {hello1}
+
+    test {FUNCTION - registering names differing only in case is rejected} {
+        catch {
+            r function load {#!lua name=casecollision
+                server.register_function('myfunc', function() return 1 end)
+                server.register_function('MYFUNC', function() return 2 end)}
+        } e
+        set _ $e
+    } {*Function already exists in the library*}
+
+    test {FUNCTION - delete after case collision attempt does not crash server} {
+        # Before the fix, the rejected case-collision above could leave the
+        # library and the global function dict inconsistent and crash the
+        # server on the next delete. Confirm the server is still responsive.
+        r function load REPLACE {#!lua name=casecollision
+            server.register_function('safefunc', function() return 1 end)}
+        assert_equal {OK} [r function delete casecollision]
+        r ping
+    } {PONG}
 
     test {FUNCTION - test replace argument with failure keeps old libraries} {
         catch {r function load REPLACE [get_function_code LUA test test {error}]} e
@@ -333,6 +376,27 @@ start_server {tags {"scripting"}} {
             r function load [get_function_code LUA test_$i test_$i {return 'hello'}]
         }
         r function flush
+    }
+
+    test {FUNCTION - lazy free of restored-over functions does not touch a recreated Lua state} {
+        test_config_set r lazyfree-lazy-user-flush yes
+        r function flush sync
+        set empty_dump [r function dump]
+        for {set i 0} {$i < 65} {incr i} {
+            r function load [get_function_code LUA test_$i test_$i {return 'hello'}]
+        }
+        r multi
+        r function restore $empty_dump flush
+        r function flush sync
+        r function load [get_function_code LUA test test {return 'hello'}]
+        r exec
+        wait_for_condition 50 100 {
+            [s lazyfree_pending_objects] == 0
+        } else {
+            fail "lazyfree isn't done"
+        }
+        catch {r fcall test 0} res
+        assert_equal $res hello
     }
 
     test {FUNCTION - test function wrong argument} {
@@ -695,6 +759,15 @@ start_server {tags {"scripting"}} {
         set _ $e
     } {*attempted to access nonexistent global variable 'acl_check_cmd'*}
 
+    test {LIBRARIES - redis.log from function load} {
+        r function load replace {#!lua name=lib2
+            redis.log(redis.LOG_WARNING, 'log from function load')
+            redis.register_function('log_at_load', function() return 1 end)
+        }
+        assert_equal 1 [r fcall log_at_load 0]
+        r function delete lib2
+    }
+
     test {LIBRARIES - malicious access test} {
         # the 'library' API is not exposed inside a
         # function context and the 'redis' API is not
@@ -802,6 +875,38 @@ start_server {tags {"scripting"}} {
         }
         r function list
     } {{library_name lib engine LUA functions {{name f1 description {some desc} flags {}}}}}
+
+    test {LIBRARIES - named arguments repeated in another case do not leak} {
+        r function flush sync
+        set before [s used_memory]
+        catch {
+            r function load replace {#!lua name=lib
+                server.register_function{
+                    function_name=('x'):rep(1000000),
+                    Function_name=('x'):rep(1000000),
+                    description=('x'):rep(1000000),
+                    Description=('x'):rep(1000000),
+                }
+            }
+        } e
+        assert_match {*must get a callback argument*} $e
+        r function flush sync
+        assert_lessthan [expr {[s used_memory] - $before}] 500000
+    }
+
+    test {LIBRARIES - deleting a function frees its long description} {
+        r function flush
+        set before [s used_memory]
+        r function load {#!lua name=lib
+            server.register_function{
+                function_name='f1',
+                callback=function() return 1 end,
+                description=('x'):rep(10000000)
+            }
+        }
+        r function delete lib
+        assert_lessthan [expr {[s used_memory] - $before}] 1000000
+    }
 
     test {LIBRARIES - named arguments, bad function name} {
         catch {
@@ -1020,7 +1125,7 @@ start_server {tags {"scripting"}} {
         r config set maxmemory 0
     } {OK} {needs:config-maxmemory}
 
-    test {FUNCTION - verify allow-omm allows running any command} {
+    test {FUNCTION - verify allow-oom allows running any command} {
         r FUNCTION load replace {#!lua name=f1
             server.register_function{
                 function_name='f1',
@@ -1036,6 +1141,31 @@ start_server {tags {"scripting"}} {
 
         r config set maxmemory 0
     } {OK} {needs:config-maxmemory}
+}
+
+start_server {tags {"scripting"}} {
+    test {FUNCTION RESTORE applies the load timeout} {
+        # Swap a dumped library body for a same-length endless loop.
+        set lib "#!lua name=lib\nserver.register_function('f', function() return 1 end)"
+        set loop [format "%-*s" [string length $lib] "#!lua name=lib\nwhile 1 do end"]
+        r config set rdbcompression no
+        r function load $lib
+        set payload [string map [list $lib $loop] [r function dump]]
+        r debug set-skip-checksum-validation 1
+
+        # Read the reply without blocking, since an unbounded load never answers.
+        set rd [valkey_deferring_client]
+        $rd function restore $payload REPLACE
+        set fd [$rd channel]
+        fconfigure $fd -blocking 0
+        wait_for_condition 50 100 {[gets $fd reply] > 0} else {
+            fail "FUNCTION RESTORE did not return"
+        }
+        $rd close
+        r debug set-skip-checksum-validation 0
+        r config set rdbcompression yes
+        assert_match {*FUNCTION LOAD timeout*} $reply
+    } {} {needs:debug}
 }
 
 start_server {tags {"scripting"}} {
@@ -1272,4 +1402,44 @@ start_server {tags {"scripting"}} {
         set _ $e
     } {*Script attempted to access nonexistent global variable 'getmetatable'*}
 
+}
+
+start_multiple_servers 2 {tags {"repl scripting external:skip needs:debug"}} {
+    test "Full sync events are not processed during the replica slow script" {
+        set primary [srv -1 client]
+        set primary_host [srv -1 host]
+        set primary_port [srv -1 port]
+
+        set replica [srv 0 client]
+        $replica config set busy-reply-threshold 1
+        $replica config set loading-process-events-interval-bytes 1024
+        $replica config set repl-diskless-load flush-before-load
+
+        # Load a `while true` function.
+        $primary function load [get_no_writes_function_code lua test test {while true do end}]
+
+        # Setup the replication
+        $replica replicaof $primary_host $primary_port
+        wait_for_sync $replica
+
+        # Replica executes the function and make sure it enters the BUSY state.
+        set rd [valkey_deferring_client]
+        $rd fcall_ro test 0
+        set loglines [wait_for_log_messages 0 {"*Slow script detected*"} 0 1000 10]
+        assert_error {BUSY*} {$replica ping}
+
+        # Trigger a full sync.
+        $primary debug change-repl-id
+        $primary client kill type replica
+        wait_replica_online $primary
+
+        # Replica is still running the function and it is OK
+        assert_error {BUSY*} {$replica ping}
+        $replica function kill
+        after 200 ; # Give some time to Lua to call the hook again...
+        wait_for_sync $replica
+        $replica ping
+
+        $rd close
+    }
 }

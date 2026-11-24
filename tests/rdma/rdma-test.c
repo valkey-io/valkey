@@ -135,6 +135,12 @@ static int valkeySetFdBlocking(int fd, int blocking) {
         assert(0);                                              \
     } while (0)
 
+#define rdmaFatalf(fmt, ...)                                                   \
+    do {                                                                       \
+        fprintf(stderr, "%s:%d " fmt "\n", __func__, __LINE__, __VA_ARGS__); \
+        assert(0);                                                             \
+    } while (0)
+
 static inline long valkeyNowMs(void) {
     struct timeval tv;
 
@@ -148,7 +154,7 @@ static int rdmaPostRecv(RdmaContext *ctx, struct rdma_cm_id *cm_id, valkeyRdmaCm
     struct ibv_sge sge;
     size_t length = sizeof(valkeyRdmaCmd);
     struct ibv_recv_wr recv_wr, *bad_wr;
-
+    int ret;
 
     sge.addr = (uint64_t)(uintptr_t)cmd;
     sge.length = length;
@@ -159,7 +165,9 @@ static int rdmaPostRecv(RdmaContext *ctx, struct rdma_cm_id *cm_id, valkeyRdmaCm
     recv_wr.num_sge = 1;
     recv_wr.next = NULL;
 
-    if (ibv_post_recv(cm_id->qp, &recv_wr, &bad_wr)) {
+    ret = ibv_post_recv(cm_id->qp, &recv_wr, &bad_wr);
+    if (ret) {
+        rdmaFatalf("RDMA: post recv failed: %s (%d)", strerror(ret), ret);
         return -1;
     }
 
@@ -202,7 +210,7 @@ static int rdmaSetupIoBuf(RdmaContext *ctx, struct rdma_cm_id *cm_id) {
     ctx->cmd_buf = calloc(length, 1);
     ctx->cmd_mr = ibv_reg_mr(ctx->pd, ctx->cmd_buf, length, access);
     if (!ctx->cmd_mr) {
-        rdmaFatal("RDMA: reg recv mr failed");
+        rdmaFatalf("RDMA: reg command MR failed: %s (%d)", strerror(errno), errno);
         goto destroy_iobuf;
     }
 
@@ -210,7 +218,6 @@ static int rdmaSetupIoBuf(RdmaContext *ctx, struct rdma_cm_id *cm_id) {
         cmd = ctx->cmd_buf + i;
 
         if (rdmaPostRecv(ctx, cm_id, cmd) == -1) {
-            rdmaFatal("RDMA: post recv failed");
             goto destroy_iobuf;
         }
     }
@@ -227,7 +234,7 @@ static int rdmaSetupIoBuf(RdmaContext *ctx, struct rdma_cm_id *cm_id) {
     ctx->recv_length = length;
     ctx->recv_mr = ibv_reg_mr(ctx->pd, ctx->recv_buf, length, access);
     if (!ctx->recv_mr) {
-        rdmaFatal("RDMA: reg send mr failed");
+        rdmaFatalf("RDMA: reg receive buffer MR failed: %s (%d)", strerror(errno), errno);
         goto destroy_iobuf;
     }
 
@@ -257,7 +264,7 @@ static int rdmaAdjustSendbuf(RdmaContext *ctx, unsigned int length) {
     ctx->send_length = length;
     ctx->send_mr = ibv_reg_mr(ctx->pd, ctx->send_buf, length, access);
     if (!ctx->send_mr) {
-        rdmaFatal("RDMA: reg send buf mr failed");
+        rdmaFatalf("RDMA: reg send buffer MR failed: %s (%d)", strerror(errno), errno);
         free(ctx->send_buf);
         ctx->send_buf = NULL;
         ctx->send_length = 0;
@@ -298,6 +305,7 @@ static int rdmaSendCommand(RdmaContext *ctx, struct rdma_cm_id *cm_id, valkeyRdm
     send_wr.next = NULL;
     ret = ibv_post_send(cm_id->qp, &send_wr, &bad_wr);
     if (ret) {
+        rdmaFatalf("RDMA: post send command failed: %s (%d)", strerror(ret), ret);
         return -1;
     }
 
@@ -376,7 +384,7 @@ static int connRdmaHandleCq(RdmaContext *ctx) {
 
     if (ibv_get_cq_event(ctx->comp_channel, &ev_cq, &ev_ctx) < 0) {
         if (errno != EAGAIN) {
-            rdmaFatal("RDMA: get cq event failed");
+            rdmaFatalf("RDMA: get cq event failed: %s (%d)", strerror(errno), errno);
             return -1;
         }
 
@@ -384,22 +392,24 @@ static int connRdmaHandleCq(RdmaContext *ctx) {
     }
 
     ibv_ack_cq_events(ctx->cq, 1);
-    if (ibv_req_notify_cq(ev_cq, 0)) {
-        rdmaFatal("RDMA: notify cq failed");
+    ret = ibv_req_notify_cq(ev_cq, 0);
+    if (ret) {
+        rdmaFatalf("RDMA: notify cq failed: %s (%d)", strerror(ret), ret);
         return -1;
     }
 
 pollcq:
     ret = ibv_poll_cq(ctx->cq, 1, &wc);
     if (ret < 0) {
-        rdmaFatal("RDMA: poll cq failed");
+        rdmaFatalf("RDMA: poll cq failed: %s (%d)", strerror(-ret), ret);
         return -1;
     } else if (ret == 0) {
         return 0;
     }
 
     if (wc.status != IBV_WC_SUCCESS) {
-        rdmaFatal("RDMA: send/recv failed");
+        rdmaFatalf("RDMA: send/recv failed: %s (status %d), opcode 0x%x",
+                   ibv_wc_status_str(wc.status), wc.status, wc.opcode);
         return -1;
     }
 
@@ -433,7 +443,7 @@ pollcq:
 
         break;
     default:
-        rdmaFatal("RDMA: unexpected opcode");
+        rdmaFatalf("RDMA: unexpected opcode 0x%x", wc.opcode);
         return -1;
     }
 
@@ -448,6 +458,7 @@ static ssize_t valkeyRdmaRead(RdmaContext *ctx, char *buf, size_t data_len) {
     long timed = 1000;
     long start = valkeyNowMs();
     uint32_t toread, remained;
+    int ret;
 
 copy:
     if (ctx->recv_offset < ctx->rx_offset) {
@@ -477,7 +488,13 @@ pollcq:
     pfd.fd = ctx->comp_channel->fd;
     pfd.events = POLLIN;
     pfd.revents = 0;
-    if (poll(&pfd, 1, 1000) < 0) {
+    ret = poll(&pfd, 1, 1000);
+    if (ret < 0) {
+        rdmaFatalf("RDMA: poll completion channel failed: %s (%d)", strerror(errno), errno);
+        return -1;
+    }
+    if (pfd.revents & (POLLERR | POLLHUP | POLLNVAL)) {
+        rdmaFatalf("RDMA: completion channel poll returned revents 0x%x", pfd.revents);
         return -1;
     }
 
@@ -524,6 +541,7 @@ static size_t connRdmaSend(RdmaContext *ctx, struct rdma_cm_id *cm_id, const voi
     send_wr.next = NULL;
     ret = ibv_post_send(cm_id->qp, &send_wr, &bad_wr);
     if (ret) {
+        rdmaFatalf("RDMA: post RDMA write failed: %s (%d)", strerror(ret), ret);
         return -1;
     }
 
@@ -539,6 +557,7 @@ static ssize_t valkeyRdmaWrite(RdmaContext *ctx, char *buf, size_t data_len) {
     long start = valkeyNowMs();
     uint32_t towrite, wrote = 0;
     size_t ret;
+    int poll_ret;
 
     /* try to pollcq to */
     goto pollcq;
@@ -547,7 +566,13 @@ waitcq:
     pfd.fd = ctx->comp_channel->fd;
     pfd.events = POLLIN;
     pfd.revents = 0;
-    if (poll(&pfd, 1, 1) < 0) {
+    poll_ret = poll(&pfd, 1, 1);
+    if (poll_ret < 0) {
+        rdmaFatalf("RDMA: poll completion channel failed: %s (%d)", strerror(errno), errno);
+        return -1;
+    }
+    if (pfd.revents & (POLLERR | POLLHUP | POLLNVAL)) {
+        rdmaFatalf("RDMA: completion channel poll returned revents 0x%x", pfd.revents);
         return -1;
     }
 
@@ -610,32 +635,34 @@ static int valkeyRdmaConnect(RdmaContext *ctx, struct rdma_cm_id *cm_id) {
     struct ibv_pd *pd = NULL;
     struct ibv_qp_init_attr init_attr = {0};
     struct rdma_conn_param conn_param = {0};
+    int ret;
 
     pd = ibv_alloc_pd(cm_id->verbs);
     if (!pd) {
-        rdmaFatal("RDMA: alloc pd failed");
+        rdmaFatalf("RDMA: alloc pd failed: %s (%d)", strerror(errno), errno);
         goto error;
     }
 
     comp_channel = ibv_create_comp_channel(cm_id->verbs);
     if (!comp_channel) {
-        rdmaFatal("RDMA: alloc pd failed");
+        rdmaFatalf("RDMA: create comp channel failed: %s (%d)", strerror(errno), errno);
         goto error;
     }
 
     if (valkeySetFdBlocking(comp_channel->fd, 0) != 0) {
-        rdmaFatal("RDMA: set recv comp channel fd non-block failed");
+        rdmaFatalf("RDMA: set recv comp channel fd non-block failed: %s (%d)", strerror(errno), errno);
         goto error;
     }
 
     cq = ibv_create_cq(cm_id->verbs, VALKEY_RDMA_MAX_WQE * 2, ctx, comp_channel, 0);
     if (!cq) {
-        rdmaFatal("RDMA: create send cq failed");
+        rdmaFatalf("RDMA: create CQ failed: %s (%d)", strerror(errno), errno);
         goto error;
     }
 
-    if (ibv_req_notify_cq(cq, 0)) {
-        rdmaFatal("RDMA: notify send cq failed");
+    ret = ibv_req_notify_cq(cq, 0);
+    if (ret) {
+        rdmaFatalf("RDMA: notify CQ failed: %s (%d)", strerror(ret), ret);
         goto error;
     }
 
@@ -648,7 +675,7 @@ static int valkeyRdmaConnect(RdmaContext *ctx, struct rdma_cm_id *cm_id) {
     init_attr.send_cq = cq;
     init_attr.recv_cq = cq;
     if (rdma_create_qp(cm_id, pd, &init_attr)) {
-        rdmaFatal("RDMA: create qp failed");
+        rdmaFatalf("RDMA: create qp failed: %s (%d)", strerror(errno), errno);
         goto error;
     }
 
@@ -666,7 +693,7 @@ static int valkeyRdmaConnect(RdmaContext *ctx, struct rdma_cm_id *cm_id) {
     conn_param.retry_count = 7;
     conn_param.rnr_retry_count = 7;
     if (rdma_connect(cm_id, &conn_param)) {
-        rdmaFatal("RDMA: connect failed");
+        rdmaFatalf("RDMA: connect failed: %s (%d)", strerror(errno), errno);
         goto destroy_iobuf;
     }
 
@@ -708,7 +735,7 @@ static int valkeyRdmaCM(RdmaContext *ctx, int timeout) {
                 timeout = 100; /* at most 100ms to resolve route */
             ret = rdma_resolve_route(event->id, timeout);
             if (ret) {
-                rdmaFatal("RDMA: route resolve failed");
+                rdmaFatalf("RDMA: route resolve failed: %s (%d)", strerror(errno), errno);
             }
             break;
         case RDMA_CM_EVENT_ROUTE_RESOLVED:
@@ -729,20 +756,27 @@ static int valkeyRdmaCM(RdmaContext *ctx, int timeout) {
         case RDMA_CM_EVENT_DISCONNECTED:
         case RDMA_CM_EVENT_ADDR_CHANGE:
         default:
-            snprintf(errorstr, sizeof(errorstr), "RDMA: connect failed - %s", rdma_event_str(event->event));
+            snprintf(errorstr, sizeof(errorstr), "RDMA: connect failed - %s (status %d)",
+                     rdma_event_str(event->event), event->status);
             rdmaFatal(errorstr);
             ret = -1;
             break;
         }
 
-        rdma_ack_cm_event(event);
+        if (rdma_ack_cm_event(event)) {
+            rdmaFatalf("RDMA: ack CM event failed: %s (%d)", strerror(errno), errno);
+        }
+    }
+
+    if (errno != EAGAIN) {
+        rdmaFatalf("RDMA: get CM event failed: %s (%d)", strerror(errno), errno);
     }
 
     return ret;
 }
 
 static int valkeyRdmaWaitConn(RdmaContext *ctx, long timeout) {
-    int timed;
+    int ret, timed;
     struct pollfd pfd;
     long now = valkeyNowMs();
     long start = now;
@@ -753,7 +787,17 @@ static int valkeyRdmaWaitConn(RdmaContext *ctx, long timeout) {
         pfd.fd = ctx->cm_channel->fd;
         pfd.events = POLLIN;
         pfd.revents = 0;
-        if (poll(&pfd, 1, timed) < 0) {
+        ret = poll(&pfd, 1, timed);
+        if (ret < 0) {
+            rdmaFatalf("RDMA: poll CM channel failed: %s (%d)", strerror(errno), errno);
+            return -1;
+        }
+        if (ret == 0) {
+            rdmaFatalf("RDMA: poll CM channel timed out after %d ms", timed);
+            return -1;
+        }
+        if (pfd.revents & (POLLERR | POLLHUP | POLLNVAL)) {
+            rdmaFatalf("RDMA: CM channel poll returned revents 0x%x", pfd.revents);
             return -1;
         }
 
@@ -768,6 +812,7 @@ static int valkeyRdmaWaitConn(RdmaContext *ctx, long timeout) {
         now = valkeyNowMs();
     }
 
+    rdmaFatalf("RDMA: CM connection timed out after %ld ms", timeout);
     return -1;
 }
 
@@ -800,17 +845,17 @@ static RdmaContext *valkeyContextConnectRdma(const char *addr, int port, int tim
 
     ctx->cm_channel = rdma_create_event_channel();
     if (!ctx->cm_channel) {
-        rdmaFatal("RDMA: create event channel failed");
+        rdmaFatalf("RDMA: create event channel failed: %s (%d)", strerror(errno), errno);
         goto free_rdma;
     }
 
     if (rdma_create_id(ctx->cm_channel, &ctx->cm_id, (void *)ctx, RDMA_PS_TCP)) {
-        rdmaFatal("RDMA: create id failed");
+        rdmaFatalf("RDMA: create id failed: %s (%d)", strerror(errno), errno);
         goto free_rdma;
     }
 
     if ((valkeySetFdBlocking(ctx->cm_channel->fd, 0) != 0)) {
-        rdmaFatal("RDMA: set cm channel fd non-block failed");
+        rdmaFatalf("RDMA: set cm channel fd non-block failed: %s (%d)", strerror(errno), errno);
         goto free_rdma;
     }
 
@@ -828,6 +873,8 @@ static RdmaContext *valkeyContextConnectRdma(const char *addr, int port, int tim
 
         /* resolve addr as most 100ms */
         if (rdma_resolve_addr(ctx->cm_id, NULL, (struct sockaddr *)&saddr, 100)) {
+            fprintf(stderr, "%s:%d RDMA: address resolve failed: %s (%d)\n",
+                    __func__, __LINE__, strerror(errno), errno);
             continue;
         }
 

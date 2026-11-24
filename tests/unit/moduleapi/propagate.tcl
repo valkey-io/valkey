@@ -137,7 +137,7 @@ tags "modules" {
                     $master set asdf1 1
                     $master set asdf2 2
                     $master set asdf3 3
-          
+
                     $master config set maxmemory-policy allkeys-random
                     $master config set maxmemory 1
 
@@ -154,7 +154,7 @@ tags "modules" {
                     # that performs `RedisModule_Call(ctx, "INCR", "c", "multi");` if the notification is inside multi exec.
                     # so we will have 2 keys, "notifications" and "multi".
                     wait_for_condition 500 10 {
-                        [$replica dbsize] eq 2 
+                        [$replica dbsize] eq 2
                     } else {
                         fail "Not all keys have been evicted"
                     }
@@ -648,7 +648,7 @@ tags "modules" {
                     set repl [attach_to_replication_stream]
 
                     $master flushall
-                    
+
                     $master get unexisting_key
 
                     wait_for_condition 500 10 {
@@ -668,7 +668,7 @@ tags "modules" {
                         {get unexisting_key}
                         {exec}
                     }
-                    
+
                     close_replication_stream $repl
                 }
 
@@ -729,29 +729,30 @@ tags "modules aof" {
             assert_equal [s 0 unexpected_error_replies] 0
         }
     }
-    test "Modules RM_Call does not update stats during aof load: AOF-load type $aofload_type" {
+    foreach cmd {rm_call_replicate vm_call_argv_replicate} {
+    test "Modules RM_Call does not update stats during aof load: AOF-load type $aofload_type cmd $cmd" {
         start_server [list overrides [list loadmodule "$miscmodule"]] {
             # Enable the AOF
             r config set appendonly yes
             r config set auto-aof-rewrite-percentage 0 ; # Disable auto-rewrite.
             waitForBgrewriteaof r
-            
+
             r config resetstat
             r set foo bar
             r EVAL {return redis.call('SET', KEYS[1], ARGV[1])} 1 foo bar2
-            r test.rm_call_replicate set foo bar3
-            r EVAL {return redis.call('test.rm_call_replicate',ARGV[1],KEYS[1],ARGV[2])} 1 foo set bar4
-            
+            r test.$cmd set foo bar3
+            r EVAL "return redis.call('test.$cmd',ARGV\[1\],KEYS\[1\],ARGV\[2\])" 1 foo set bar4
+
             r multi
             r set foo bar5
             r EVAL {return redis.call('SET', KEYS[1], ARGV[1])} 1 foo bar6
-            r test.rm_call_replicate set foo bar7
-            r EVAL {return redis.call('test.rm_call_replicate',ARGV[1],KEYS[1],ARGV[2])} 1 foo set bar8
+            r test.$cmd set foo bar7
+            r EVAL "return redis.call('test.$cmd',ARGV\[1\],KEYS\[1\],ARGV\[2\])" 1 foo set bar8
             r exec
 
             assert_match {*calls=8,*,rejected_calls=0,failed_calls=0} [cmdrstat set r]
-            
-            
+
+
             # Load the AOF
             if {$aofload_type == "debug_cmd"} {
                 r config resetstat
@@ -761,10 +762,11 @@ tags "modules aof" {
                 restart_server 0 true false
                 wait_done_loading r
             }
-            
+
             assert_no_match {*calls=*} [cmdrstat set r]
-            
+
         }
+    }
     }
     }
 }

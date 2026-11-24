@@ -41,6 +41,7 @@
 #include <sys/socket.h>
 #include <sys/wait.h>
 #include <fcntl.h>
+#include <libgen.h>
 
 extern char **environ;
 
@@ -150,7 +151,7 @@ static mstime_t sentinel_default_failover_timeout = 60 * 3 * 1000;
 /* The link to a sentinelValkeyInstance. When we have the same set of Sentinels
  * monitoring many primaries, we have different instances representing the
  * same Sentinels, one per primary, and we need to share the libvalkey connections
- * among them. Otherwise if 5 Sentinels are monitoring 100 primaries we create
+ * among them. Otherwise, if 5 Sentinels are monitoring 100 primaries we create
  * 500 outgoing connections instead of 5.
  *
  * So this structure represents a reference counted link in terms of the two
@@ -191,7 +192,7 @@ typedef struct instanceLink {
 typedef struct sentinelValkeyInstance {
     int flags;                                 /* See SRI_... defines */
     char *name;                                /* Primary name from the point of view of this sentinel. */
-    char *runid;                               /* Run ID of this instance, or unique ID if is a Sentinel.*/
+    sds runid;                                 /* Run ID of this instance, or unique ID if is a Sentinel.*/
     uint64_t config_epoch;                     /* Configuration epoch. */
     sentinelAddr *addr;                        /* Primary host. */
     instanceLink *link;                        /* Link to the instance, may be shared for Sentinels. */
@@ -229,8 +230,8 @@ typedef struct sentinelValkeyInstance {
     dict *replicas;      /* Replicas for this primary instance. */
     unsigned int quorum; /* Number of sentinels that need to agree on failure. */
     int parallel_syncs;  /* How many replicas to reconfigure at same time. */
-    char *auth_pass;     /* Password to use for AUTH against primary & replica. */
-    char *auth_user;     /* Username for ACLs AUTH against primary & replica. */
+    sds auth_pass;       /* Password to use for AUTH against primary & replica. */
+    sds auth_user;       /* Username for ACLs AUTH against primary & replica. */
 
     /* Replica specific. */
     mstime_t primary_link_down_time;        /* Replica replication link down time. */
@@ -258,8 +259,8 @@ typedef struct sentinelValkeyInstance {
     struct sentinelValkeyInstance *promoted_replica; /* Promoted replica instance. */
     /* Scripts executed to notify admin or reconfigure clients: when they
      * are set to NULL no script is executed. */
-    char *notification_script;
-    char *client_reconfig_script;
+    sds notification_script;
+    sds client_reconfig_script;
     sds info; /* cached INFO output */
 } sentinelValkeyInstance;
 
@@ -273,7 +274,7 @@ struct sentinelState {
     int tilt;                          /* Are we in TILT mode? */
     int total_tilt;                    /* Number of tilt. */
     int running_scripts;               /* Number of scripts in execution right now. */
-    mstime_t tilt_start_time;          /* When TITL started. */
+    mstime_t tilt_start_time;          /* When TILT started. */
     mstime_t previous_time;            /* Last time we ran the time handler. */
     list *scripts_queue;               /* Queue of user scripts to execute. */
     char *announce_ip;                 /* IP addr that is gossiped to other sentinels if
@@ -283,8 +284,8 @@ struct sentinelState {
     unsigned long simfailure_flags;    /* Failures simulation. */
     int deny_scripts_reconfig;         /* Allow SENTINEL SET ... to change script
                                           paths at runtime? */
-    char *sentinel_auth_pass;          /* Password to use for AUTH against other sentinel */
-    char *sentinel_auth_user;          /* Username for ACLs AUTH against other sentinel. */
+    sds sentinel_auth_pass;            /* Password to use for AUTH against other sentinel */
+    sds sentinel_auth_user;            /* Username for ACLs AUTH against other sentinel. */
     int resolve_hostnames;             /* Support use of hostnames, assuming DNS is well configured. */
     int announce_hostnames;            /* Announce hostnames instead of IPs when we have them. */
 } sentinel;
@@ -439,13 +440,18 @@ void dictInstancesValDestructor(void *obj) {
  *
  * also used for: sentinelValkeyInstance->sentinels dictionary that maps
  * sentinels ip:port to last seen time in Pub/Sub hello message. */
+
+static void dictEntryDestructorInstancesValue(void *entry) {
+    dictEntry *de = entry;
+    dictInstancesValDestructor(dictGetVal(de));
+    zfree(de);
+}
+
 dictType instancesDictType = {
-    dictSdsHash,                /* hash function */
-    NULL,                       /* key dup */
-    dictSdsKeyCompare,          /* key compare */
-    NULL,                       /* key destructor */
-    dictInstancesValDestructor, /* val destructor */
-    NULL                        /* allow to expand */
+    .entryGetKey = dictEntryGetKey,
+    .hashFunction = dictSdsHash,
+    .keyCompare = dictSdsKeyCompare,
+    .entryDestructor = dictEntryDestructorInstancesValue,
 };
 
 /* Instance runid (sds) -> votes (long casted to void*)
@@ -453,22 +459,18 @@ dictType instancesDictType = {
  * This is useful into sentinelGetObjectiveLeader() function in order to
  * count the votes and understand who is the leader. */
 dictType leaderVotesDictType = {
-    dictSdsHash,       /* hash function */
-    NULL,              /* key dup */
-    dictSdsKeyCompare, /* key compare */
-    NULL,              /* key destructor */
-    NULL,              /* val destructor */
-    NULL               /* allow to expand */
+    .entryGetKey = dictEntryGetKey,
+    .hashFunction = dictSdsHash,
+    .keyCompare = dictSdsKeyCompare,
+    .entryDestructor = zfree,
 };
 
 /* Instance renamed commands table. */
 dictType renamedCommandsDictType = {
-    dictSdsCaseHash,       /* hash function */
-    NULL,                  /* key dup */
-    dictSdsKeyCaseCompare, /* key compare */
-    dictSdsDestructor,     /* key destructor */
-    dictSdsDestructor,     /* val destructor */
-    NULL                   /* allow to expand */
+    .entryGetKey = dictEntryGetKey,
+    .hashFunction = dictSdsCaseHash,
+    .keyCompare = dictSdsKeyCaseCompare,
+    .entryDestructor = dictEntryDestructorSdsKeyValue,
 };
 
 /* =========================== Initialization =============================== */
@@ -523,15 +525,49 @@ void initSentinel(void) {
     server.sentinel_config = NULL;
 }
 
-/* This function is for checking whether sentinel config file has been set,
- * also checking whether we have write permissions. */
+/* Check that the config file is set and that we can save state to it.
+ * A read-only config file is refused on purpose: we won't overwrite it.
+ * The directory must also allow what rewriteConfigOverwriteFile() does:
+ * create a temp file, and open the directory to fsync it. */
 void sentinelCheckConfigFile(void) {
     if (server.configfile == NULL) {
         serverLog(LL_WARNING, "Sentinel needs config file on disk to save state. Exiting...");
         exit(1);
-    } else if (access(server.configfile, W_OK) == -1) {
+    }
+
+    if (access(server.configfile, W_OK) == -1) {
         serverLog(LL_WARNING, "Sentinel config file %s is not writable: %s. Exiting...", server.configfile,
                   strerror(errno));
+        exit(1);
+    }
+
+    /* Same temp name and length check as rewriteConfigOverwriteFile(). */
+    char tmp_conffile[PATH_MAX];
+    int tmp_path_len = snprintf(tmp_conffile, sizeof(tmp_conffile), "%s%s", server.configfile, ".XXXXXX");
+    if (tmp_path_len <= 0 || (unsigned int)tmp_path_len >= sizeof(tmp_conffile)) {
+        serverLog(LL_WARNING, "Sentinel config file path %s is too long. Exiting...", server.configfile);
+        exit(1);
+    }
+
+    /* For logging only. Fits per the check above; dirname() may modify it. */
+    char dir_buf[PATH_MAX];
+    memcpy(dir_buf, server.configfile, strlen(server.configfile) + 1);
+    const char *dir = dirname(dir_buf);
+
+#if defined(_GNU_SOURCE) && !defined(__HAIKU__)
+    int fd = mkostemp(tmp_conffile, O_CLOEXEC);
+#else
+    int fd = mkstemp(tmp_conffile);
+#endif
+    if (fd == -1) {
+        serverLog(LL_WARNING, "Sentinel config dir %s is not writable: %s. Exiting...", dir, strerror(errno));
+        exit(1);
+    }
+    close(fd);
+    unlink(tmp_conffile);
+
+    if (fsyncFileDir(server.configfile) == -1) {
+        serverLog(LL_WARNING, "Sentinel config dir %s cannot be synced: %s. Exiting...", dir, strerror(errno));
         exit(1);
     }
 }
@@ -906,7 +942,7 @@ void sentinelCollectTerminatedScripts(void) {
             sj->pid = 0;
             sj->start_time = mstime() + sentinelScriptRetryDelay(sj->retry_num);
         } else {
-            /* Otherwise let's remove the script, but log the event if the
+            /* Otherwise, let's remove the script, but log the event if the
              * execution did not terminated in the best of the ways. */
             if (bysignal || exitcode != 0) {
                 sentinelEvent(LL_WARNING, "-script-error", NULL, "%s %d %d", sj->argv[0], bysignal, exitcode);
@@ -920,7 +956,7 @@ void sentinelCollectTerminatedScripts(void) {
 
 /* Kill scripts in timeout, they'll be collected by the
  * sentinelCollectTerminatedScripts() function. */
-void sentinelKillTimedoutScripts(void) {
+void sentinelKillTimedOutScripts(void) {
     listNode *ln;
     listIter li;
     mstime_t now = mstime();
@@ -1044,7 +1080,7 @@ void instanceLinkCloseConnection(instanceLink *link, valkeyAsyncContext *c) {
 }
 
 /* Decrement the refcount of a link object, if it drops to zero, actually
- * free it and return NULL. Otherwise don't do anything and return the pointer
+ * free it and return NULL. Otherwise, don't do anything and return the pointer
  * to the object.
  *
  * If we are not going to free the link and ri is not NULL, we rebind all the
@@ -1092,7 +1128,7 @@ instanceLink *releaseInstanceLink(instanceLink *link, sentinelValkeyInstance *ri
  * detection and so forth.
  *
  * Return C_OK if a matching Sentinel was found in the context of a
- * different primary and sharing was performed. Otherwise C_ERR
+ * different primary and sharing was performed. Otherwise, C_ERR
  * is returned. */
 int sentinelTryConnectionSharing(sentinelValkeyInstance *ri) {
     serverAssert(ri->flags & SRI_SENTINEL);
@@ -1444,7 +1480,7 @@ const char *sentinelValkeyInstanceTypeStr(sentinelValkeyInstance *ri) {
  * remove our old entry and add a new one for the same ID but with the new
  * address.
  *
- * The function returns 1 if the matching Sentinel was removed, otherwise
+ * The function returns 1 if the matching Sentinel was removed; otherwise,
  * 0 if there was no Sentinel with this ID. */
 int removeMatchingSentinelFromPrimary(sentinelValkeyInstance *primary, char *runid) {
     dictIterator *di;
@@ -1467,7 +1503,7 @@ int removeMatchingSentinelFromPrimary(sentinelValkeyInstance *primary, char *run
 }
 
 /* Search an instance with the same runid, ip and port into a dictionary
- * of instances. Return NULL if not found, otherwise return the instance
+ * of instances. Return NULL if not found; otherwise, return the instance
  * pointer.
  *
  * runid or addr can be NULL. In such a case the search is performed only
@@ -1481,7 +1517,7 @@ sentinelValkeyInstance *getSentinelValkeyInstanceByAddrAndRunID(dict *instances,
     serverAssert(addr || runid); /* User must pass at least one search param. */
     if (addr != NULL) {
         /* Try to resolve addr. If hostnames are used, we're accepting an ri_addr
-         * that contains an hostname only and can still be matched based on that.
+         * that contains a hostname only and can still be matched based on that.
          */
         ri_addr = createSentinelAddr(addr, port, 1);
         if (!ri_addr) return NULL;
@@ -1585,7 +1621,7 @@ int sentinelResetPrimariesByPattern(char *pattern, int flags) {
  * This is used to handle the +switch-primary event.
  *
  * The function returns C_ERR if the address can't be resolved for some
- * reason. Otherwise C_OK is returned.  */
+ * reason. Otherwise, C_OK is returned.  */
 int sentinelResetPrimaryAndChangeAddress(sentinelValkeyInstance *primary, char *hostname, int port) {
     sentinelAddr *oldaddr, *newaddr;
     sentinelAddr **replicas = NULL;
@@ -2055,29 +2091,31 @@ void rewriteConfigSentinelOption(struct rewriteConfigState *state) {
 
         /* sentinel notification-script */
         if (primary->notification_script) {
-            line = sdscatprintf(sdsempty(), "sentinel notification-script %s %s", primary->name,
-                                primary->notification_script);
+            line = sdscatprintf(sdsempty(), "sentinel notification-script %s ", primary->name);
+            line = sdscatrepr(line, primary->notification_script, sdslen(primary->notification_script));
             rewriteConfigRewriteLine(state, "sentinel notification-script", line, 1);
             /* rewriteConfigMarkAsProcessed is handled after the loop */
         }
 
         /* sentinel client-reconfig-script */
         if (primary->client_reconfig_script) {
-            line = sdscatprintf(sdsempty(), "sentinel client-reconfig-script %s %s", primary->name,
-                                primary->client_reconfig_script);
+            line = sdscatprintf(sdsempty(), "sentinel client-reconfig-script %s ", primary->name);
+            line = sdscatrepr(line, primary->client_reconfig_script, sdslen(primary->client_reconfig_script));
             rewriteConfigRewriteLine(state, "sentinel client-reconfig-script", line, 1);
             /* rewriteConfigMarkAsProcessed is handled after the loop */
         }
 
         /* sentinel auth-pass & auth-user */
         if (primary->auth_pass) {
-            line = sdscatprintf(sdsempty(), "sentinel auth-pass %s %s", primary->name, primary->auth_pass);
+            line = sdscatprintf(sdsempty(), "sentinel auth-pass %s ", primary->name);
+            line = sdscatrepr(line, primary->auth_pass, sdslen(primary->auth_pass));
             rewriteConfigRewriteLine(state, "sentinel auth-pass", line, 1);
             /* rewriteConfigMarkAsProcessed is handled after the loop */
         }
 
         if (primary->auth_user) {
-            line = sdscatprintf(sdsempty(), "sentinel auth-user %s %s", primary->name, primary->auth_user);
+            line = sdscatprintf(sdsempty(), "sentinel auth-user %s ", primary->name);
+            line = sdscatrepr(line, primary->auth_user, sdslen(primary->auth_user));
             rewriteConfigRewriteLine(state, "sentinel auth-user", line, 1);
             /* rewriteConfigMarkAsProcessed is handled after the loop */
         }
@@ -2134,8 +2172,9 @@ void rewriteConfigSentinelOption(struct rewriteConfigState *state) {
         while ((de = dictNext(di2)) != NULL) {
             ri = dictGetVal(de);
             if (ri->runid == NULL) continue;
-            line = sdscatprintf(sdsempty(), "sentinel known-sentinel %s %s %d %s", primary->name,
-                                announceSentinelAddr(ri->addr), ri->addr->port, ri->runid);
+            line = sdscatprintf(sdsempty(), "sentinel known-sentinel %s %s %d ", primary->name,
+                                announceSentinelAddr(ri->addr), ri->addr->port);
+            line = sdscatrepr(line, ri->runid, sdslen(ri->runid));
             rewriteConfigRewriteLine(state, "sentinel known-sentinel", line, 1);
             /* rewriteConfigMarkAsProcessed is handled after the loop */
         }
@@ -2146,7 +2185,10 @@ void rewriteConfigSentinelOption(struct rewriteConfigState *state) {
         while ((de = dictNext(di2)) != NULL) {
             sds oldname = dictGetKey(de);
             sds newname = dictGetVal(de);
-            line = sdscatprintf(sdsempty(), "sentinel rename-command %s %s %s", primary->name, oldname, newname);
+            line = sdscatprintf(sdsempty(), "sentinel rename-command %s ", primary->name);
+            line = sdscatrepr(line, oldname, sdslen(oldname));
+            line = sdscatlen(line, " ", 1);
+            line = sdscatrepr(line, newname, sdslen(newname));
             rewriteConfigRewriteLine(state, "sentinel rename-command", line, 1);
             /* rewriteConfigMarkAsProcessed is handled after the loop */
         }
@@ -2176,7 +2218,8 @@ void rewriteConfigSentinelOption(struct rewriteConfigState *state) {
 
     /* sentinel sentinel-user. */
     if (sentinel.sentinel_auth_user) {
-        line = sdscatprintf(sdsempty(), "sentinel sentinel-user %s", sentinel.sentinel_auth_user);
+        line = sdsnew("sentinel sentinel-user ");
+        line = sdscatrepr(line, sentinel.sentinel_auth_user, sdslen(sentinel.sentinel_auth_user));
         rewriteConfigRewriteLine(state, "sentinel sentinel-user", line, 1);
     } else {
         rewriteConfigMarkAsProcessed(state, "sentinel sentinel-user");
@@ -2184,7 +2227,8 @@ void rewriteConfigSentinelOption(struct rewriteConfigState *state) {
 
     /* sentinel sentinel-pass. */
     if (sentinel.sentinel_auth_pass) {
-        line = sdscatprintf(sdsempty(), "sentinel sentinel-pass %s", sentinel.sentinel_auth_pass);
+        line = sdsnew("sentinel sentinel-pass ");
+        line = sdscatrepr(line, sentinel.sentinel_auth_pass, sdslen(sentinel.sentinel_auth_pass));
         rewriteConfigRewriteLine(state, "sentinel sentinel-pass", line, 1);
     } else {
         rewriteConfigMarkAsProcessed(state, "sentinel sentinel-pass");
@@ -2649,7 +2693,8 @@ void sentinelRefreshInstanceInfo(sentinelValkeyInstance *ri, const char *info) {
     /* Handle replicas replicating to a different primary address. */
     if ((ri->flags & SRI_REPLICA) && role == SRI_REPLICA &&
         (ri->replica_primary_port != ri->primary->addr->port ||
-         !sentinelAddrEqualsHostname(ri->primary->addr, ri->replica_primary_host))) {
+         (ri->replica_primary_host &&
+          !sentinelAddrEqualsHostname(ri->primary->addr, ri->replica_primary_host)))) {
         mstime_t wait_time = ri->primary->failover_timeout;
 
         /* Make sure the primary is sane before reconfiguring this instance
@@ -2904,7 +2949,7 @@ void sentinelReceiveHelloMessages(valkeyAsyncContext *c, void *reply, void *priv
  * sentinel_ip,sentinel_port,sentinel_runid,current_epoch,
  * primary_name,primary_ip,primary_port,primary_config_epoch.
  *
- * Returns C_OK if the PUBLISH was queued correctly, otherwise
+ * Returns C_OK if the PUBLISH was queued correctly; otherwise,
  * C_ERR is returned. */
 int sentinelSendHello(sentinelValkeyInstance *ri) {
     char ip[NET_IP_STR_LEN];
@@ -2917,7 +2962,7 @@ int sentinelSendHello(sentinelValkeyInstance *ri) {
 
     if (ri->link->disconnected) return C_ERR;
 
-    /* Use the specified announce address if specified, otherwise try to
+    /* Use the specified announce address if specified; otherwise, try to
      * obtain our own IP address. */
     if (sentinel.announce_ip) {
         announce_ip = sentinel.announce_ip;
@@ -2990,7 +3035,7 @@ int sentinelSendPing(sentinelValkeyInstance *ri) {
         ri->link->pending_commands++;
         ri->link->last_ping_time = mstime();
         /* We update the active ping time only if we received the pong for
-         * the previous ping, otherwise we are technically waiting since the
+         * the previous ping; otherwise, we are technically waiting since the
          * first ping that did not receive a reply. */
         if (ri->link->act_ping_time == 0) ri->link->act_ping_time = ri->link->last_ping_time;
         return 1;
@@ -3082,6 +3127,27 @@ const char *getLogLevel(void) {
     return "unknown";
 }
 
+static int containsControlChars(const char *s, size_t len) {
+    for (size_t i = 0; i < len; i++) {
+        unsigned char ch = (unsigned char)s[i];
+        if (ch <= 0x1F || ch == 0x7F) return 1;
+    }
+    return 0;
+}
+
+/* Validate that arguments starting from 'first_arg' contain no control characters.
+ * Returns C_OK if all arguments are clean, or C_ERR after sending an error reply. */
+static int sentinelValidateArgs(client *c, int first_arg, const char *cmd) {
+    for (int i = first_arg; i < c->argc; i++) {
+        sds arg = objectGetVal(c->argv[i]);
+        if (containsControlChars(arg, sdslen(arg))) {
+            addReplyErrorFormat(c, "Invalid argument at index %d for %s: control characters are not allowed", i, cmd);
+            return C_ERR;
+        }
+    }
+    return C_OK;
+}
+
 /* SENTINEL CONFIG SET option value [option value ...] */
 void sentinelConfigSetCommand(client *c) {
     long long numval;
@@ -3104,6 +3170,8 @@ void sentinelConfigSetCommand(client *c) {
         populateDict(options_dict, options);
     }
     dict *set_configs = dictCreate(&stringSetDictType);
+
+    if (sentinelValidateArgs(c, 3, "SENTINEL CONFIG SET") == C_ERR) goto exit;
 
     /* Validate arguments are valid */
     for (int i = 3; i < c->argc; i++) {
@@ -3746,7 +3814,7 @@ void sentinelCommand(client *c) {
             "    failover.",
             "CONFIG SET param value [param value ...]",
             "    Set a global Sentinel configuration parameter.",
-            "CONFIG GET <param> [param param param ...]",
+            "CONFIG GET param [param ...]",
             "    Get global Sentinel configuration parameter.",
             "DEBUG [<param> <value> ...]",
             "    Show a list of configurable time parameters and their values (milliseconds).",
@@ -3784,7 +3852,8 @@ void sentinelCommand(client *c) {
             "    Show a list of Sentinel instances for this primary and their state.",
             "SET <primary-name> <option> <value> [<option> <value> ...]",
             "    Set configuration parameters for certain primaries.",
-            "SIMULATE-FAILURE [CRASH-AFTER-ELECTION] [CRASH-AFTER-PROMOTION] [HELP]",
+            "SIMULATE-FAILURE (CRASH-AFTER-ELECTION|CRASH-AFTER-PROMOTION|HELP) "
+            "[(CRASH-AFTER-ELECTION|CRASH-AFTER-PROMOTION|HELP) ...]",
             "    Simulate a Sentinel crash.",
             NULL,
         };
@@ -3833,7 +3902,7 @@ void sentinelCommand(client *c) {
          * one time per epoch.
          *
          * runid is "*" if we are not seeking for a vote from the Sentinel
-         * in order to elect the failover leader. Otherwise it is set to the
+         * in order to elect the failover leader. Otherwise, it is set to the
          * runid we want the Sentinel to vote if it did not already voted.
          */
         sentinelValkeyInstance *ri;
@@ -3854,7 +3923,7 @@ void sentinelCommand(client *c) {
         if (!sentinel.tilt && ri && (ri->flags & SRI_S_DOWN) && (ri->flags & SRI_PRIMARY)) isdown = 1;
 
         /* Vote for the primary (or fetch the previous vote) if the request
-         * includes a runid, otherwise the sender is not seeking for a vote. */
+         * includes a runid; otherwise, the sender is not seeking for a vote. */
         if (ri && ri->flags & SRI_PRIMARY && strcasecmp(objectGetVal(c->argv[5]), "*")) {
             leader = sentinelVoteLeader(ri, (uint64_t)req_epoch, objectGetVal(c->argv[5]), &leader_epoch);
         }
@@ -3941,6 +4010,9 @@ void sentinelCommand(client *c) {
         char ip[NET_IP_STR_LEN];
 
         if (c->argc != 6) goto numargserr;
+
+        if (sentinelValidateArgs(c, 2, "SENTINEL MONITOR") == C_ERR) return;
+
         if (getLongFromObjectOrReply(c, c->argv[5], &quorum, "Invalid quorum") != C_OK) return;
         if (getLongFromObjectOrReply(c, c->argv[4], &port, "Invalid port") != C_OK) return;
 
@@ -3950,7 +4022,7 @@ void sentinelCommand(client *c) {
         }
 
         /* If resolve-hostnames is used, actual DNS resolution may take place.
-         * Otherwise just validate address.
+         * Otherwise, just validate address.
          */
         if (anetResolve(NULL, objectGetVal(c->argv[3]), ip, sizeof(ip), sentinel.resolve_hostnames ? ANET_NONE : ANET_IP_ONLY) ==
             ANET_ERR) {
@@ -4024,7 +4096,7 @@ void sentinelCommand(client *c) {
          * a dictionary composed of just the primary groups the user
          * requested. */
         dictType copy_keeper = instancesDictType;
-        copy_keeper.valDestructor = NULL;
+        copy_keeper.entryDestructor = zfree;
         dict *primaries_local = sentinel.primaries;
         if (c->argc > 2) {
             primaries_local = dictCreate(&copy_keeper);
@@ -4081,7 +4153,8 @@ void sentinelCommand(client *c) {
         dictReleaseIterator(di);
         if (primaries_local != sentinel.primaries) dictRelease(primaries_local);
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "simulate-failure")) {
-        /* SENTINEL SIMULATE-FAILURE [CRASH-AFTER-ELECTION] [CRASH-AFTER-PROMOTION] [HELP] */
+        /* SENTINEL SIMULATE-FAILURE (CRASH-AFTER-ELECTION|CRASH-AFTER-PROMOTION|HELP)
+         * [(CRASH-AFTER-ELECTION|CRASH-AFTER-PROMOTION|HELP) ...] */
         int j;
 
         sentinel.simfailure_flags = SENTINEL_SIMFAILURE_NONE;
@@ -4164,7 +4237,7 @@ void sentinelInfoCommand(client *c) {
         if (sdslen(info) != 0) info = sdscat(info, "\r\n");
         info = sdscatprintf(info,
                             "# Sentinel\r\n"
-                            "sentinel_masters:%lu\r\n"
+                            "sentinel_masters:%zu\r\n"
                             "sentinel_tilt:%d\r\n"
                             "sentinel_tilt_since_seconds:%jd\r\n"
                             "sentinel_total_tilt:%d\r\n"
@@ -4187,7 +4260,7 @@ void sentinelInfoCommand(client *c) {
                 status = "sdown";
             info = sdscatprintf(info,
                                 "master%d:name=%s,status=%s,address=%s:%d,"
-                                "slaves=%lu,sentinels=%lu\r\n",
+                                "slaves=%zu,sentinels=%zu\r\n",
                                 primary_id++, ri->name, status, announceSentinelAddr(ri->addr), ri->addr->port,
                                 dictSize(ri->replicas), dictSize(ri->sentinels) + 1);
         }
@@ -4225,6 +4298,8 @@ void sentinelSetCommand(client *c) {
     int redacted;
 
     if ((ri = sentinelGetPrimaryByNameOrReplyError(c, c->argv[2])) == NULL) return;
+
+    if (sentinelValidateArgs(c, 3, "SENTINEL SET") == C_ERR) return;
 
     /* Process option - value pairs. */
     for (j = 3; j < c->argc; j++) {
@@ -4472,21 +4547,24 @@ void sentinelCheckSubjectivelyDown(sentinelValkeyInstance *ri) {
 void sentinelCheckObjectivelyDown(sentinelValkeyInstance *primary) {
     dictIterator *di;
     dictEntry *de;
-    unsigned int quorum = 0, odown = 0;
+    unsigned int quorum = 1, odown = 0; /* Count the current sentinel. */
+    mstime_t now = mstime();
 
-    if (primary->flags & SRI_S_DOWN) {
-        /* Is down for enough sentinels? */
-        quorum = 1; /* the current sentinel. */
-        /* Count all the other sentinels. */
-        di = dictGetIterator(primary->sentinels);
-        while ((de = dictNext(di)) != NULL) {
-            sentinelValkeyInstance *ri = dictGetVal(de);
+    /* Expire stale replies even when the primary is healthy, before counting
+     * the other sentinels towards the quorum. */
+    di = dictGetIterator(primary->sentinels);
+    while ((de = dictNext(di)) != NULL) {
+        sentinelValkeyInstance *ri = dictGetVal(de);
 
-            if (ri->flags & SRI_PRIMARY_DOWN) quorum++;
+        if (now - ri->last_primary_down_reply_time > sentinel_ask_period * 5) {
+            ri->flags &= ~SRI_PRIMARY_DOWN;
+            sdsfree(ri->leader);
+            ri->leader = NULL;
         }
-        dictReleaseIterator(di);
-        if (quorum >= primary->quorum) odown = 1;
+        if (ri->flags & SRI_PRIMARY_DOWN) quorum++;
     }
+    dictReleaseIterator(di);
+    if ((primary->flags & SRI_S_DOWN) && quorum >= primary->quorum) odown = 1;
 
     /* Set the flag accordingly to the outcome. */
     if (odown) {
@@ -4555,15 +4633,7 @@ void sentinelAskPrimaryStateToOtherSentinels(sentinelValkeyInstance *primary, in
     di = dictGetIterator(primary->sentinels);
     while ((de = dictNext(di)) != NULL) {
         sentinelValkeyInstance *ri = dictGetVal(de);
-        mstime_t elapsed = mstime() - ri->last_primary_down_reply_time;
         int retval;
-
-        /* If the primary state from other sentinel is too old, we clear it. */
-        if (elapsed > sentinel_ask_period * 5) {
-            ri->flags &= ~SRI_PRIMARY_DOWN;
-            sdsfree(ri->leader);
-            ri->leader = NULL;
-        }
 
         /* Only ask if primary is down to other sentinels if:
          *
@@ -4595,7 +4665,7 @@ void sentinelSimFailureCrash(void) {
 /* Vote for the sentinel with 'req_runid' or return the old vote if already
  * voted for the specified 'req_epoch' or one greater.
  *
- * If a vote is not available returns NULL, otherwise return the Sentinel
+ * If a vote is not available returns NULL; otherwise, return the Sentinel
  * runid and populate the leader_epoch with the epoch of the vote. */
 char *sentinelVoteLeader(sentinelValkeyInstance *primary, uint64_t req_epoch, char *req_runid, uint64_t *leader_epoch) {
     if (req_epoch > sentinel.current_epoch) {
@@ -4773,6 +4843,8 @@ int sentinelFailoverTo(sentinelValkeyInstance *ri, const sentinelAddr *addr, mst
 int sentinelKillClients(sentinelValkeyInstance *ri) {
     int retval;
 
+    if (ri->link->cc == NULL) return C_ERR;
+
     /* 1) Rewrite the configuration (the instance just switched roles)
      * 2) Disconnect all clients (but this one sending the command) in order
      *    to trigger the ask-master-on-reconnection protocol for connected
@@ -4896,7 +4968,7 @@ int sentinelSendReplicaOf(sentinelValkeyInstance *ri, const sentinelAddr *addr) 
     return C_OK;
 }
 
-/* Setup the primary state to start a failover. */
+/* Set up the primary state to start a failover. */
 void sentinelStartFailover(sentinelValkeyInstance *primary) {
     serverAssert(primary->flags & SRI_PRIMARY);
 
@@ -4958,7 +5030,7 @@ int sentinelStartFailoverIfNeeded(sentinelValkeyInstance *primary) {
  *    This is pretty much black magic but the idea is, the primary was not
  *    available so the replica may be lagging, but not over a certain time.
  *    Anyway we'll select the best replica according to replication offset.
- * 5) Replica priority can't be zero, otherwise the replica is discarded.
+ * 5) Replica priority can't be zero; otherwise, the replica is discarded.
  *
  * Among all the replicas matching the above conditions we select the replica
  * with, in order of sorting key:
@@ -4970,7 +5042,7 @@ int sentinelStartFailoverIfNeeded(sentinelValkeyInstance *primary) {
  * Basically if runid is the same, the replica that processed more commands
  * from the primary is selected.
  *
- * The function returns the pointer to the selected replica, otherwise
+ * The function returns the pointer to the selected replica; otherwise,
  * NULL if no suitable replica was found.
  */
 
@@ -5029,7 +5101,7 @@ sentinelValkeyInstance *sentinelSelectReplica(sentinelValkeyInstance *primary) {
         if (replica->replica_priority == 0) continue;
 
         /* If the primary is in SDOWN state we get INFO for replicas every second.
-         * Otherwise we get it with the usual period so we need to account for
+         * Otherwise, we get it with the usual period so we need to account for
          * a larger delay. */
         if (primary->flags & SRI_S_DOWN)
             info_validity_time = sentinel_ping_period * 5;
@@ -5315,7 +5387,7 @@ void sentinelFailoverStateMachine(sentinelValkeyInstance *ri) {
 /* Abort a failover in progress:
  *
  * This function can only be called before the promoted replica acknowledged
- * the replica -> primary switch. Otherwise the failover can't be aborted and
+ * the replica -> primary switch. Otherwise, the failover can't be aborted and
  * will reach its end (possibly by timeout). */
 void sentinelAbortFailover(sentinelValkeyInstance *ri) {
     serverAssert(ri->flags & SRI_FAILOVER_IN_PROGRESS);
@@ -5429,7 +5501,7 @@ void sentinelTimer(void) {
     sentinelHandleDictOfValkeyInstances(sentinel.primaries);
     sentinelRunPendingScripts();
     sentinelCollectTerminatedScripts();
-    sentinelKillTimedoutScripts();
+    sentinelKillTimedOutScripts();
 
     /* We continuously change the frequency of the server "timer interrupt"
      * in order to desynchronize every Sentinel from every other.

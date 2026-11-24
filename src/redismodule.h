@@ -336,7 +336,14 @@
 #define RedisModuleCommandHistoryEntry ValkeyModuleCommandHistoryEntry
 
 /* RedisModule APIs */
-#define RedisModule_OnLoad ValkeyModule_OnLoad
+/*
+ * Keep RedisModule_OnLoad unmapped.
+ *
+ * Renaming this entry-point via macro substitution can break modules that use
+ * a linker version script to export RedisModule_OnLoad explicitly.
+ * valkey-server already supports loading both ValkeyModule_OnLoad and
+ * RedisModule_OnLoad symbols.
+ */
 #define RedisModule_Init ValkeyModule_Init
 #define RedisModule_Assert ValkeyModule_Assert
 #define RedisModule_Alloc ValkeyModule_Alloc

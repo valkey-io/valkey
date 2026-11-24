@@ -117,6 +117,8 @@ typedef struct valkeyReader {
 LIBVALKEY_API valkeyReader *valkeyReaderCreateWithFunctions(valkeyReplyObjectFunctions *fn);
 LIBVALKEY_API void valkeyReaderFree(valkeyReader *r);
 LIBVALKEY_API int valkeyReaderFeed(valkeyReader *r, const char *buf, size_t len);
+LIBVALKEY_API int valkeyReaderGetReadBuf(valkeyReader *r, char **buf, size_t *cap, size_t minbytes);
+LIBVALKEY_API void valkeyReaderCommitRead(valkeyReader *r, size_t nread);
 LIBVALKEY_API int valkeyReaderGetReply(valkeyReader *r, void **reply);
 
 #define valkeyReaderSetPrivdata(_r, _p) (int)(((valkeyReader *)(_r))->privdata = (_p))

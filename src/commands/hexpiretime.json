@@ -1,6 +1,6 @@
 {
     "HEXPIRETIME": {
-        "summary": "Returns Unix timestamps in seconds since the epoch at which the given key's field(s) will expire",
+        "summary": "Returns Unix timestamps in seconds since the epoch at which the given key's field(s) will expire.",
         "complexity": "O(N) where N is the number of specified fields.",
         "group": "hash",
         "since": "9.0.0",
@@ -71,13 +71,12 @@
                     {
                         "name": "numfields",
                         "type": "integer",
-                        "key_spec_index": 0,
                         "multiple": false,
                         "minimum": 1
                     },
                     {
                         "name": "field",
-                        "type": "string",
+                        "type": "field",
                         "multiple": true
                     }
                 ]

@@ -108,11 +108,13 @@
 #define zcalloc valkey_calloc
 #define zrealloc valkey_realloc
 #define zfree valkey_free
+#define zmalloc_cache_aligned valkey_malloc_cache_aligned
 
 /* 'noinline' attribute is intended to prevent the `-Wstringop-overread` warning
  * when using gcc-12 later with LTO enabled. It may be removed once the
  * bug[https://gcc.gnu.org/bugzilla/show_bug.cgi?id=96503] is fixed. */
 __attribute__((malloc, alloc_size(1), noinline)) void *zmalloc(size_t size);
+__attribute__((malloc, alloc_size(1), noinline)) void *zmalloc_cache_aligned(size_t size);
 __attribute__((malloc, alloc_size(1), noinline)) void *zcalloc(size_t size);
 __attribute__((malloc, alloc_size(1, 2), noinline)) void *zcalloc_num(size_t num, size_t size);
 __attribute__((alloc_size(2), noinline)) void *zrealloc(void *ptr, size_t size);
@@ -129,17 +131,21 @@ void *ztrycalloc_usable(size_t size, size_t *usable);
 void *ztryrealloc_usable(void *ptr, size_t size, size_t *usable);
 __attribute__((malloc)) char *zstrdup(const char *s);
 size_t zmalloc_used_memory(void);
+size_t zmalloc_used_external_memory(void);
+int zmalloc_increase_used_memory_external(size_t size);
+int zmalloc_decrease_used_memory_external(size_t size);
 void zmalloc_set_oom_handler(void (*oom_handler)(size_t));
 size_t zmalloc_get_rss(void);
 int zmalloc_get_allocator_info(size_t *allocated, size_t *active, size_t *resident, size_t *retained, size_t *muzzy);
 void set_jemalloc_bg_thread(int enable);
-int jemalloc_purge(void);
+int zmalloc_purge(void);
 size_t zmalloc_get_private_dirty(long pid);
 size_t zmalloc_get_smap_bytes_by_field(char *field, long pid);
 size_t zmalloc_get_memory_size(void);
 void zlibc_free(void *ptr);
 void zlibc_trim(void);
 void zmadvise_dontneed(void *ptr, size_t size_hint);
+void zmadvise_dontneed_range(void *ptr, size_t size);
 
 #ifndef HAVE_MALLOC_SIZE
 size_t zmalloc_size(void *ptr);

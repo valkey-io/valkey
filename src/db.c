@@ -28,6 +28,9 @@
  */
 
 #include "server.h"
+#include "listpack.h"
+#include "hotkeys.h"
+#include "ordered_index.h"
 #include "cluster.h"
 #include "cluster_migrateslots.h"
 #include "latency.h"
@@ -37,6 +40,10 @@
 #include "module.h"
 #include "vector.h"
 #include "expire.h"
+#include "bgiteration.h"
+#include "forkless.h"
+#include "crc16_slottable.h"
+#include "bgiteration.h"
 
 /*-----------------------------------------------------------------------------
  * C-level DB API
@@ -78,7 +85,7 @@ static robj *dbFindWithDictIndex(serverDb *db, sds key, int dict_index);
  * expired on replicas even if the primary is lagging expiring our key via DELs
  * in the replication link. */
 robj *lookupKey(serverDb *db, robj *key, int flags) {
-    int dict_index = getKVStoreIndexForKey(objectGetVal(key));
+    int dict_index = getKVStoreIndexUsingCachedSlot(objectGetVal(key));
     robj *val = dbFindWithDictIndex(db, objectGetVal(key), dict_index);
     if (val) {
         /* Forcing deletion of expired keys on a replica makes the replica
@@ -120,6 +127,10 @@ robj *lookupKey(serverDb *db, robj *key, int flags) {
         if (!(flags & (LOOKUP_NOSTATS | LOOKUP_WRITE))) server.stat_keyspace_misses++;
         /* TODO: Use separate misses stats and notify event for WRITE */
     }
+
+    /* Charge this lookup to hot-key detection. All the policy (whether detection
+     * is on, which lookups count, and sampling) lives in hotkeys.c. */
+    hotkeysRecordLookup(key, db->id, flags);
 
     return val;
 }
@@ -173,7 +184,7 @@ robj *lookupKeyWriteOrReply(client *c, robj *key, robj *reply) {
 /* For hash keys, checks if they contain volatile items and updates tracking accordingly.
  * Always accesses the tracking kvstore, even if the tracking state doesn't change. */
 void dbUpdateObjectWithVolatileItemsTracking(serverDb *db, robj *o) {
-    if (o->type == OBJ_HASH) {
+    if (objectGetType(o) == OBJ_HASH) {
         if (hashTypeHasVolatileFields(o)) {
             dbTrackKeyWithVolatileItems(db, o);
         } else {
@@ -197,9 +208,9 @@ void dbUpdateObjectWithVolatileItemsTracking(serverDb *db, robj *o) {
  * function.
  *
  * If the update_if_existing argument is false, the program is aborted
- * if the key already exists, otherwise, it can fall back to dbOverwrite. */
+ * if the key already exists; otherwise, it can fall back to dbOverwrite. */
 static void dbAddInternal(serverDb *db, robj *key, robj **valref, int update_if_existing) {
-    int dict_index = getKVStoreIndexForKey(objectGetVal(key));
+    int dict_index = getKVStoreIndexUsingCachedSlot(objectGetVal(key));
     void **oldref = NULL;
     if (update_if_existing) {
         oldref = kvstoreHashtableFindRef(db->keys, dict_index, objectGetVal(key));
@@ -228,28 +239,36 @@ void dbAdd(serverDb *db, robj *key, robj **valref) {
     dbAddInternal(db, key, valref, 0);
 }
 
-/* Returns which dict index should be used with kvstore for a given key. */
+/* Returns which dict index should be used with kvstore for a given key, computed from the key itself. */
 int getKVStoreIndexForKey(sds key) {
-    return server.cluster_enabled ? getKeySlot(key) : 0;
+    return server.cluster_enabled ? (int)keyHashSlot(key, (int)sdslen(key)) : 0;
 }
 
-/* Returns the cluster hash slot for a given key, trying to use the cached slot that
- * stored on the server.current_client first. If there is no cached value, it will compute the hash slot
- * and then cache the value.*/
-int getKeySlot(sds key) {
+/* Same as getKVStoreIndexForKey(), but reuses the slot cached on the client rather than hashing the key.
+ * Only valid for keys the currently executing command declared, since the cached slot is that command's. */
+int getKVStoreIndexUsingCachedSlot(sds key) {
+    return server.cluster_enabled ? getCachedKeySlot(key) : 0;
+}
+
+/* Returns the slot cached on the client for the currently executing command, computing it from the key
+ * when no cached slot is available. Only valid for keys that command declared: any other key can hash to
+ * a different slot, so use keyHashSlot() or getKVStoreIndexForKey() for those. */
+int getCachedKeySlot(sds key) {
     serverAssert(server.cluster_enabled);
     /* This is performance optimization that uses pre-set slot id from the current command,
      * in order to avoid calculation of the key hash.
      *
      * This optimization is only used when current_client flag `CLIENT_EXECUTING_COMMAND` is set.
      * It only gets set during the execution of command under `call` method. Other flows requesting
-     * the key slot would fallback to keyHashSlot.
+     * the key slot would fall back to keyHashSlot.
      *
      * Modules and scripts executed on the primary may get replicated as multi-execs that operate on multiple slots,
      * so we must always recompute the slot for commands coming from the primary or AOF.
      */
     if (server.current_client && server.current_client->slot >= 0 && server.current_client->flag.executing_command &&
-        !mustObeyClient(server.current_client)) {
+        !mustObeyClient(server.current_client) &&
+        server.current_client->cmd &&
+        !(server.current_client->cmd->flags & (CMD_MODULE | CMD_TOUCHES_ARBITRARY_KEYS))) {
         debugServerAssertWithInfo(server.current_client, NULL,
                                   (int)keyHashSlot(key, (int)sdslen(key)) == server.current_client->slot);
         return server.current_client->slot;
@@ -272,7 +291,7 @@ int getKeySlot(sds key) {
  * give more control to the caller, nor will signal the key as ready
  * since it is not useful in this context.
  *
- * The function returns 1 if the key was added to the database, otherwise 0 is returned.
+ * The function returns 1 if the key was added to the database; otherwise, 0 is returned.
  */
 int dbAddRDBLoad(serverDb *db, sds key, robj **valref) {
     int dict_index = getKVStoreIndexForKey(key);
@@ -318,7 +337,7 @@ int dbAddRDBLoad(serverDb *db, sds key, robj **valref) {
 static void dbSetValue(serverDb *db, robj *key, robj **valref, int overwrite, void **oldref) {
     robj *val = *valref;
     if (oldref == NULL) {
-        int dict_index = getKVStoreIndexForKey(objectGetVal(key));
+        int dict_index = getKVStoreIndexUsingCachedSlot(objectGetVal(key));
         oldref = kvstoreHashtableFindRef(db->keys, dict_index, objectGetVal(key));
     }
     serverAssertWithInfo(NULL, key, oldref != NULL);
@@ -358,13 +377,14 @@ static void dbSetValue(serverDb *db, robj *key, robj **valref, int overwrite, vo
         old = val;
     } else {
         /* Replace the old value at its location in the key space. */
-        val->lru = old->lru;
+        objectSetLRU(val, objectGetLRU(old));
         long long expire = objectGetExpire(old);
         new = objectSetKeyAndExpire(val, objectGetVal(key), expire);
+        bgIteration_updateDbEntryPtr(old, new);
         *oldref = new;
         /* Replace the old value at its location in the expire space. */
         if (expire >= 0) {
-            int dict_index = getKVStoreIndexForKey(objectGetVal(key));
+            int dict_index = getKVStoreIndexUsingCachedSlot(objectGetVal(key));
             void **expireref = kvstoreHashtableFindRef(db->expires, dict_index, objectGetVal(key));
             serverAssert(expireref != NULL);
             *expireref = new;
@@ -430,6 +450,7 @@ void setKey(client *c, serverDb *db, robj *key, robj **valref, int flags) {
     } else {
         dbSetValue(db, key, valref, 1, NULL);
     }
+    bgIteration_dbEntryModified(*valref);
     if (!(flags & SETKEY_KEEPTTL)) removeExpire(db, key);
     if (!(flags & SETKEY_NO_SIGNAL)) signalModifiedKey(c, db, key);
 }
@@ -475,6 +496,9 @@ int dbGenericDeleteWithDictIndex(serverDb *db, robj *key, int async, int flags, 
     hashtablePosition pos;
     void **ref = kvstoreHashtableTwoPhasePopFindRef(db->keys, dict_index, objectGetVal(key), &pos);
     if (ref != NULL) {
+        bgIteration_keyDelete(db->id, (sds)objectGetVal(key));
+        hotkeysRecordDelete(key, db->id, flags);
+
         robj *val = *ref;
         /* VM_StringDMA may call dbUnshareStringValue which may free val, so we
          * need to incr to retain val */
@@ -499,7 +523,7 @@ int dbGenericDeleteWithDictIndex(serverDb *db, robj *key, int async, int flags, 
         }
 
         /* If deleting a hash object, un-track it from the volatile items tracking if it contains volatile items.*/
-        if (val->type == OBJ_HASH && hashTypeHasVolatileFields(val)) {
+        if (objectGetType(val) == OBJ_HASH && hashTypeHasVolatileFields(val)) {
             dbUntrackKeyWithVolatileItems(db, val);
         }
 
@@ -523,7 +547,8 @@ int dbGenericDelete(serverDb *db, robj *key, int async, int flags) {
 
 /* Add a key with volatile items to the tracking kvstore. */
 void dbTrackKeyWithVolatileItems(serverDb *db, robj *o) {
-    if (o->type == OBJ_HASH && hashTypeHasVolatileFields(o)) {
+    serverAssert(objectGetKey(o));
+    if (objectGetType(o) == OBJ_HASH && hashTypeHasVolatileFields(o)) {
         int dict_index = getKVStoreIndexForKey(objectGetKey(o));
         kvstoreHashtableAdd(db->keys_with_volatile_items, dict_index, o);
     }
@@ -531,6 +556,7 @@ void dbTrackKeyWithVolatileItems(serverDb *db, robj *o) {
 
 /* Delete a key from the keys with volatile entries tracking kvstore */
 void dbUntrackKeyWithVolatileItems(serverDb *db, robj *o) {
+    serverAssert(objectGetKey(o));
     int dict_index = getKVStoreIndexForKey(objectGetKey(o));
     kvstoreHashtableDelete(db->keys_with_volatile_items, dict_index, objectGetKey(o));
 }
@@ -564,7 +590,7 @@ int dbDelete(serverDb *db, robj *key) {
  *
  * If the object is found in one of the above conditions (or both) by the
  * function, an unshared / not-encoded copy of the string object is stored
- * at 'key' in the specified 'db'. Otherwise the object 'o' itself is
+ * at 'key' in the specified 'db'. Otherwise, the object 'o' itself is
  * returned.
  *
  * USAGE:
@@ -580,7 +606,7 @@ int dbDelete(serverDb *db, robj *key) {
  * using an sdscat() call to append some data, or anything else.
  */
 robj *dbUnshareStringValue(serverDb *db, robj *key, robj *o) {
-    serverAssert(o->type == OBJ_STRING);
+    serverAssert(objectGetType(o) == OBJ_STRING);
     if (o->refcount != 1 || o->encoding != OBJ_ENCODING_RAW) {
         robj *decoded = getDecodedObject(o);
         o = createRawStringObject(objectGetVal(decoded), sdslen(objectGetVal(decoded)));
@@ -649,7 +675,7 @@ long long emptyDbStructure(serverDb **dbarray, int dbnum, int async, void(callba
  * to specify that we do not want to delete the functions.
  *
  * On success the function returns the number of keys removed from the
- * database(s). Otherwise -1 is returned in the specific case the
+ * database(s). Otherwise, -1 is returned in the specific case the
  * DB number is out of range, and errno is set to EINVAL. */
 long long emptyData(int dbnum, int flags, void(callback)(hashtable *)) {
     int async = (flags & EMPTYDB_ASYNC);
@@ -661,6 +687,9 @@ long long emptyData(int dbnum, int flags, void(callback)(hashtable *)) {
         errno = EINVAL;
         return -1;
     }
+
+    /* bgIteration must be notified for flushall. */
+    if (dbnum == -1) bgIteration_flushall();
 
     /* Fire the flushdb modules event. */
     moduleFireServerEvent(VALKEYMODULE_EVENT_FLUSHDB, VALKEYMODULE_SUBEVENT_FLUSHDB_START, &fi);
@@ -681,12 +710,18 @@ long long emptyData(int dbnum, int flags, void(callback)(hashtable *)) {
     /* Empty the database structure. */
     removed = emptyDbStructure(server.db, dbnum, async, callback);
 
+    if (hotkeysEnabled()) {
+        if (dbnum == -1)
+            hotkeysPurgeAll();
+        else
+            hotkeysPurgeDb(dbnum);
+    }
+
     if (dbnum == -1) flushReplicaKeysWithExpireList(async);
 
     if (with_functions) {
         serverAssert(dbnum == -1);
-        /* TODO: fix this callback incompatibility. The arg is not used. */
-        functionReset(async, (void (*)(dict *))callback);
+        functionReset(async);
     }
 
     /* Also fire the end event. Note that this event will fire almost
@@ -753,6 +788,7 @@ long long dbTotalServerKeyCount(void) {
 void signalModifiedKey(client *c, serverDb *db, robj *key) {
     touchWatchedKey(db, key);
     trackingInvalidateKey(c, key, 1);
+    bgIteration_keyModified(db->id, objectGetVal(key));
 }
 
 void signalFlushedDb(int dbid, int async) {
@@ -784,13 +820,12 @@ void signalFlushedDb(int dbid, int async) {
 /* Return the set of flags to use for the emptyData() call for FLUSHALL
  * and FLUSHDB commands.
  *
- * sync: flushes the database in an sync manner.
+ * sync: flushes the database in a sync manner.
  * async: flushes the database in an async manner.
  * no option: determine sync or async according to the value of lazyfree-lazy-user-flush.
  *
- * On success C_OK is returned and the flags are stored in *flags, otherwise
- * C_ERR is returned and the function sends an error to the client. */
-int getFlushCommandFlags(client *c, int *flags) {
+ * On success the C_OK is returned; otherwise, C_ERR is returned. */
+int parseFlushCommandFlags(client *c, int *flags) {
     /* Parse the optional ASYNC option. */
     if (c->argc == 2 && !strcasecmp(objectGetVal(c->argv[1]), "sync")) {
         *flags = EMPTYDB_NO_FLAGS;
@@ -799,16 +834,23 @@ int getFlushCommandFlags(client *c, int *flags) {
     } else if (c->argc == 1) {
         *flags = server.lazyfree_lazy_user_flush ? EMPTYDB_ASYNC : EMPTYDB_NO_FLAGS;
     } else {
-        addReplyErrorObject(c, shared.syntaxerr);
         return C_ERR;
     }
     return C_OK;
 }
 
+/* Parses the flush command flags and returns an error to the client on failure */
+int parseFlushCommandFlagsOrReply(client *c, int *flags) {
+    int result = parseFlushCommandFlags(c, flags);
+    if (result == C_ERR) addReplyErrorObject(c, shared.syntaxerr);
+    return result;
+}
+
 /* Flushes the whole server data set. */
 void flushAllDataAndResetRDB(int flags) {
     server.dirty += emptyData(-1, flags, NULL);
-    if (server.child_type == CHILD_TYPE_RDB) killRDBChild();
+    if (isForkBgsaveInProgress()) killRDBChild();
+    if (isForklessSaveInProgress()) forklessSaveCancel();
     if (server.child_type == CHILD_TYPE_SLOT_MIGRATION) killSlotMigrationChild();
     if (server.saveparamslen > 0) {
         rdbSaveInfo rsi, *rsiptr;
@@ -820,7 +862,7 @@ void flushAllDataAndResetRDB(int flags) {
     /* jemalloc 5 doesn't release pages back to the OS when there's no traffic.
      * for large databases, flushdb blocks for long anyway, so a bit more won't
      * harm and this way the flush and purge will be synchronous. */
-    if (!(flags & EMPTYDB_ASYNC)) jemalloc_purge();
+    if (!(flags & EMPTYDB_ASYNC)) zmalloc_purge();
 #endif
 }
 
@@ -830,7 +872,7 @@ void flushAllDataAndResetRDB(int flags) {
 void flushdbCommand(client *c) {
     int flags;
 
-    if (getFlushCommandFlags(c, &flags) == C_ERR) return;
+    if (parseFlushCommandFlagsOrReply(c, &flags) == C_ERR) return;
 
     /* flushdb should not flush the functions */
     server.dirty += emptyData(c->db->id, flags | EMPTYDB_NOFUNCTIONS, NULL);
@@ -845,7 +887,7 @@ void flushdbCommand(client *c) {
     /* jemalloc 5 doesn't release pages back to the OS when there's no traffic.
      * for large databases, flushdb blocks for long anyway, so a bit more won't
      * harm and this way the flush and purge will be synchronous. */
-    if (!(flags & EMPTYDB_ASYNC)) jemalloc_purge();
+    if (!(flags & EMPTYDB_ASYNC)) zmalloc_purge();
 #endif
 }
 
@@ -854,7 +896,7 @@ void flushdbCommand(client *c) {
  * Flushes the whole server data set. */
 void flushallCommand(client *c) {
     int flags;
-    if (getFlushCommandFlags(c, &flags) == C_ERR) return;
+    if (parseFlushCommandFlagsOrReply(c, &flags) == C_ERR) return;
 
     /* flushall should not flush the functions */
     flushAllDataAndResetRDB(flags | EMPTYDB_NOFUNCTIONS);
@@ -1044,8 +1086,7 @@ void keysScanCallback(void *privdata, void *entry, int didx) {
     addScanDataItem(data->result, (const char *)key, sdslen(key));
 }
 
-/* This callback is used by scanGenericCommand in order to collect elements
- * returned by the dictionary iterator into a list. */
+/* Collect borrowed keys and values for SET and HASH hashtable scans. */
 void hashtableScanCallback(void *privdata, void *entry) {
     scanData *data = (scanData *)privdata;
     stringRef val = {NULL, 0};
@@ -1061,11 +1102,7 @@ void hashtableScanCallback(void *privdata, void *entry) {
     /* get key, value */
     if (o->type == OBJ_SET) {
         key = (sds)entry;
-    } else if (o->type == OBJ_ZSET) {
-        zskiplistNode *node = (zskiplistNode *)entry;
-        key = zslGetNodeElement(node);
-        /* zset data is copied after filtering by key */
-    } else if (o->type == OBJ_HASH) {
+    } else if (objectGetType(o) == OBJ_HASH) {
         key = entryGetField(entry);
         if (!data->only_keys) {
             val.buf = entryGetValue(entry, &val.len);
@@ -1081,30 +1118,33 @@ void hashtableScanCallback(void *privdata, void *entry) {
         }
     }
 
-    /* zset data must be copied. Do this after filtering to avoid unneeded
-     * allocations. */
-    if (o->type == OBJ_ZSET) {
-        /* zset data is copied */
-        zskiplistNode *node = (zskiplistNode *)entry;
-        key = sdsdup(zslGetNodeElement(node));
-        if (!data->only_keys) {
-            char buf[MAX_LONG_DOUBLE_CHARS];
-            int len = ld2string(buf, sizeof(buf), node->score, LD_STR_AUTO);
-            sds tmp = sdsnewlen(buf, len);
-            val.buf = (const char *)tmp;
-            val.len = sdslen(tmp);
-        }
-    }
-
     addScanDataItem(data->result, (const char *)key, sdslen(key));
     if (val.buf) {
         addScanDataItem(data->result, val.buf, val.len);
     }
 }
 
+/* Keep stable ZSET item pointers until the reply is written, avoiding member
+ * and score copies during the scan. */
+static void zsetScanReferenceCallback(void *privdata, void *entry) {
+    scanData *data = privdata;
+    data->sampled++;
+    if (data->pattern) {
+        const char *element;
+        size_t len;
+        orderedIndexItemGetElement(entry, &element, &len);
+        if (data->pattern && !stringmatchlen(data->pattern, sdslen(data->pattern), element, len, 0)) return;
+    } else {
+        /* Warm the item for the reply without loading its length twice. */
+        valkey_prefetch(entry);
+    }
+    OrderedIndexItem **item = vectorPush(data->result);
+    *item = entry;
+}
+
 /* Try to parse a SCAN cursor stored at buffer 'buf':
  * if the cursor is valid, store it as unsigned integer into *cursor and
- * returns C_OK. Otherwise return C_ERR and send an error to the
+ * returns C_OK. Otherwise, return C_ERR and send an error to the
  * client. */
 int parseScanCursorOrReply(client *c, sds buf, unsigned long long *cursor) {
     if (!string2ull(buf, sdslen(buf), cursor)) {
@@ -1115,7 +1155,7 @@ int parseScanCursorOrReply(client *c, sds buf, unsigned long long *cursor) {
 }
 
 char *obj_type_name[OBJ_TYPE_MAX] = {"string", "list", "set", "zset", "hash", NULL, /* module type is special */
-                                     "stream"};
+                                     "stream", "pathhash"};
 
 /* Helper function to get type from a string in scan commands */
 long long getObjectTypeByName(char *name) {
@@ -1146,86 +1186,91 @@ char *getObjectTypeName(robj *o) {
     }
 }
 
-/* This command implements SCAN, HSCAN and SSCAN commands.
- * If object 'o' is passed, then it must be a Hash, Set or Zset object, otherwise
+/* Parse options for SCAN, HSCAN, SSCAN, ZSCAN and CLUSTERSCAN commands,
+ * replying with an error on invalid input. */
+int parseScanOptionsOrReply(client *c, robj *o, int start_idx, bool allow_slot, scanOptions *opts) {
+    *opts = (scanOptions){
+        .count = DEFAULT_SCAN_COMMAND_COUNT,
+        .type = LLONG_MAX,
+        .input_slot = -1,
+        .match_slot = -1,
+    };
+
+    for (int i = start_idx; i < c->argc;) {
+        int j = c->argc - i;
+        char *opt = objectGetVal(c->argv[i]);
+        if (!strcasecmp(opt, "count") && j >= 2) {
+            if (getLongFromObjectOrReply(c, c->argv[i + 1], &opts->count, NULL) != C_OK) return C_ERR;
+            if (opts->count < 1) {
+                addReplyErrorObject(c, shared.syntaxerr);
+                return C_ERR;
+            }
+            i += 2;
+        } else if (!strcasecmp(opt, "match") && j >= 2) {
+            opts->pat = objectGetVal(c->argv[i + 1]);
+            opts->patlen = sdslen(opts->pat);
+            opts->use_pattern = !(opts->patlen == 1 && opts->pat[0] == '*');
+            opts->match_slot = opts->use_pattern && server.cluster_enabled ? patternHashSlot(opts->pat, opts->patlen) : -1;
+            i += 2;
+        } else if (!strcasecmp(opt, "type") && o == NULL && j >= 2) {
+            /* TYPE filter applies to key names only, not to object fields. */
+            char *typename = objectGetVal(c->argv[i + 1]);
+            opts->type = getObjectTypeByName(typename);
+            if (opts->type == LLONG_MAX) {
+                addReplyErrorFormat(c, "unknown type name '%s'", typename);
+                return C_ERR;
+            }
+            i += 2;
+        } else if (!strcasecmp(opt, "novalues")) {
+            if (!o || o->type != OBJ_HASH) {
+                addReplyError(c, "NOVALUES option can only be used in HSCAN");
+                return C_ERR;
+            }
+            opts->only_keys = 1;
+            i++;
+        } else if (!strcasecmp(opt, "noscores")) {
+            if (!o || o->type != OBJ_ZSET) {
+                addReplyError(c, "NOSCORES option can only be used in ZSCAN");
+                return C_ERR;
+            }
+            opts->only_keys = 1;
+            i++;
+        } else if (allow_slot && !strcasecmp(opt, "slot") && j >= 2) {
+            if (opts->input_slot != -1) {
+                addReplyError(c, "SLOT option can only be specified once");
+                return C_ERR;
+            }
+            if ((opts->input_slot = getSlotOrReply(c, c->argv[i + 1])) == -1) return C_ERR;
+            i += 2;
+        } else {
+            addReplyErrorObject(c, shared.syntaxerr);
+            return C_ERR;
+        }
+    }
+    return C_OK;
+}
+
+/* This command implements SCAN, HSCAN, SSCAN and CLUSTERSCAN commands.
+ * If object 'o' is passed, then it must be a Hash, Set or Zset object; otherwise,
  * if 'o' is NULL the command will operate on the dictionary associated with
  * the current database.
  *
- * When 'o' is not NULL the function assumes that the first argument in
- * the client arguments vector is a key so it skips it before iterating
- * in order to parse options.
- *
  * In the case of a Hash object the function returns both the field and value
- * of every element on the Hash. */
-void scanGenericCommand(client *c, robj *o, unsigned long long cursor) {
-    int i, j;
-    long count = DEFAULT_SCAN_COMMAND_COUNT;
-    sds pat = NULL;
-    sds typename = NULL;
-    long long type = LLONG_MAX;
-    int patlen = 0, use_pattern = 0, only_keys = 0;
+ * of every element on the Hash.
+ *
+ * cluster_ctx is used during CLUSTERSCAN to scan a specific slot or range of
+ * slots and to return the valid cursor to advance the scan.
+ */
+void scanGenericCommandWithOptions(client *c, robj *o, unsigned long long cursor, const scanOptions *opts, const clusterScanCtx *cluster_ctx) {
+    int slot = cluster_ctx ? cluster_ctx->slot : -1;
+    int final_slot = cluster_ctx ? cluster_ctx->final_slot : -1;
     vector result;
 
     /* Object must be NULL (to iterate keys names), or the type of the object
      * must be Set, Sorted Set, or Hash. */
-    serverAssert(o == NULL || o->type == OBJ_SET || o->type == OBJ_HASH || o->type == OBJ_ZSET);
+    serverAssert(o == NULL || o->type == OBJ_SET || objectGetType(o) == OBJ_HASH || o->type == OBJ_ZSET);
 
-    /* Set i to the first option argument. The previous one is the cursor. */
-    i = (o == NULL) ? 2 : 3; /* Skip the key argument if needed. */
-
-    /* Step 1: Parse options. */
-    while (i < c->argc) {
-        j = c->argc - i;
-        if (!strcasecmp(objectGetVal(c->argv[i]), "count") && j >= 2) {
-            if (getLongFromObjectOrReply(c, c->argv[i + 1], &count, NULL) != C_OK) {
-                return;
-            }
-
-            if (count < 1) {
-                addReplyErrorObject(c, shared.syntaxerr);
-                return;
-            }
-
-            i += 2;
-        } else if (!strcasecmp(objectGetVal(c->argv[i]), "match") && j >= 2) {
-            pat = objectGetVal(c->argv[i + 1]);
-            patlen = sdslen(pat);
-
-            /* The pattern always matches if it is exactly "*", so it is
-             * equivalent to disabling it. */
-            use_pattern = !(patlen == 1 && pat[0] == '*');
-
-            i += 2;
-        } else if (!strcasecmp(objectGetVal(c->argv[i]), "type") && o == NULL && j >= 2) {
-            /* SCAN for a particular type only applies to the db dict */
-            typename = objectGetVal(c->argv[i + 1]);
-            type = getObjectTypeByName(typename);
-            if (type == LLONG_MAX) {
-                addReplyErrorFormat(c, "unknown type name '%s'", typename);
-                return;
-            }
-            i += 2;
-        } else if (!strcasecmp(objectGetVal(c->argv[i]), "novalues")) {
-            if (!o || o->type != OBJ_HASH) {
-                addReplyError(c, "NOVALUES option can only be used in HSCAN");
-                return;
-            }
-            only_keys = 1;
-            i++;
-        } else if (!strcasecmp(objectGetVal(c->argv[i]), "noscores")) {
-            if (!o || o->type != OBJ_ZSET) {
-                addReplyError(c, "NOSCORES option can only be used in ZSCAN");
-                return;
-            }
-            only_keys = 1;
-            i++;
-        } else {
-            addReplyErrorObject(c, shared.syntaxerr);
-            return;
-        }
-    }
-
-    /* Step 2: Iterate the collection.
+    /* Iterate the collection.
      *
      * Note that if the object is encoded with a listpack, intset, or any other
      * representation that is not a hash table, we are sure that it is also
@@ -1235,25 +1280,24 @@ void scanGenericCommand(client *c, robj *o, unsigned long long cursor) {
 
     /* Handle the case of kvstore, dict or hashtable. */
     hashtable *ht = NULL;
-    /* Set a free callback for the contents of the collected keys list if they
-     * are deep copied temporary strings. We must not free them if they are just
-     * a shallow copy - a pointer to the actual data in the data structure */
+    int use_zset_item_refs = 0;
+    /* Free temporary strings from compact encodings. */
     void (*free_callback)(sds) = sdsfree;
     if (o == NULL) {
         free_callback = NULL;
     } else if (o->type == OBJ_SET && o->encoding == OBJ_ENCODING_HASHTABLE) {
         ht = objectGetVal(o);
         free_callback = NULL;
-    } else if (o->type == OBJ_HASH && o->encoding == OBJ_ENCODING_HASHTABLE) {
+    } else if (objectGetType(o) == OBJ_HASH && o->encoding == OBJ_ENCODING_HASHTABLE) {
         ht = objectGetVal(o);
         free_callback = NULL;
-    } else if (o->type == OBJ_ZSET && o->encoding == OBJ_ENCODING_SKIPLIST) {
+    } else if (o->type == OBJ_ZSET && o->encoding == OBJ_ENCODING_BTREE) {
         zset *zs = objectGetVal(o);
         ht = zs->ht;
-        /* scanning ZSET allocates temporary strings even though it's a dict */
-        free_callback = sdsfree;
+        free_callback = NULL;
+        use_zset_item_refs = 1;
     }
-    vectorInit(&result, SCAN_VECTOR_INITIAL_ALLOC, sizeof(stringRef));
+    vectorInit(&result, SCAN_VECTOR_INITIAL_ALLOC, use_zset_item_refs ? sizeof(OrderedIndexItem *) : sizeof(stringRef));
 
     /* For main hash table scan or scannable data structure. */
     if (!o || ht) {
@@ -1261,7 +1305,7 @@ void scanGenericCommand(client *c, robj *o, unsigned long long cursor) {
          * COUNT, so if the hash table is in a pathological state (very
          * sparsely populated) we avoid to block too much time at the cost
          * of returning no or very few elements. */
-        unsigned long maxiterations = (unsigned long)count * 10UL;
+        unsigned long maxiterations = (unsigned long)opts->count * 10UL;
 
         /* We pass scanData which have three pointers to the callback:
          * 1. data.keys: the list to which it will add new elements;
@@ -1272,7 +1316,7 @@ void scanGenericCommand(client *c, robj *o, unsigned long long cursor) {
          * 4. data.pattern: the pattern string;
          * 5. data.sampled: the maxiteration limit is there in case we're
          * working on an empty dict, one with a lot of empty buckets, and
-         * for the buckets are not empty, we need to limit the spampled number
+         * for the buckets are not empty, we need to limit the sampled number
          * to prevent a long hang time caused by filtering too many keys;
          * 6. data.only_keys: to control whether values will be returned or
          * only keys are returned. */
@@ -1280,26 +1324,32 @@ void scanGenericCommand(client *c, robj *o, unsigned long long cursor) {
             .result = &result,
             .db = c->db,
             .o = o,
-            .type = type,
-            .pattern = use_pattern ? pat : NULL,
+            .type = opts->type,
+            .pattern = opts->use_pattern ? opts->pat : NULL,
             .sampled = 0,
-            .only_keys = only_keys,
+            .only_keys = opts->only_keys,
         };
 
-        /* A pattern may restrict all matching keys to one cluster slot. */
-        int onlydidx = -1;
-        if (o == NULL && use_pattern && server.cluster_enabled) {
-            onlydidx = patternHashSlot(pat, patlen);
+        /* For regular SCAN in cluster mode, derive the slot from the pattern's hashtag. */
+        if (slot == -1 && o == NULL && opts->use_pattern && server.cluster_enabled) {
+            slot = opts->match_slot;
+            final_slot = slot;
+        }
+        if (slot >= 0) {
+            serverAssert(final_slot >= slot && final_slot < CLUSTER_SLOTS);
+        } else {
+            serverAssert(final_slot == -1);
         }
         do {
             /* In cluster mode there is a separate dictionary for each slot.
              * If cursor is empty, we should try exploring next non-empty slot. */
             if (o == NULL) {
-                cursor = kvstoreScan(c->db->keys, cursor, onlydidx, keysScanCallback, NULL, &data);
+                cursor = kvstoreScan(c->db->keys, cursor, slot, final_slot, keysScanCallback, NULL, &data);
             } else {
-                cursor = hashtableScan(ht, cursor, hashtableScanCallback, &data);
+                cursor = hashtableScan(ht, cursor,
+                                       use_zset_item_refs ? zsetScanReferenceCallback : hashtableScanCallback, &data);
             }
-        } while (cursor && maxiterations-- && data.sampled < count);
+        } while (cursor && maxiterations-- && data.sampled < opts->count);
     } else if (o->type == OBJ_SET) {
         char *str;
         char buf[LONG_STR_SIZE];
@@ -1311,7 +1361,7 @@ void scanGenericCommand(client *c, robj *o, unsigned long long cursor) {
                 len = ll2string(buf, sizeof(buf), llele);
             }
             char *key = str ? str : buf;
-            if (use_pattern && !stringmatchlen(pat, sdslen(pat), key, len, 0)) {
+            if (opts->use_pattern && !stringmatchlen(opts->pat, opts->patlen, key, len, 0)) {
                 continue;
             }
             sds item = sdsnewlen(key, len);
@@ -1319,8 +1369,9 @@ void scanGenericCommand(client *c, robj *o, unsigned long long cursor) {
         }
         setTypeReleaseIterator(si);
         cursor = 0;
-    } else if ((o->type == OBJ_HASH || o->type == OBJ_ZSET) && o->encoding == OBJ_ENCODING_LISTPACK) {
-        unsigned char *p = lpFirst(objectGetVal(o));
+    } else if ((objectGetType(o) == OBJ_HASH || o->type == OBJ_ZSET) && o->encoding == OBJ_ENCODING_LISTPACK) {
+        unsigned char *zl = objectGetVal(o);
+        unsigned char *p = lpFirst(zl);
         unsigned char *str;
         int64_t len;
         unsigned char intbuf[LP_INTBUF_SIZE];
@@ -1329,41 +1380,78 @@ void scanGenericCommand(client *c, robj *o, unsigned long long cursor) {
             str = lpGet(p, &len, intbuf);
             /* point to the value */
             p = lpNext(objectGetVal(o), p);
-            if (use_pattern && !stringmatchlen(pat, sdslen(pat), (char *)str, len, 0)) {
-                /* jump to the next key/val pair */
-                p = lpNext(objectGetVal(o), p);
+            unsigned char *vptr = p;
+            /* Skip fields not visible in the current context */
+            long long expiry = hashTypeListpackGetExpiry(zl, vptr);
+            int is_valid = hashTypeListpackFieldIsValid(expiry);
+            p = lpNext(zl, vptr);
+            if (!is_valid) continue;
+            if (opts->use_pattern && !stringmatchlen(opts->pat, opts->patlen, (char *)str, len, 0)) {
                 continue;
             }
             /* add key object */
             sds item = sdsnewlen(str, len);
             addScanDataItem(&result, (const char *)item, sdslen(item));
             /* add value object */
-            if (!only_keys) {
-                str = lpGet(p, &len, intbuf);
+            if (!opts->only_keys) {
+                str = lpGet(vptr, &len, intbuf);
                 item = sdsnewlen(str, len);
                 addScanDataItem(&result, (const char *)item, sdslen(item));
             }
-            p = lpNext(objectGetVal(o), p);
         }
         cursor = 0;
     } else {
         serverPanic("Not handled encoding in SCAN.");
     }
 
-    /* Step 3: Reply to the client. */
+    /* Reply to the client. */
     addReplyArrayLen(c, 2);
-    addReplyBulkLongLong(c, cursor);
 
-    addReplyArrayLen(c, vectorLen(&result));
-    for (uint32_t i = 0; i < vectorLen(&result); i++) {
-        stringRef *key = vectorGet(&result, i);
-        addReplyBulkCBuffer(c, key->buf, key->len);
-        if (free_callback) {
-            free_callback((sds)(key->buf));
+    /* Handle CLUSTERSCAN prefixing. */
+    if (cursor == 0 && cluster_ctx && cluster_ctx->advance_to_next_slot && final_slot + 1 < CLUSTER_SLOTS) {
+        /* Range mode: advance to next slot outside the current node's range. */
+        sds new_cursor = sdscatfmt(sdsempty(), "0-{%s}-0", crc16_slot_table[final_slot + 1]);
+        addReplyBulkSds(c, new_cursor);
+    } else if (cluster_ctx && cursor != 0) {
+        /* Derive hashtag from the cursor's actual slot for resharding safety.
+         * Works for single slot mode as well. */
+        int actual_slot = (int)(cursor & (CLUSTER_SLOTS - 1));
+        sds new_cursor = sdscatfmt(sdsempty(), "%s-{%s}-%U", cluster_ctx->fp, crc16_slot_table[actual_slot], cursor);
+        addReplyBulkSds(c, new_cursor);
+    } else {
+        addReplyBulkLongLong(c, cursor);
+    }
+
+    if (use_zset_item_refs) {
+        addReplyArrayLen(c, (long)vectorLen(&result) * (opts->only_keys ? 1 : 2));
+        for (uint32_t i = 0; i < vectorLen(&result); i++) {
+            OrderedIndexItem *item = *(OrderedIndexItem **)vectorGet(&result, i);
+            const char *element;
+            size_t len;
+            orderedIndexItemGetElement(item, &element, &len);
+            addReplyBulkCBuffer(c, element, len);
+            if (opts->only_keys) continue;
+            char buf[MAX_D2STRING_CHARS];
+            int score_len = d2string(buf, sizeof(buf), orderedIndexItemGetScore(item));
+            addReplyBulkCBuffer(c, buf, score_len);
+        }
+    } else {
+        addReplyArrayLen(c, vectorLen(&result));
+        for (uint32_t i = 0; i < vectorLen(&result); i++) {
+            stringRef *key = vectorGet(&result, i);
+            addReplyBulkCBuffer(c, key->buf, key->len);
+            if (free_callback) free_callback((sds)(key->buf));
         }
     }
 
     vectorCleanup(&result);
+}
+
+void scanGenericCommand(client *c, robj *o, unsigned long long cursor) {
+    scanOptions opts;
+    int start_idx = (o == NULL) ? 2 : 3; /* Skip the key argument if needed. */
+    if (parseScanOptionsOrReply(c, o, start_idx, false, &opts) != C_OK) return;
+    scanGenericCommandWithOptions(c, o, cursor, &opts, NULL);
 }
 
 /* The SCAN command completely relies on scanGenericCommand. */
@@ -1450,6 +1538,8 @@ void shutdownCommand(client *c) {
         return;
     }
 
+    /* Clear pending_command to avoid re-execution. */
+    c->flag.pending_command = 0;
     blockClientShutdown(c);
     if (prepareForShutdown(c, flags) == C_OK) exit(0);
     /* If we're here, then shutdown is ongoing (the client is still blocked) or
@@ -1509,6 +1599,23 @@ void moveCommand(client *c) {
     int srcid, dbid;
     long long expire;
 
+    /* Parse optional REPLACE token (MOVE key db [REPLACE]).
+     * Without REPLACE, MOVE returns 0 if the key already exists in the target DB.
+     * With REPLACE, the destination key is overwritten by the moved key. */
+    int set_key_flags = SETKEY_DOESNT_EXIST;
+    if (c->argc > 4) {
+        addReplyErrorObject(c, shared.syntaxerr);
+        return;
+    } else if (c->argc == 4) {
+        if (!strcasecmp(objectGetVal(c->argv[3]), "replace")) {
+            set_key_flags = SETKEY_ADD_OR_UPDATE;
+        } else {
+            addReplyErrorObject(c, shared.syntaxerr);
+            return;
+        }
+    }
+    set_key_flags |= SETKEY_NO_SIGNAL;
+
     /* Obtain source and target DB pointers */
     src = c->db;
     srcid = c->db->id;
@@ -1537,8 +1644,8 @@ void moveCommand(client *c) {
     }
     expire = objectGetExpire(o);
 
-    /* Return zero if the key already exists in the target DB */
-    if (lookupKeyWrite(dst, c->argv[1]) != NULL) {
+    /* Without REPLACE, return zero if the key already exists in the target DB. */
+    if (lookupKeyWrite(dst, c->argv[1]) != NULL && (set_key_flags & SETKEY_DOESNT_EXIST)) {
         addReply(c, shared.czero);
         return;
     }
@@ -1546,7 +1653,7 @@ void moveCommand(client *c) {
     incrRefCount(o);           /* ref counter = 2 */
     dbDelete(src, c->argv[1]); /* ref counter = 1 */
 
-    dbAdd(dst, c->argv[1], &o);
+    setKey(c, dst, c->argv[1], &o, set_key_flags);
     if (expire != -1) o = setExpire(c, dst, c->argv[1], expire);
 
     /* OK! key moved */
@@ -1631,6 +1738,7 @@ void copyCommand(client *c) {
     case OBJ_ZSET: newobj = zsetDup(o); break;
     case OBJ_HASH: newobj = hashTypeDup(o); break;
     case OBJ_STREAM: newobj = streamDup(o); break;
+    case OBJ_PATH_HASH: newobj = pathHashTypeDup(o); break;
     case OBJ_MODULE:
         newobj = moduleTypeDupOrReply(c, key, newkey, dst->id, o);
         if (!newobj) return;
@@ -1712,14 +1820,15 @@ static void copyDbExpiry(serverDb *target, const serverDb *source) {
 /* Swap two databases at runtime so that all clients will magically see
  * the new database even if already connected. Note that the client
  * structure c->db points to a given DB, so we need to be smarter and
- * swap the underlying referenced structures, otherwise we would need
+ * swap the underlying referenced structures; otherwise, we would need
  * to fix all the references to the DB structure.
  *
- * Returns C_ERR if at least one of the DB ids are out of range, otherwise
+ * Returns C_ERR if at least one of the DB ids are out of range; otherwise,
  * C_OK is returned. */
 int dbSwapDatabases(int id1, int id2) {
     if (id1 < 0 || id1 >= server.dbnum || id2 < 0 || id2 >= server.dbnum) return C_ERR;
     if (id1 == id2) return C_OK;
+    bgIteration_swapdb(id1, id2);
     serverDb *db1 = createDatabaseIfNeeded(id1);
     serverDb *db2 = createDatabaseIfNeeded(id2);
     serverDb aux = *db1;
@@ -1765,6 +1874,11 @@ int dbSwapDatabases(int id1, int id2) {
  * database (temp) as the main (active) database, the actual freeing of old database
  * (which will now be placed in the temp one) is done later. */
 void swapMainDbWithTempDb(serverDb **tempDb) {
+    /* The old main DB stops being the active keyspace here. Synchronously tear
+     * down any background iterators (e.g. a forkless save) borrowing live
+     * references into it, before the old keyspace is handed off to be freed. */
+    bgIteration_flushall();
+
     for (int i = 0; i < server.dbnum; i++) {
         if (tempDb[i] == NULL && server.db[i] == NULL) continue;
         if (tempDb[i] == NULL) tempDb[i] = createDatabase(i);
@@ -1840,7 +1954,7 @@ void swapdbCommand(client *c) {
  *----------------------------------------------------------------------------*/
 
 int removeExpire(serverDb *db, robj *key) {
-    int dict_index = getKVStoreIndexForKey(objectGetVal(key));
+    int dict_index = getKVStoreIndexUsingCachedSlot(objectGetVal(key));
     void *popped;
     if (kvstoreHashtablePop(db->expires, dict_index, objectGetVal(key), &popped)) {
         robj *val = popped;
@@ -1853,9 +1967,12 @@ int removeExpire(serverDb *db, robj *key) {
 }
 
 /* Set an expire to the specified key. If the expire is set in the context
- * of an user calling a command 'c' is the client, otherwise 'c' is set
+ * of a user calling a command 'c' is the client; otherwise 'c' is set
  * to NULL. The 'when' parameter is the absolute unix time in milliseconds
- * after which the key will no longer be considered valid. */
+ * after which the key will no longer be considered valid.
+ *
+ * This function may reallocate the value. The new allocation is returned and
+ * the old object's reference counter is decremented and possibly freed. */
 robj *setExpire(client *c, serverDb *db, robj *key, long long when) {
     /* TODO: Add val as a parameter to this function, to avoid looking it up. */
     robj *val;
@@ -1863,16 +1980,16 @@ robj *setExpire(client *c, serverDb *db, robj *key, long long when) {
     /* Reuse the object from the main dict in the expire dict. When setting
      * expire in an robj, it's potentially reallocated. We need to updates the
      * pointer(s) to it. */
-    int dict_index = getKVStoreIndexForKey(objectGetVal(key));
+    int dict_index = getKVStoreIndexUsingCachedSlot(objectGetVal(key));
     void **valref = kvstoreHashtableFindRef(db->keys, dict_index, objectGetVal(key));
     serverAssertWithInfo(NULL, key, valref != NULL);
     val = *valref;
     long long old_when = objectGetExpire(val);
 
     robj *newval = objectSetExpire(val, when);
-    if (newval->type == OBJ_HASH && hashTypeHasVolatileFields(newval)) {
+    if (objectGetType(newval) == OBJ_HASH && hashTypeHasVolatileFields(newval)) {
         /* Replace the pointer in the keys_with_volatile_items table without accessing the old pointer. */
-        int dict_index = getKVStoreIndexForKey(objectGetKey(newval));
+        int dict_index = getKVStoreIndexUsingCachedSlot(objectGetKey(newval));
         hashtable *volatile_items_ht = kvstoreGetHashtable(db->keys_with_volatile_items, dict_index);
         bool replaced = hashtableReplaceReallocatedEntry(volatile_items_ht, val, newval);
         serverAssert(replaced);
@@ -1914,10 +2031,16 @@ long long getExpire(serverDb *db, robj *key) {
     return getExpireWithDictIndex(db, key, dict_index);
 }
 
+/* Delete the specified expired key and propagate expire.
+ *
+ * This function does not incr the dirty counter since we don't want to
+ * propagate the read command on lazy expire. Caller needs to increment
+ * it themselves if necessary. */
 void deleteExpiredKeyAndPropagateWithDictIndex(serverDb *db, robj *keyobj, int dict_index) {
     mstime_t expire_latency;
     latencyStartMonitor(expire_latency);
-    dbGenericDeleteWithDictIndex(db, keyobj, server.lazyfree_lazy_expire, DB_FLAG_KEY_EXPIRED, dict_index);
+    int deleted = dbGenericDeleteWithDictIndex(db, keyobj, server.lazyfree_lazy_expire, DB_FLAG_KEY_EXPIRED, dict_index);
+    serverAssertWithInfo(NULL, keyobj, deleted);
     latencyEndMonitor(expire_latency);
     latencyAddSampleIfNeeded("expire-del", expire_latency);
     latencyTraceIfNeeded(db, expire_del, expire_latency);
@@ -1927,11 +2050,6 @@ void deleteExpiredKeyAndPropagateWithDictIndex(serverDb *db, robj *keyobj, int d
     server.stat_expiredkeys++;
 }
 
-/* Delete the specified expired key and propagate expire. */
-void deleteExpiredKeyAndPropagate(serverDb *db, robj *keyobj) {
-    int dict_index = getKVStoreIndexForKey(objectGetVal(keyobj));
-    deleteExpiredKeyAndPropagateWithDictIndex(db, keyobj, dict_index);
-}
 
 /* Delete the specified expired key from overwriting and propagate the DEL or UNLINK. */
 void deleteExpiredKeyFromOverwriteAndPropagate(client *c, robj *keyobj) {
@@ -2051,8 +2169,10 @@ size_t dbReclaimExpiredFields(robj *o, serverDb *db, mstime_t now, unsigned long
             dbDelete(db, keyobj);
             propagateDeletion(db, keyobj, server.lazyfree_lazy_expire, didx);
             notifyKeyspaceEvent(NOTIFY_GENERIC, "del", keyobj, db->id);
+            server.dirty++;
         } else {
             if (!hashTypeHasVolatileFields(o)) dbUntrackKeyWithVolatileItems(db, o);
+            server.dirty += (long long)expired;
         }
         signalModifiedKey(NULL, db, keyobj);
         exitExecutionUnit();
@@ -2176,14 +2296,14 @@ static int dbExpandSkipSlot(int slot) {
 }
 
 /*
- * This functions increases size of the main/expires db to match desired number.
+ * This function increases size of the main/expires db to match desired number.
  * In cluster mode resizes all individual dictionaries for slots that this node owns.
  *
  * Based on the parameter `try_expand`, appropriate dict expand API is invoked.
  * if try_expand is non-zero, `hashtableTryExpand` is used else `hashtableExpand`.
  *
  * Returns C_OK or C_ERR. C_OK response is for successful expansion. C_ERR
- * signifies failure in allocation if try_expand is non-zero. Otherwise it
+ * signifies failure in allocation if try_expand is non-zero. Otherwise, it
  * signifies that no expansion was performed.
  */
 static int dbExpandGeneric(kvstore *kvs, uint64_t db_size, int try_expand) {
@@ -2233,11 +2353,11 @@ robj *dbFindExpires(serverDb *db, sds key) {
 }
 
 unsigned long long dbSize(serverDb *db) {
-    return kvstoreSize(db->keys);
+    return (db->keys) ? kvstoreSize(db->keys) : 0;
 }
 
 unsigned long long dbScan(serverDb *db, unsigned long long cursor, kvstoreScanFunction scan_cb, void *privdata) {
-    return kvstoreScan(db->keys, cursor, -1, scan_cb, NULL, privdata);
+    return kvstoreScan(db->keys, cursor, -1, -1, scan_cb, NULL, privdata);
 }
 
 /* -----------------------------------------------------------------------------
@@ -2308,6 +2428,15 @@ int getKeysUsingKeySpecs(struct serverCommand *cmd, robj **argv, int argc, int s
         first = 0;
         if (spec->begin_search_type == KSPEC_BS_INDEX) {
             first = spec->bs.index.pos;
+            /* The optional arguments holding this spec's keys were omitted, e.g.
+             * PFMERGE with no source keys. Like a missing keyword, the spec matches
+             * nothing, instead of invalidating the keys found by the other specs.
+             * An incomplete spec still defers to the getkeys callback, which may
+             * find keys elsewhere. */
+            if (first >= argc) {
+                if (spec->flags & CMD_KEY_INCOMPLETE) goto invalid_spec;
+                continue;
+            }
         } else if (spec->begin_search_type == KSPEC_BS_KEYWORD) {
             int start_index =
                 spec->bs.keyword.startfrom > 0 ? spec->bs.keyword.startfrom : argc + spec->bs.keyword.startfrom;
@@ -2343,7 +2472,7 @@ int getKeysUsingKeySpecs(struct serverCommand *cmd, robj **argv, int argc, int s
         } else if (spec->find_keys_type == KSPEC_FK_KEYNUM) {
             step = spec->fk.keynum.keystep;
             long long numkeys;
-            if (spec->fk.keynum.keynumidx >= argc) goto invalid_spec;
+            if (spec->fk.keynum.keynumidx >= argc - first) goto invalid_spec;
 
             sds keynum_str = objectGetVal(argv[first + spec->fk.keynum.keynumidx]);
             if (!string2ll(keynum_str, sdslen(keynum_str), &numkeys) || numkeys < 0) {
@@ -2352,19 +2481,21 @@ int getKeysUsingKeySpecs(struct serverCommand *cmd, robj **argv, int argc, int s
             }
 
             first += spec->fk.keynum.firstkey;
-            last = first + (int)numkeys - 1;
+            long long temp_last = first + (numkeys - 1) * step;
+            if (temp_last > INT_MAX || temp_last < INT_MIN) goto invalid_spec;
+            last = (int)temp_last;
         } else {
             /* unknown spec */
             goto invalid_spec;
         }
 
-        int count = ((last - first) + 1);
-        keys = getKeysPrepareResult(result, result->numkeys + count);
-
         /* First or last is out of bounds, which indicates a syntax error */
         if (last >= argc || last < first || first >= argc) {
             goto invalid_spec;
         }
+
+        int count = ((last - first) + 1);
+        keys = getKeysPrepareResult(result, result->numkeys + count);
 
         for (i = first; i <= last; i += step) {
             if (i >= argc || i < first) {
@@ -2435,7 +2566,7 @@ int getKeysFromCommandWithSpecs(struct serverCommand *cmd,
         int ret = getKeysUsingKeySpecs(cmd, argv, argc, search_flags, result);
         if (ret >= 0) return ret;
         /* If the specs returned with an error (probably an INVALID or INCOMPLETE spec),
-         * fallback to the callback method. */
+         * fall back to the callback method. */
     }
 
     /* Resort to getkeys callback methods. */
@@ -2449,9 +2580,13 @@ int getKeysFromCommandWithSpecs(struct serverCommand *cmd,
 
 /* This function returns a sanity check if the command may have keys. */
 int doesCommandHaveKeys(struct serverCommand *cmd) {
-    return cmd->getkeys_proc ||                             /* has getkeys_proc (non modules) */
-           (cmd->flags & CMD_MODULE_GETKEYS) ||             /* module with GETKEYS */
-           (getAllKeySpecsFlags(cmd, 1) & CMD_KEY_NOT_KEY); /* has at least one key-spec not marked as NOT_KEY */
+    /* At least one key-spec not marked as NOT_KEY means the command has real keys. */
+    if (getAllKeySpecsFlags(cmd, 1) & CMD_KEY_NOT_KEY) return 1;
+    /* If the command has getkeys_proc but all its key-specs are NOT_KEY,
+     * the proc is only used for slot routing, not for real key arguments. */
+    if (cmd->getkeys_proc && cmd->key_specs_num > 0) return 0;
+    return cmd->getkeys_proc ||               /* has getkeys_proc (non modules) */
+           (cmd->flags & CMD_MODULE_GETKEYS); /* module with GETKEYS */
 }
 
 /* A simplified channel spec table that contains all of the commands
@@ -2511,7 +2646,7 @@ int getChannelsFromCommand(struct serverCommand *cmd, robj **argv, int argc, get
     if (cmd->flags & CMD_MODULE_GETCHANNELS) {
         return moduleGetCommandChannelsViaAPI(cmd, argv, argc, result);
     }
-    /* Otherwise check the channel spec table */
+    /* Otherwise, check the channel spec table */
     for (ChannelSpecs *spec = commands_with_channels; spec != NULL; spec += 1) {
         if (cmd->proc == spec->proc) {
             int start = spec->start;
@@ -2595,7 +2730,7 @@ int getKeysUsingLegacyRangeSpec(struct serverCommand *cmd, robj **argv, int argc
  * table, according to the command name in argv[0].
  *
  * This function uses the command table if a command-specific helper function
- * is not required, otherwise it calls the command-specific function. */
+ * is not required; otherwise, it calls the command-specific function. */
 int getKeysFromCommand(struct serverCommand *cmd, robj **argv, int argc, getKeysResult *result) {
     if (cmd->flags & CMD_MODULE_GETKEYS) {
         return moduleGetCommandKeysViaAPI(cmd, argv, argc, result);
@@ -2646,22 +2781,32 @@ int genericGetKeys(int storeKeyOfs,
     keys = getKeysPrepareResult(result, numkeys);
     result->numkeys = numkeys;
 
-    /* Add all key positions for argv[firstKeyOfs...n] to keys[] */
-    for (i = 0; i < num; i++) {
-        keys[i].pos = firstKeyOfs + (i * keyStep);
-        keys[i].flags = 0;
+    int keyIdx = 0;
+    /* If there's a destination key, put this first */
+    if (storeKeyOfs) {
+        keys[keyIdx].pos = storeKeyOfs;
+        keys[keyIdx].flags = 0;
+        keyIdx++;
     }
 
-    if (storeKeyOfs) {
-        keys[num].pos = storeKeyOfs;
-        keys[num].flags = 0;
+    /* Add all key positions for argv[firstKeyOfs...n] to keys[] */
+    for (i = 0; i < num; i++) {
+        keys[keyIdx].pos = firstKeyOfs + (i * keyStep);
+        keys[keyIdx].flags = 0;
+        keyIdx++;
     }
+
     return result->numkeys;
 }
 
 int sintercardGetKeys(struct serverCommand *cmd, robj **argv, int argc, getKeysResult *result) {
     UNUSED(cmd);
     return genericGetKeys(0, 1, 2, 1, argv, argc, result);
+}
+
+int msetexGetKeys(struct serverCommand *cmd, robj **argv, int argc, getKeysResult *result) {
+    UNUSED(cmd);
+    return genericGetKeys(0, 1, 2, 2, argv, argc, result);
 }
 
 int zunionInterDiffStoreGetKeys(struct serverCommand *cmd, robj **argv, int argc, getKeysResult *result) {
@@ -2754,7 +2899,10 @@ int sortGetKeys(struct serverCommand *cmd, robj **argv, int argc, getKeysResult 
         char *name;
         int skip;
     } skiplist[] = {
-        {"limit", 2}, {"get", 1}, {"by", 1}, {NULL, 0} /* End of elements. */
+        {"limit", 2},
+        {"get", 1},
+        {"by", 1},
+        {NULL, 0} /* End of elements. */
     };
 
     for (i = 2; i < argc; i++) {
@@ -2769,6 +2917,10 @@ int sortGetKeys(struct serverCommand *cmd, robj **argv, int argc, getKeysResult 
                 found_store = 1;
                 keys[num].pos = i + 1; /* <store-key> */
                 keys[num].flags = CMD_KEY_OW | CMD_KEY_UPDATE;
+                /* Skip the destination. It is a key name, so it must never be
+                 * examined as an option: a key that spells one would hide the
+                 * later STORE clause that SORT actually writes to. */
+                i++;
                 break;
             }
         }
@@ -2828,7 +2980,12 @@ int migrateGetKeys(struct serverCommand *cmd, robj **argv, int argc, getKeysResu
  *                             [COUNT count] [STORE key|STOREDIST key]
  * GEORADIUSBYMEMBER key member radius unit ... options ...
  *
- * This command has a fully defined keyspec, so returning flags isn't needed. */
+ * Because repeated STORE/STOREDIST options are accepted and the last one wins,
+ * the static keyword key-specs (which match the first STORE) cannot identify
+ * the effective destination. The key-specs are therefore marked VARIABLE_FLAGS
+ * so this helper is used by both cluster routing and ACL key extraction. As a
+ * result it must report accurate per-key flags matching the key-specs:
+ * the source key is read-only access, the (last) store key is overwrite/update. */
 int georadiusGetKeys(struct serverCommand *cmd, robj **argv, int argc, getKeysResult *result) {
     int i, num;
     keyReference *keys;
@@ -2857,10 +3014,10 @@ int georadiusGetKeys(struct serverCommand *cmd, robj **argv, int argc, getKeysRe
 
     /* Add all key positions to keys[] */
     keys[0].pos = 1;
-    keys[0].flags = 0;
+    keys[0].flags = CMD_KEY_RO | CMD_KEY_ACCESS;
     if (num > 1) {
         keys[1].pos = stored_key;
-        keys[1].flags = 0;
+        keys[1].flags = CMD_KEY_OW | CMD_KEY_UPDATE;
     }
     result->numkeys = num;
     return num;
@@ -2975,6 +3132,8 @@ int bitfieldGetKeys(struct serverCommand *cmd, robj **argv, int argc, getKeysRes
     return 1;
 }
 
+/* See commandDbIdArgs in server.h. Returns argv[1] (the dbid).
+ * Caller should free the returned array. */
 int *selectDbIdArgs(robj **argv, int argc, int *count) {
     if (argc < 2) return NULL;
 
@@ -2982,12 +3141,14 @@ int *selectDbIdArgs(robj **argv, int argc, int *count) {
     if (getLongLongFromObject(argv[1], &dbid) != C_OK) return NULL;
     if (dbid < 0 || dbid >= server.dbnum) return NULL;
 
-    int *result = zmalloc(sizeof(int));
-    result[0] = (int)dbid;
+    int *positions = zmalloc(sizeof(int));
+    positions[0] = 1;
     *count = 1;
-    return result;
+    return positions;
 }
 
+/* See commandDbIdArgs in server.h. Returns argv[1] and argv[2] (the two dbids).
+ * Caller should free the returned array. */
 int *swapdbDbIdArgs(robj **argv, int argc, int *count) {
     if (argc < 3) return NULL;
 
@@ -2996,13 +3157,15 @@ int *swapdbDbIdArgs(robj **argv, int argc, int *count) {
         getLongLongFromObject(argv[2], &db2) != C_OK) return NULL;
     if (db1 < 0 || db1 >= server.dbnum || db2 < 0 || db2 >= server.dbnum) return NULL;
 
-    int *result = zmalloc(2 * sizeof(int));
-    result[0] = (int)db1;
-    result[1] = (int)db2;
+    int *positions = zmalloc(2 * sizeof(int));
+    positions[0] = 1;
+    positions[1] = 2;
     *count = 2;
-    return result;
+    return positions;
 }
 
+/* See commandDbIdArgs in server.h. Returns argv[2] (the destination dbid).
+ * Caller should free the returned array. */
 int *moveDbIdArgs(robj **argv, int argc, int *count) {
     if (argc < 3) return NULL;
 
@@ -3010,23 +3173,52 @@ int *moveDbIdArgs(robj **argv, int argc, int *count) {
     if (getLongLongFromObject(argv[2], &dbid) != C_OK) return NULL;
     if (dbid < 0 || dbid >= server.dbnum) return NULL;
 
-    int *result = zmalloc(sizeof(int));
-    result[0] = (int)dbid;
+    int *positions = zmalloc(sizeof(int));
+    positions[0] = 2;
     *count = 1;
-    return result;
+    return positions;
 }
 
+/* COPY source destination [ DB destination-db ] [ REPLACE ]
+ *
+ * Note that the DB and REPLACE tokens are optional and order-independent.
+ * Also if the DB token appears more than once, copyCommand keeps overwriting
+ * the destination DB, so ACL must validate every occurrence: a permission
+ * check against only the first or only the last value would let a user craft
+ * 'COPY src dst DB <allowed> DB <denied>' (or vice versa) to bypass the ACL.
+ *
+ * See commandDbIdArgs in server.h. Returns the argv index of every DB clause's
+ * dbid in argv order, or NULL if no DB clause is present.
+ * Caller should free the returned array. */
 int *copyDbIdArgs(robj **argv, int argc, int *count) {
     if (argc < 5) return NULL;
 
-    if (strcasecmp(objectGetVal(argv[3]), "db") != 0) return NULL;
+    /* First pass: validate syntax and count DB clauses. */
+    int n = 0;
+    for (int j = 3; j < argc; j++) {
+        int additional = argc - j - 1;
+        if (!strcasecmp(objectGetVal(argv[j]), "replace")) {
+            continue;
+        } else if (!strcasecmp(objectGetVal(argv[j]), "db") && additional >= 1) {
+            long long dbid;
+            if (getLongLongFromObject(argv[j + 1], &dbid) != C_OK) return NULL;
+            if (dbid < 0 || dbid >= server.dbnum) return NULL;
+            n++;
+            j++;
+        } else {
+            return NULL;
+        }
+    }
+    if (n == 0) return NULL;
 
-    long long dbid;
-    if (getLongLongFromObject(argv[4], &dbid) != C_OK) return NULL;
-    if (dbid < 0 || dbid >= server.dbnum) return NULL;
-
-    int *result = zmalloc(sizeof(int));
-    result[0] = (int)dbid;
-    *count = 1;
-    return result;
+    /* Second pass: collect the argv positions of each DB clause's dbid. */
+    int *positions = zmalloc(n * sizeof(int));
+    *count = 0;
+    for (int j = 3; j < argc; j++) {
+        if (!strcasecmp(objectGetVal(argv[j]), "db")) {
+            positions[(*count)++] = j + 1;
+            j++;
+        }
+    }
+    return positions;
 }

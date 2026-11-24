@@ -72,7 +72,7 @@ start_server {tags {"modules"}} {
     }
 
     test {module info one module} {
-        set info [r info INFOtest] ;# test case insensitive compare
+        set info [r info INFOtest] ;# test case-insensitive compare
         # info all does not contain modules
         assert { [string match "*Spanish*" $info] }
         assert { ![string match "*used_memory*" $info] }
@@ -80,7 +80,7 @@ start_server {tags {"modules"}} {
     } {-2}
 
     test {module info one section} {
-        set info [r info INFOtest_SpanisH] ;# test case insensitive compare
+        set info [r info INFOtest_SpanisH] ;# test case-insensitive compare
         assert { ![string match "*used_memory*" $info] }
         assert { ![string match "*Italian*" $info] }
         assert { ![string match "*infotest_global*" $info] }
@@ -122,6 +122,18 @@ start_server {tags {"modules"}} {
         assert { ![string match "*Italian*Italian*" $info] }
         field $info infotest_dos
     } {2}
+
+    test {module external memory is reported only in info debug} {
+        assert_equal 321 [r info.setexternal 321]
+
+        set debug_info [r info debug]
+        set memory_info [r info memory]
+
+        assert_equal 321 [getInfoProperty $debug_info used_memory_module_external]
+        assert { ![string match "*used_memory_module_external*" $memory_info] }
+
+        assert_equal 0 [r info.setexternal 0]
+    }
 
     test "Unload the module - infotest" {
         assert_equal {OK} [r module unload infotest]

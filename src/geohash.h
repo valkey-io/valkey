@@ -131,7 +131,6 @@ int geohashDecode(const GeoHashRange long_range,
                   const GeoHashBits hash,
                   GeoHashArea *area);
 int geohashDecodeType(const GeoHashBits hash, GeoHashArea *area);
-int geohashDecodeWGS84(const GeoHashBits hash, GeoHashArea *area);
 int geohashDecodeAreaToLongLat(const GeoHashArea *area, double *xy);
 int geohashDecodeToLongLatType(const GeoHashBits hash, double *xy);
 int geohashDecodeToLongLatWGS84(const GeoHashBits hash, double *xy);

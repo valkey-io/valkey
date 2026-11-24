@@ -1,7 +1,7 @@
 /*
  * Copyright Valkey Contributors.
  * All rights reserved.
- * SPDX-License-Identifier: BSD 3-Clause
+ * SPDX-License-Identifier: BSD-3-Clause
  */
 
 /* Hashtable
@@ -50,6 +50,7 @@
 #include "mt19937-64.h"
 #include "monotonic.h"
 #include "config.h"
+#include "util.h"
 
 #include <limits.h>
 #include <stdint.h>
@@ -73,6 +74,7 @@ uint64_t siphash_nocase(const uint8_t *in, const size_t inlen, const uint8_t *k)
 
 static uint8_t hash_function_seed[16];
 static hashtableResizePolicy resize_policy = HASHTABLE_RESIZE_ALLOW;
+static bool hashtable_can_abort_shrink = true;
 
 /* --- Fill factor --- */
 
@@ -120,6 +122,12 @@ uint64_t hashtableGenCaseHashFunction(const char *buf, size_t len) {
     return siphash_nocase((const uint8_t *)buf, len, hash_function_seed);
 }
 
+/* Hash function for tables keyed by a pointer value. Cheaper than the default,
+ * which runs siphash over the pointer's bytes. */
+uint64_t hashtablePointerHash(const void *key) {
+    return wangHash64((uint64_t)(uintptr_t)key);
+}
+
 /* --- Global resize policy API --- */
 
 /* The global resize policy is one of
@@ -147,6 +155,12 @@ uint64_t hashtableGenCaseHashFunction(const char *buf, size_t len) {
  */
 void hashtableSetResizePolicy(hashtableResizePolicy policy) {
     resize_policy = policy;
+}
+
+/* Set whether the hashtable can abort shrinking.
+ * Mainly used for debugging and testing. */
+void hashtableSetCanAbortShrink(bool can_abort) {
+    hashtable_can_abort_shrink = can_abort;
 }
 
 /* --- Hash table layout --- */
@@ -336,7 +350,7 @@ typedef struct {
 } position;
 
 static_assert(sizeof(hashtablePosition) >= sizeof(position),
-              "Opaque iterator size");
+              "Opaque position size");
 
 /* State for incremental find. */
 typedef struct {
@@ -388,6 +402,7 @@ static inline bool validateElementIfNeeded(hashtable *ht, void *elem) {
 }
 
 static bucket *findBucketForInsert(hashtable *ht, uint64_t hash, int *pos_in_bucket, int *table_index);
+static bool abortShrinkIfNeeded(hashtable *ht);
 
 static inline void freeEntry(hashtable *ht, void *entry) {
     if (ht->type->entryDestructor) ht->type->entryDestructor(entry);
@@ -397,7 +412,7 @@ static inline int compareKeys(hashtable *ht, const void *key1, const void *key2)
     if (ht->type->keyCompare != NULL) {
         return ht->type->keyCompare(key1, key2);
     } else {
-        return key1 != key2;
+        return key1 == key2;
     }
 }
 
@@ -463,6 +478,23 @@ static signed char nextBucketExp(size_t min_capacity) {
     return CHAR_BIT * sizeof(size_t) - __builtin_clzl(min_buckets - 1);
 }
 
+#define SWAP(a, b, type) \
+    do {                 \
+        type temp = (a); \
+        (a) = (b);       \
+        (b) = temp;      \
+    } while (0)
+
+/* This function swaps ht[0] and ht[1] in the hashtable. */
+static void swapTables(hashtable *ht) {
+    assert(hashtableIsRehashing(ht));
+
+    SWAP(ht->tables[0], ht->tables[1], bucket *);
+    SWAP(ht->used[0], ht->used[1], size_t);
+    SWAP(ht->bucket_exp[0], ht->bucket_exp[1], int8_t);
+    SWAP(ht->child_buckets[0], ht->child_buckets[1], size_t);
+}
+
 /* Swaps the tables and frees the old table. */
 static void rehashingCompleted(hashtable *ht) {
     if (ht->type->rehashingCompleted) ht->type->rehashingCompleted(ht);
@@ -472,10 +504,8 @@ static void rehashingCompleted(hashtable *ht) {
             ht->type->trackMemUsage(ht, -sizeof(bucket) * numBuckets(ht->bucket_exp[0]));
         }
     }
-    ht->bucket_exp[0] = ht->bucket_exp[1];
-    ht->tables[0] = ht->tables[1];
-    ht->used[0] = ht->used[1];
-    ht->child_buckets[0] = ht->child_buckets[1];
+
+    swapTables(ht);
     resetTable(ht, 1);
     ht->rehash_idx = -1;
 }
@@ -541,6 +571,31 @@ static void rehashEntry(hashtable *ht, void *entry, uint64_t hash, uint8_t h2) {
     ht->used[1]++;
 }
 
+/* Release memory pages of rehashed buckets back to the OS incrementally.
+ * This function is called after each bucket is rehashed. When an entire range
+ * worth of buckets has been processed, it advises the OS that the pages
+ * are no longer needed (MADV_DONTNEED). This spreads the memory release over
+ * the entire rehashing process, avoiding a latency spike that would occur if
+ * we released all the old table's memory at once when rehashing completes. */
+static void dismissRehashedBucketsIfNeeded(hashtable *ht) {
+    static size_t page_size = 0;
+    if (page_size == 0) page_size = sysconf(_SC_PAGESIZE);
+
+    size_t buckets_per_page = page_size / sizeof(bucket);
+    const size_t pages_per_dismiss = 16;
+    size_t buckets_per_dismiss = buckets_per_page * pages_per_dismiss;
+    if (ht->rehash_idx % buckets_per_dismiss != 0) {
+        return;
+    }
+
+    bucket *ptr = ht->tables[0] + ht->rehash_idx - buckets_per_dismiss;
+    ptr = (bucket *)((size_t)ptr & ~(page_size - 1));
+    if (ptr < ht->tables[0]) {
+        return;
+    }
+    zmadvise_dontneed_range(ptr, pages_per_dismiss * page_size);
+}
+
 /* After migrating entries in a bucket chain from the old table
  * to the new one, this function should be called immediately to
  * handle the cleanup of old buckets, such as clearing presence bits. */
@@ -563,6 +618,9 @@ static void rehashStepFinalize(hashtable *ht) {
 
     /* Advance to the next bucket. */
     ht->rehash_idx++;
+
+    /* Release page back to OS incrementally. */
+    dismissRehashedBucketsIfNeeded(ht);
 
     /* Check if we already rehashed the whole table. */
     if (ht->used[0] == 0 && ht->child_buckets[0] == 0) {
@@ -777,7 +835,7 @@ static inline int checkCandidateInBucket(hashtable *ht, bucket *b, int pos, cons
     /* It's a candidate. */
     void *entry = b->entries[pos];
     const void *elem_key = entryGetKey(ht, entry);
-    if (compareKeys(ht, key, elem_key) == 0) {
+    if (compareKeys(ht, key, elem_key)) {
         /* It's a match. */
         assert(pos_in_bucket != NULL);
         if (!validateElementIfNeeded(ht, entry)) {
@@ -969,7 +1027,7 @@ static void fillBucketHole(hashtable *ht, bucket *b, int pos_in_bucket, int tabl
 }
 
 /* When entries are deleted while rehashing is paused, they leave empty holes in
- * the buckets. This functions attempts to fill the holes by moving entries from
+ * the buckets. This function attempts to fill the holes by moving entries from
  * the end of the bucket chain to fill the holes and free any empty buckets in
  * the end of the chain. */
 static void compactBucketChain(hashtable *ht, size_t bucket_index, int table_index) {
@@ -1038,6 +1096,7 @@ static bucket *findBucketForInsert(hashtable *ht, uint64_t hash, int *pos_in_buc
 /* Helper to insert an entry. Doesn't check if an entry with a matching key
  * already exists. This must be ensured by the caller. */
 static void insert(hashtable *ht, uint64_t hash, void *entry) {
+    assert(ht->safe_iterators == NULL);
     hashtableExpandIfNeeded(ht);
     rehashStepOnWriteIfNeeded(ht);
     int pos_in_bucket;
@@ -1062,14 +1121,7 @@ static uint64_t hashtableFingerprint(hashtable *ht) {
     /* Result = hash(hash(hash(int1)+int2)+int3) */
     for (int j = 0; j < 6; j++) {
         hash += integers[j];
-        /* Tomas Wang's 64 bit integer hash. */
-        hash = (~hash) + (hash << 21); /* hash = (hash << 21) - hash - 1; */
-        hash = hash ^ (hash >> 24);
-        hash = (hash + (hash << 3)) + (hash << 8); /* hash * 265 */
-        hash = hash ^ (hash >> 14);
-        hash = (hash + (hash << 2)) + (hash << 4); /* hash * 21 */
-        hash = hash ^ (hash >> 28);
-        hash = hash + (hash << 31);
+        hash = wangHash64(hash);
     }
     return hash;
 }
@@ -1331,7 +1383,7 @@ unsigned hashtableEntriesPerBucket(void) {
 
 /* Returns the size of the hashtable structures, in bytes (not including the sizes
  * of the entries, if the entries are pointers to allocated objects). */
-size_t hashtableMemUsage(hashtable *ht) {
+size_t hashtableMemUsage(const hashtable *ht) {
     size_t num_buckets = numBuckets(ht->bucket_exp[0]) + numBuckets(ht->bucket_exp[1]);
     num_buckets += ht->child_buckets[0] + ht->child_buckets[1];
     size_t metasize = ht->type->getMetadataSize ? ht->type->getMetadataSize() : 0;
@@ -1360,13 +1412,13 @@ void hashtableResumeAutoShrink(hashtable *ht) {
  * spaces, "holes", in the bucket chains, which wastes memory. Additionally, we
  * pause auto shrink when rehashing is paused, meaning the hashtable will not
  * shrink the bucket count. */
-static void hashtablePauseRehashing(hashtable *ht) {
+void hashtablePauseRehashing(hashtable *ht) {
     ht->pause_rehash++;
     hashtablePauseAutoShrink(ht);
 }
 
 /* Resumes incremental rehashing, after pausing it. */
-static void hashtableResumeRehashing(hashtable *ht) {
+void hashtableResumeRehashing(hashtable *ht) {
     ht->pause_rehash--;
     assert(ht->pause_rehash >= 0);
     hashtableResumeAutoShrink(ht);
@@ -1431,13 +1483,21 @@ bool hashtableTryExpand(hashtable *ht, size_t size) {
  * policy is set to AVOID and not at all if set to FORBID.
  * Returns true if expanding, false if not expanding. */
 bool hashtableExpandIfNeeded(hashtable *ht) {
-    /* Don't expand if rehashing is already in progress. */
     if (hashtableIsRehashing(ht)) {
-        return false;
+        if (ht->bucket_exp[1] >= ht->bucket_exp[0]) {
+            /* Expand already in progress. */
+            return false;
+        } else {
+            /* Shrink in progress, check the fill percent of ht[1] to see if
+             * we need to abort the shrink. */
+            return abortShrinkIfNeeded(ht);
+        }
     }
 
-    size_t min_capacity = ht->used[0] + ht->used[1] + 1;
-    size_t num_buckets = numBuckets(ht->bucket_exp[hashtableIsRehashing(ht) ? 1 : 0]);
+    /* There's no rehashing on going now, check the fill percent of ht[0] to
+     * see if we need to expand. */
+    size_t min_capacity = ht->used[0] + 1;
+    size_t num_buckets = numBuckets(ht->bucket_exp[0]);
     size_t current_capacity = num_buckets * ENTRIES_PER_BUCKET;
     unsigned max_fill_percent = resize_policy == HASHTABLE_RESIZE_ALLOW ? MAX_FILL_PERCENT_SOFT : MAX_FILL_PERCENT_HARD;
     if (min_capacity * 100 <= current_capacity * max_fill_percent) {
@@ -1460,6 +1520,47 @@ bool hashtableShrinkIfNeeded(hashtable *ht) {
         return false;
     }
     return resize(ht, ht->used[0], NULL);
+}
+
+/* Check if ht[1] will overload during the shrink and abort if necessary.
+ *
+ * This function should be called before inserting new entries during
+ * shrink rehashing to prevent ht[1] from becoming severely overloaded.
+ * Currently, it is called in hashtableExpandIfNeeded because we call
+ * it every time an insertion occurs, aborting shrink and switching it
+ * to expand is somehow expand-if-needed.
+ *
+ * Returns true if shrink was aborted, false otherwise. */
+static bool abortShrinkIfNeeded(hashtable *ht) {
+    /* Not allow to abort. */
+    if (!hashtable_can_abort_shrink) {
+        return false;
+    }
+    /* Only check during shrink rehashing. */
+    if (!hashtableIsRehashing(ht) || ht->bucket_exp[1] >= ht->bucket_exp[0]) {
+        return false;
+    }
+    /* It is not safe to abort while safe iterators are active. */
+    if (ht->safe_iterators) {
+        return false;
+    }
+
+    /* Check if ht[1] can hold all elements when shrinking is complete. */
+    size_t num_elements = ht->used[0] + ht->used[1] + 1;
+    size_t ht1_capacity = numBuckets(ht->bucket_exp[1]) * ENTRIES_PER_BUCKET;
+    if (num_elements * 100 <= ht1_capacity * MAX_FILL_PERCENT_HARD) {
+        /* Don't abort shrinking. */
+        return false;
+    }
+
+    /* ht[1] will be overloaded, swap the tables to abort the shrink and
+     * switch it to expand. */
+    swapTables(ht);
+
+    /* Set rehash_idx back to 0 and restart the rehashing. */
+    ht->rehash_idx = 0;
+
+    return true;
 }
 
 /* Resizes the hashtable to an optimal size, based on the current number of
@@ -1502,7 +1603,7 @@ hashtable *hashtableDefragTables(hashtable *ht, void *(*defragfn)(void *)) {
  * forked and memory won't be used again. See zmadvise_dontneed() */
 void dismissHashtable(hashtable *ht) {
     for (int i = 0; i < 2; i++) {
-        zmadvise_dontneed(ht->tables[i], numBuckets(ht->bucket_exp[i]) * sizeof(bucket *));
+        zmadvise_dontneed(ht->tables[i], numBuckets(ht->bucket_exp[i]) * sizeof(bucket));
     }
 }
 
@@ -1813,9 +1914,9 @@ bool hashtableIncrementalFindStep(hashtableIncrementalFindState *state) {
             hashtable *ht = data->hashtable;
             void *entry = data->bucket->entries[data->pos];
             const void *elem_key = entryGetKey(ht, entry);
-            if (compareKeys(ht, data->key, elem_key) == 0) {
+            if (compareKeys(ht, data->key, elem_key)) {
                 /* It's a match. */
-                data->state = HASHTABLE_FOUND;
+                data->state = validateElementIfNeeded(ht, entry) ? HASHTABLE_FOUND : HASHTABLE_NOT_FOUND;
                 return false;
             }
             /* No match. Look for next candidate entry in the bucket. */
@@ -1895,6 +1996,37 @@ bool hashtableIncrementalFindGetResult(hashtableIncrementalFindState *state, voi
     }
 }
 
+/* Provides batch lookup. Compared with serial single-key lookups, it can improve
+ * performance by parallelizing memory accesses. Each bit in the returned bitmap
+ * indicates whether the key at the same index was found. */
+uint32_t hashtableFindBatch(hashtable *ht, int numkeys, const void **keys, void **found_entries) {
+    assert(numkeys >= 0 && numkeys <= HASHTABLE_FIND_BATCH_MAX_SIZE);
+    if (numkeys == 0) return 0;
+
+    rehashStepOnReadIfNeeded(ht);
+
+    hashtableIncrementalFindState states[numkeys];
+    for (int i = 0; i < numkeys; i++) {
+        hashtableIncrementalFindInit(&states[i], ht, keys[i]);
+    }
+
+    size_t incomplete;
+    do {
+        incomplete = 0;
+        for (int i = 0; i < numkeys; i++) {
+            incomplete += hashtableIncrementalFindStep(&states[i]);
+        }
+    } while (incomplete != 0);
+
+    uint32_t result = 0;
+    for (int i = 0; i < numkeys; i++) {
+        if (hashtableIncrementalFindGetResult(&states[i], &found_entries[i])) {
+            result |= (uint32_t)1 << i;
+        }
+    }
+    return result;
+}
+
 /* --- Scan --- */
 
 /* Scan is a stateless iterator. It works with a cursor that is returned to the
@@ -1918,6 +2050,22 @@ bool hashtableIncrementalFindGetResult(hashtableIncrementalFindState *state, voi
  * - An entry that is inserted or deleted during a full scan may or may not be
  *   returned during the scan.
  *
+ * Additional guarantees when shrinking is blocked for the duration of the scan
+ * (e.g. by calling hashtablePauseAutoShrink before starting and
+ * hashtableResumeAutoShrink after finishing):
+ *
+ * - An entry will never be returned more than once.
+ *
+ * - An entry that exists throughout the entire scan is guaranteed to be
+ *   returned.
+ *
+ * - An entry that is created, destroyed, or re-created during the scan may or
+ *   may not be returned, but will never be returned more than once.
+ *
+ * Expansion and rehashing may occur freely without breaking these guarantees.
+ * Only a shrink is problematic: it introduces a smaller table whose bucket
+ * boundaries don't align with the existing cursor position.
+ *
  * Scan callback rules:
  *
  * - The scan callback may delete the entry that was passed to it.
@@ -1929,6 +2077,31 @@ bool hashtableIncrementalFindGetResult(hashtableIncrementalFindState *state, voi
  */
 size_t hashtableScan(hashtable *ht, size_t cursor, hashtableScanFunction fn, void *privdata) {
     return hashtableScanDefrag(ht, cursor, fn, privdata, NULL, 0);
+}
+
+/* Given a scan cursor, determines whether a key's hashtable position has
+ * already been visited by the scan. Returns true if the position has been
+ * passed (i.e. the key would have been emitted already), false if not yet
+ * visited.
+ *
+ * The result is exact when shrinking is blocked (see scan guarantees above).
+ * If a shrink has been initiated since the cursor was obtained, the result is
+ * best-effort and not guaranteed to be correct.
+ *
+ * A cursor of 0 means the scan has not started, so no keys have been passed. */
+bool hashtableScanHasPassedKey(hashtable *ht, const void *key, size_t cursor) {
+    if (cursor == 0) return false;
+    if (hashtableSize(ht) == 0) return true;
+
+    /* The scan visits buckets in reverse-binary order based on the smallest
+     * table. During rehashing, a small-table bucket and its corresponding
+     * large-table buckets are processed together, so the small-table mask
+     * determines ordering in both cases. */
+    int exp = ht->bucket_exp[0];
+    if (hashtableIsRehashing(ht) && ht->bucket_exp[1] < exp) exp = ht->bucket_exp[1];
+    size_t mask = expToMask(exp);
+    size_t bucket_idx = hashKey(ht, key) & mask;
+    return rev(bucket_idx) < rev(cursor & mask);
 }
 
 /* Like hashtableScan, but additionally reallocates the memory used by the dict
@@ -2090,13 +2263,14 @@ size_t hashtableScanDefrag(hashtable *ht, size_t cursor, hashtableScanFunction f
  * is returned exactly once.
  *
  * For a safe iterator (when HASHTABLE_ITER_SAFE is set):
- * It is allowed to modify the hash table while iterating. It pauses incremental
- * rehashing to prevent entries from moving around. It's allowed to insert and
- * replace entries. Deleting entries is only allowed for the entry that was just
- * returned by hashtableNext. Deleting other entries is possible, but doing so
- * can cause internal fragmentation, so don't. The hash table itself can be
- * safely deleted while safe iterators exist - they will be invalidated and
- * subsequent calls to hashtableNext will return false.
+ * It is allowed to delete and replace entries while iterating. It pauses
+ * incremental rehashing to prevent entries from moving around. Inserting new
+ * entries during safe iteration is NOT supported.
+ * Deleting entries is only allowed for the entry that was just returned by
+ * hashtableNext. Deleting other entries is possible, but doing so can cause
+ * internal fragmentation, so don't. The hash table itself can be safely deleted
+ * while safe iterators exist - they will be invalidated and subsequent calls to
+ * hashtableNext will return false.
  *
  * Guarantees for safe iterators:
  *
@@ -2108,9 +2282,6 @@ size_t hashtableScanDefrag(hashtable *ht, size_t cursor, hashtableScanFunction f
  *
  * - Entries that are replaced before they've been returned by the iterator will
  *   be returned.
- *
- * - Entries that are inserted during the iteration may or may not be returned
- *   by the iterator.
  *
  * Call hashtableNext to fetch each entry. You must call hashtableCleanupIterator
  * when you are done with the iterator.
@@ -2180,15 +2351,17 @@ bool hashtableNext(hashtableIterator *iterator, void **elemptr) {
     while (1) {
         if (iter->index == -1 && iter->table == 0) {
             /* It's the first call to next. */
+            if (iter->hashtable->tables[0] == NULL) {
+                /* Empty hashtable. We're done. Check this before pausing,
+                 * since cleanup never resumes an iterator that is still in
+                 * its initial position. */
+                break;
+            }
             if (isSafe(iter)) {
                 hashtablePauseRehashing(iter->hashtable);
                 iter->last_seen_size = iter->hashtable->used[iter->table];
             } else {
                 iter->fingerprint = hashtableFingerprint(iter->hashtable);
-            }
-            if (iter->hashtable->tables[0] == NULL) {
-                /* Empty hashtable. We're done. */
-                break;
             }
             iter->index = 0;
             /* Skip already rehashed buckets. */
@@ -2254,16 +2427,54 @@ bool hashtableNext(hashtableIterator *iterator, void **elemptr) {
         }
         return true;
     }
+    /* Clean up eagerly so repeated hashtableNext calls return false and
+     * safe iterators don't keep rehashing paused. The caller's own
+     * hashtableCleanupIterator call becomes a no-op (hashtable == NULL). */
+    hashtableCleanupIterator(iterator);
+    iter->hashtable = NULL;
     return false;
 }
 
 /* --- Random entries --- */
 
+/* Rehashes after sampling that called hashtableScan 'scans' times. While
+ * shrinking, each scan call visits 2^(exp0 - exp1) buckets of the old table, so
+ * one rehash step per sample makes repeated sampling quadratic in the old table
+ * size. Each step rehashes at least one old bucket, so take one step per old
+ * bucket the scans visited. */
+static void rehashStepOnSampleIfNeeded(hashtable *ht, size_t scans) {
+    size_t steps = 1;
+    if (hashtableIsRehashing(ht) && ht->bucket_exp[1] < ht->bucket_exp[0]) {
+        steps = scans * numBuckets(ht->bucket_exp[0] - ht->bucket_exp[1]);
+    }
+    if (ht->pause_rehash || resize_policy != HASHTABLE_RESIZE_ALLOW) return;
+    while (steps-- && hashtableIsRehashing(ht)) rehashStepOnReadIfNeeded(ht);
+}
+
+/* Scan independent random buckets and collect entries using reservoir sampling.
+ * Unlike hashtableSampleEntries which scans contiguous buckets for unique
+ * results, this picks a new random bucket each time for fair sampling at the
+ * cost of possible duplicates. */
+static unsigned sampleRandomBuckets(hashtable *ht, void **dst, unsigned count) {
+    if (count > hashtableSize(ht)) count = hashtableSize(ht);
+    scan_samples samples;
+    samples.size = count;
+    samples.seen = 0;
+    samples.entries = dst;
+    size_t scans = 0;
+    while (samples.seen < count) {
+        hashtableScan(ht, randomSizeT(), sampleEntriesScanFn, &samples);
+        scans++;
+    }
+    rehashStepOnSampleIfNeeded(ht, scans);
+    return samples.seen <= count ? samples.seen : count;
+}
+
 /* Points 'found' to a random entry in the hash table and returns true. Returns false
  * if the table is empty. */
 bool hashtableRandomEntry(hashtable *ht, void **found) {
     void *samples[WEAK_RANDOM_SAMPLE_SIZE];
-    unsigned count = hashtableSampleEntries(ht, &samples[0], WEAK_RANDOM_SAMPLE_SIZE);
+    unsigned count = sampleRandomBuckets(ht, &samples[0], WEAK_RANDOM_SAMPLE_SIZE);
     if (count == 0) return false;
     unsigned idx = random() % count;
     *found = samples[idx];
@@ -2276,7 +2487,7 @@ bool hashtableFairRandomEntry(hashtable *ht, void **found) {
     /* Sample less if it's very sparse. */
     size_t num_samples = hashtableSize(ht) >= hashtableBuckets(ht) ? FAIR_RANDOM_SAMPLE_SIZE : WEAK_RANDOM_SAMPLE_SIZE;
     void *samples[num_samples];
-    unsigned count = hashtableSampleEntries(ht, &samples[0], num_samples);
+    unsigned count = sampleRandomBuckets(ht, &samples[0], num_samples);
     if (count == 0) return false;
     unsigned idx = random() % count;
     *found = samples[idx];
@@ -2298,10 +2509,13 @@ unsigned hashtableSampleEntries(hashtable *ht, void **dst, unsigned count) {
     samples.size = count;
     samples.seen = 0;
     samples.entries = dst;
+    size_t cursor = randomSizeT();
+    size_t scans = 0;
     while (samples.seen < count) {
-        hashtableScan(ht, randomSizeT(), sampleEntriesScanFn, &samples);
+        cursor = hashtableScan(ht, cursor, sampleEntriesScanFn, &samples);
+        scans++;
     }
-    rehashStepOnReadIfNeeded(ht);
+    rehashStepOnSampleIfNeeded(ht, scans);
     /* samples.seen is the number of entries scanned. It may be greater than
      * the requested count and the size of the dst array. */
     return samples.seen <= count ? samples.seen : count;

@@ -120,6 +120,22 @@ foreach command {SORT SORT_RO} {
         r command getkeys sort abc store invalid store stillbad store def
     } {abc def}
 
+    test "SORT extracts STORE correctly when the destination is named like an option" {
+        # A destination is a key name, never an option keyword, even when it
+        # spells one. Parsed as an option it would consume the arguments that
+        # follow it and hide the later STORE that SORT really writes to.
+        foreach keyword {by get limit} {
+            assert_equal {abc def} [r command getkeys sort abc store $keyword store def]
+            assert_equal [list abc $keyword] [r command getkeys sort abc store $keyword]
+        }
+
+        # A destination spelling STORE would instead be taken for another STORE
+        # clause, reporting whatever follows it.
+        assert_equal {abc store} [r command getkeys sort abc store store alpha]
+        assert_equal {abc STORE} [r command getkeys sort abc store STORE alpha]
+        assert_equal {abc store} [r command getkeys sort abc store store by w_*]
+    }
+
     test "SORT DESC" {
         assert_equal [lsort -decreasing -integer $result] [r sort tosort DESC]
     }
@@ -169,6 +185,51 @@ foreach command {SORT SORT_RO} {
         assert_equal [r sort zset by nosort desc limit 0 2] {d b}
         assert_equal [r sort zset by nosort limit 5 10] {}
         assert_equal [r sort zset by nosort limit -10 100] {a c e b d}
+    }
+
+    test "SORT sorted set skiplist BY nosort should retain ordering" {
+        with_config zset-max-ziplist-entries 0 {
+            r del zset
+            r zadd zset 1 a
+            r zadd zset 5 b
+            r zadd zset 2 c
+            r zadd zset 10 d
+            r zadd zset 3 e
+            assert_encoding btree zset
+            assert_equal [r sort zset by nosort asc] {a c e b d}
+            assert_equal [r sort zset by nosort desc] {d b e c a}
+        }
+    }
+
+    test "SORT sorted set skiplist BY nosort + LIMIT" {
+        with_config zset-max-ziplist-entries 0 {
+            r del zset
+            r zadd zset 1 a
+            r zadd zset 5 b
+            r zadd zset 2 c
+            r zadd zset 10 d
+            r zadd zset 3 e
+            assert_encoding btree zset
+            assert_equal [r sort zset by nosort asc limit 0 1] {a}
+            assert_equal [r sort zset by nosort desc limit 0 1] {d}
+            assert_equal [r sort zset by nosort asc limit 0 2] {a c}
+            assert_equal [r sort zset by nosort desc limit 0 2] {d b}
+            assert_equal [r sort zset by nosort limit 5 10] {}
+            assert_equal [r sort zset by nosort limit -10 100] {a c e b d}
+        }
+    }
+
+    test "SORT sorted set skiplist with BY pattern" {
+        with_config zset-max-ziplist-entries 0 {
+            r del zset
+            r zadd zset 1 a
+            r zadd zset 5 b
+            r zadd zset 2 c
+            r zadd zset 10 d
+            r zadd zset 3 e
+            assert_encoding btree zset
+            assert_equal [r sort zset alpha desc] {e d c b a}
+        }
     }
 
     test "SORT sorted set BY nosort works as expected from scripts" {

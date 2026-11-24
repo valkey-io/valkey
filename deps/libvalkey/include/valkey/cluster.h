@@ -93,6 +93,7 @@ typedef struct valkeyClusterContext {
     int max_retry_count;             /* Allowed retry attempts */
     char *username;                  /* Authenticate using user */
     char *password;                  /* Authentication password */
+    int select_db;
 
     struct dict *nodes;        /* Known valkeyClusterNode's */
     uint64_t route_version;    /* Increased when the node lookup table changes */
@@ -162,6 +163,10 @@ typedef struct {
     const char *username;                  /* Authentication username. */
     const char *password;                  /* Authentication password. */
     int max_retry;                         /* Allowed retry attempts. */
+
+    /* Select a logical database after a successful connect.
+     * Default 0, i.e. the SELECT command is not sent. */
+    int select_db;
 
     /* Common callbacks. */
 

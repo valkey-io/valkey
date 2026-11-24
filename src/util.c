@@ -55,6 +55,10 @@
 #include "valkey_strtod.h"
 #include "monotonic.h"
 
+#ifdef HAVE_OPENSSL_PROVIDERS
+#include <openssl/rand.h>
+#endif
+
 #if HAVE_X86_SIMD
 #include <immintrin.h>
 #endif
@@ -232,7 +236,7 @@ int stringmatchlen_fuzz_test(void) {
  * bytes, so for instance memtoull("1Gb") will return 1073741824 that is
  * (1024*1024*1024).
  *
- * On parsing error, if *err is not NULL, it's set to 1, otherwise it's
+ * On parsing error, if *err is not NULL, it's set to 1; otherwise, it's
  * set to 0. On error the function return value is 0, regardless of the
  * fact 'err' is NULL or not. */
 unsigned long long memtoull(const char *p, int *err) {
@@ -411,8 +415,7 @@ int ull2string(char *dst, size_t dstlen, unsigned long long value) {
     while (value >= 100) {
         int const i = (value % 100) * 2;
         value /= 100;
-        dst[next] = digits[i + 1];
-        dst[next - 1] = digits[i];
+        memcpy(dst + next - 1, digits + i, 2);
         next -= 2;
     }
 
@@ -421,8 +424,7 @@ int ull2string(char *dst, size_t dstlen, unsigned long long value) {
         dst[next] = '0' + (uint32_t)value;
     } else {
         int i = (uint32_t)value * 2;
-        dst[next] = digits[i + 1];
-        dst[next - 1] = digits[i];
+        memcpy(dst + next - 1, digits + i, 2);
     }
     return length;
 err:
@@ -437,9 +439,9 @@ err:
 #define MULTIPLIER_10E16 10000000000000000ULL
 
 /**
- * Convert a string into an signed 64-bit integer using AVX-512 instructions.
+ * Convert a string into a signed 64-bit integer using AVX-512 instructions.
  *
- * This function parses a string of digits and converts it into an signed
+ * This function parses a string of digits and converts it into a signed
  * 64-bit integer. It leverages AVX-512 SIMD instructions for optimized
  * processing and performs strict validation to ensure the input string
  * represents a valid signed integer.
@@ -596,7 +598,7 @@ static int string2llScalar(const char *s, size_t slen, long long *value) {
         if (plen == slen) return 0;
     }
 
-    /* First digit should be 1-9, otherwise the string should just be 0. */
+    /* First digit should be 1-9; otherwise, the string should just be 0. */
     if (p[0] >= '1' && p[0] <= '9') {
         v = p[0] - '0';
         p++;
@@ -637,7 +639,9 @@ static int string2llScalar(const char *s, size_t slen, long long *value) {
 }
 
 #if HAVE_IFUNC && HAVE_X86_SIMD
-__attribute__((no_sanitize_address, used)) static int (*string2ll_resolver(void))(const char *, size_t, long long *) {
+VALKEY_NO_SANITIZE("address")
+VALKEY_NO_SANITIZE("thread")
+__attribute__((used)) static int (*string2ll_resolver(void))(const char *, size_t, long long *) {
     /* Ifunc resolvers run before ASan initialization and before CPU detection
      * is initialized, so disable ASan and init CPU detection here. */
     __builtin_cpu_init();
@@ -708,20 +712,20 @@ static int base_16_char_type(char c) {
     return -1;
 }
 
-/** This is an async-signal safe version of string2l to convert unsigned long to string.
+/** This is an async-signal-safe function to convert a hexadecimal string to an unsigned long long.
  * The function translates @param src until it reaches a value that is not 0-9, a-f or A-F, or @param we read slen
- * characters. On successes writes the result to @param result_output and returns 1. if the string represents an
- * overflow value, return -1. */
-int string2ul_base16_async_signal_safe(const char *src, size_t slen, unsigned long *result_output) {
+ * characters. On success, it writes the result to @param result_output and returns 1. If the string represents an
+ * overflow value, it returns -1. */
+int string2ull_base16_async_signal_safe(const char *src, size_t slen, unsigned long long *result_output) {
     static char ascii_to_dec[] = {'0', 'a' - 10, 'A' - 10};
 
     int char_type = 0;
     size_t curr_char_idx = 0;
-    unsigned long result = 0;
+    unsigned long long result = 0;
     int base = 16;
-    while ((-1 != (char_type = base_16_char_type(src[curr_char_idx]))) && curr_char_idx < slen) {
-        unsigned long curr_val = src[curr_char_idx] - ascii_to_dec[char_type];
-        if ((result > ULONG_MAX / base) || (result > (ULONG_MAX - curr_val) / base)) /* Overflow. */
+    while (curr_char_idx < slen && (-1 != (char_type = base_16_char_type(src[curr_char_idx])))) {
+        unsigned long long curr_val = src[curr_char_idx] - ascii_to_dec[char_type];
+        if ((result > ULLONG_MAX / base) || (result > (ULLONG_MAX - curr_val) / base)) /* Overflow. */
             return -1;
         result = result * base + curr_val;
         ++curr_char_idx;
@@ -768,7 +772,7 @@ int string2ld(const char *s, size_t slen, long double *dp) {
 int string2d(const char *s, size_t slen, double *dp) {
     errno = 0;
     char *eptr;
-    *dp = valkey_strtod(s, &eptr);
+    *dp = valkey_strtod_n(s, slen, &eptr);
     if (slen == 0 || isspace(((const char *)s)[0]) || (size_t)(eptr - (char *)s) != slen ||
         (errno == ERANGE && (*dp == HUGE_VAL || *dp == -HUGE_VAL || fpclassify(*dp) == FP_ZERO)) || isnan(*dp) || errno == EINVAL) {
         errno = 0;
@@ -866,7 +870,7 @@ int d2string(char *buf, size_t len, double value) {
  */
 int fixedpoint_d2string(char *dst, size_t dstlen, double dvalue, int fractional_digits) {
     if (fractional_digits < 1 || fractional_digits > 17) goto err;
-    /* min size of 2 ( due to 0. ) + n fractional_digitits + \0 */
+    /* min size of 2 ( due to 0. ) + n fractional_digits + \0 */
     if ((int)dstlen < (fractional_digits + 3)) goto err;
     if (dvalue == 0) {
         dst[0] = '0';
@@ -1054,18 +1058,17 @@ err:
 
 /* Populate the provided seed array by hashing the provided string with SHA256
  * and copying the first outlen bytes of the digest into the seed buffer. */
-void getHashSeedFromString(unsigned char *seed_array, size_t outlen, const char *value) {
+void getHashSeedFromString(unsigned char *seed_array, size_t outlen, const char *value, size_t value_len) {
     SHA256_CTX ctx;
     unsigned char digest[SHA256_BLOCK_SIZE];
 
     sha256_init(&ctx);
-    sha256_update(&ctx, (const BYTE *)value, strlen(value));
+    sha256_update(&ctx, (const BYTE *)value, value_len);
     sha256_final(&ctx, digest);
 
     if (outlen > SHA256_BLOCK_SIZE) outlen = SHA256_BLOCK_SIZE;
     memcpy(seed_array, digest, outlen);
 }
-
 
 /* Parses a version string on the form "major.minor.patch" and returns an
  * integer on the form 0xMMmmpp. Returns -1 on parse error. */
@@ -1145,7 +1148,12 @@ void getRandomSeedCString(char *buff, size_t len) {
  * the uses a one way hash function in counter mode to generate a random
  * stream. However if /dev/urandom is not available, a weaker seed is used.
  *
- * This function is not thread safe, since the state is global. */
+ * This function is not thread safe, since the state is global.
+ *
+ * This is the non-secret entry point: run ids, replication ids, cluster node
+ * names and shard ids, the RDB EOF mark, migrate slot job names, the sentinel
+ * id, and ValkeyModule_GetRandomBytes(). Secret material uses
+ * getSecureRandomBytes() below. */
 void getRandomBytes(unsigned char *p, size_t len) {
     static uint64_t counter = 0; /* The counter we hash with the seed. */
 
@@ -1199,6 +1207,58 @@ void getRandomHexChars(char *p, size_t len) {
 
     getRandomBytes((unsigned char *)p, len);
     for (j = 0; j < len; j++) p[j] = charset[p[j] & 0x0F];
+}
+
+/* Get random bytes for secret material. Returns 1 on success, 0 on failure.
+ *
+ * When built with TLS against OpenSSL 3 this draws from the RAND provider via
+ * RAND_priv_bytes(), so the provider configured in openssl.cnf supplies the
+ * secret. RAND_priv_bytes() rather than RAND_bytes() because OpenSSL keeps a
+ * separate DRBG for private material; the in-tree caller, ACL GENPASS, is
+ * secret, so the private one is the correct source.
+ *
+ * A failure returns 0 and the caller must fail closed. There is deliberately
+ * no fallback to getRandomBytes() in a provider build: its seed degrades to
+ * clock and pid entropy when /dev/urandom cannot be read, which is not an
+ * acceptable substitute for a secret.
+ *
+ * Builds that cannot reach a provider (no TLS, OpenSSL below 3, LibreSSL, and
+ * BUILD_TLS=module, which does not link libcrypto into the server) use
+ * getRandomBytes() and always return 1. That is what these call sites used
+ * before provider support existed, so those builds are unchanged.
+ *
+ * RAND_priv_bytes() takes an int length, so draw in INT_MAX sized chunks. */
+int getSecureRandomBytes(unsigned char *p, size_t len) {
+#ifdef HAVE_OPENSSL_PROVIDERS
+    while (len) {
+        int chunk = len > (size_t)INT_MAX ? INT_MAX : (int)len;
+
+        if (RAND_priv_bytes(p, chunk) != 1) return 0;
+        p += chunk;
+        len -= (size_t)chunk;
+    }
+    return 1;
+#else
+    getRandomBytes(p, len);
+    return 1;
+#endif
+}
+
+/* Like getSecureRandomBytes() but the output is restricted to the hex charset
+ * [0-9a-f]. Returns 1 on success, 0 on failure. On failure the buffer contents
+ * are unspecified, so callers must not read it; ACL GENPASS returns an error
+ * without touching it.
+ *
+ * As with getRandomHexChars() each byte yields one hex character, so this is 4
+ * bits of entropy per byte written; callers size the buffer for the strength
+ * they want, which is what ACL GENPASS's (bits + 3) / 4 does. */
+int getSecureRandomHexChars(char *p, size_t len) {
+    char *charset = "0123456789abcdef";
+    size_t j;
+
+    if (!getSecureRandomBytes((unsigned char *)p, len)) return 0;
+    for (j = 0; j < len; j++) p[j] = charset[p[j] & 0x0F];
+    return 1;
 }
 
 /* Given the filename, return the absolute path as an SDS string, or NULL
@@ -1655,4 +1715,34 @@ sds escapeJsonString(sds s, const char *p, size_t len) {
         p++;
     }
     return sdscatlen(s, "\"", 1);
+}
+
+/* Tomas Wang's 64 bit integer hash */
+uint64_t wangHash64(uint64_t hash) {
+    hash = (~hash) + (hash << 21); /* hash = (hash << 21) - hash - 1; */
+    hash = hash ^ (hash >> 24);
+    hash = (hash + (hash << 3)) + (hash << 8); /* hash * 265 */
+    hash = hash ^ (hash >> 14);
+    hash = (hash + (hash << 2)) + (hash << 4); /* hash * 21 */
+    hash = hash ^ (hash >> 28);
+    hash = hash + (hash << 31);
+    return hash;
+}
+
+/* Lock-free, per-thread Bernoulli sampler: advances a thread-local xorshift64*
+ * PRNG and returns 1 with probability `percentage`/100, using only a multiply +
+ * compare (no modulo, and no glibc rand() internal lock) so it stays cheap on
+ * hot paths that call it for every event. */
+int bernoulliSampleHit(int percentage) {
+    static __thread uint64_t s = 0;
+    if (s == 0) {
+        s = (uint64_t)(uintptr_t)&s ^ 0x9E3779B97F4A7C15ULL; /* seed from stack address; multiplier from Vigna's xorshift64* paper */
+        s |= 1;                                              /* xorshift64 needs a nonzero state */
+    }
+    s ^= s >> 12;
+    s ^= s << 25;
+    s ^= s >> 27;
+    uint32_t r = (uint32_t)((s * 0x2545F4914F6CDD1DULL) >> 32); /* multiplier from Vigna's xorshift64* paper */
+    /* r/2^32 < pct/100  <=>  r*100 < pct*2^32  (no division). */
+    return (uint64_t)r * 100 < ((uint64_t)percentage << 32);
 }

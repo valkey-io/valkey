@@ -257,7 +257,7 @@ start_cluster 3 1 {tags {external:skip cluster} overrides {cluster-ping-interval
             [s 0 role] eq {slave} &&
             [s -3 role] eq {master}
         } else {
-            fail "The third falover does not happen"
+            fail "The third failover does not happen"
         }
         wait_for_cluster_propagation
     }

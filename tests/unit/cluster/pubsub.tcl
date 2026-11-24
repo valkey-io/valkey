@@ -38,13 +38,41 @@ test "Test publishing to slave" {
 
 start_cluster 3 0 {tags {external:skip cluster}} {
     test "Test cluster info stats for publish" {
+        R 0 CONFIG RESETSTAT
+        R 1 CONFIG RESETSTAT
+        R 2 CONFIG RESETSTAT
+
         R 0 PUBLISH hello world
         assert_equal 2 [CI 0 cluster_stats_messages_publish_sent]
         wait_for_condition 50 100 {
             [CI 1 cluster_stats_messages_publish_received] eq 1 &&
-            [CI 2 cluster_stats_messages_publish_received] eq 1
+            [CI 2 cluster_stats_messages_publish_received] eq 1 &&
+            [CI 1 cluster_stats_pubsub_bytes_received] > 0 &&
+            [CI 2 cluster_stats_pubsub_bytes_received] > 0
         } else {
             fail "node 2 or node 3 didn't receive clusterbus publish packet"
         }
+
+        set sender_pubsub_bytes [CI 0 cluster_stats_pubsub_bytes_sent]
+        set receiver_pubsub_bytes [expr {[CI 1 cluster_stats_pubsub_bytes_received] + [CI 2 cluster_stats_pubsub_bytes_received]}]
+        assert_morethan $sender_pubsub_bytes 0
+        assert_equal $sender_pubsub_bytes $receiver_pubsub_bytes
+    }
+}
+
+start_cluster 2 0 {tags {external:skip cluster}} {
+    test "PUBLISH larger than the cluster bus packet cap reaches other nodes" {
+        set rd [valkey_deferring_client -1]
+        subscribe $rd {bigchannel}
+
+        set data [string repeat x [expr {20 * 1024 * 1024}]]
+        R 0 PUBLISH bigchannel $data
+        wait_for_condition 100 100 {
+            [CI 1 cluster_stats_messages_publish_received] eq 1
+        } else {
+            fail "node 1 didn't receive the clusterbus publish packet"
+        }
+        assert_equal [string length $data] [string length [lindex [$rd read] 2]]
+        $rd close
     }
 }

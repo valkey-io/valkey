@@ -1,8 +1,8 @@
 STD=
-WARN= -Wall
+WARN= -Wall -Werror
 OPT= -Os
 
-R_CFLAGS= $(STD) $(WARN) $(OPT) $(DEBUG) $(CFLAGS)
+R_CFLAGS= $(STD) $(WARN) $(OPT) $(DEBUG) $(CFLAGS) $(CPPFLAGS)
 R_LDFLAGS= $(LDFLAGS)
 DEBUG= -g
 

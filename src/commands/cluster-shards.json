@@ -10,7 +10,7 @@
         "history": [
             [
                 "9.1.0",
-                "Added shard id field to CLUSTER SHARDS response"
+                "Added shard level `id` field and node level `availability-zone` field."
             ]
         ],
         "command_flags": [
@@ -84,6 +84,9 @@
                                             "const": "online"
                                         }
                                     ]
+                                },
+                                "availability-zone": {
+                                    "type": "string"
                                 }
                             }
                         }

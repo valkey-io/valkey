@@ -69,7 +69,7 @@ Adhere to the existing coding style and make sure to mimic best possible.
 ### Code formatting
 
 When making a change, please use `git clang-format` or [format-files.sh](./scripts/format-files.sh) to format your changes properly.
-This repository is currently using `clang-format` 18.1.3 to format the code, which can be installed using `pip install clang-format==18.1.3` or other preferred method.
+This repository is currently using `clang-format` 18.1.8 to format the code, which can be installed using `pip install clang-format==18.1.8` or other preferred method.
 
 ## Running cluster tests
 

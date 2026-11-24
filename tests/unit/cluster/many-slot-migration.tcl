@@ -9,6 +9,9 @@ source tests/support/cluster_util.tcl
 start_cluster 10 0 {tags {external:skip cluster}} {
     config_set_all_nodes cluster-allow-replica-migration no
 
+set key_count [expr {$::valgrind ? 10000 : 40000}]
+set migration_slots [expr {$::valgrind ? 250 : 1000}]
+
 test "Cluster is up" {
     wait_for_cluster_state ok
 }
@@ -20,19 +23,22 @@ catch {unset nodeto}
 $cluster refresh_nodes_map
 
 test "Set many keys" {
-    for {set i 0} {$i < 40000} {incr i} {
+    for {set i 0} {$i < $key_count} {incr i} {
         $cluster set key:$i val:$i
     }
 }
 
 test "Keys are accessible" {
-    for {set i 0} {$i < 40000} {incr i} {
+    for {set i 0} {$i < $key_count} {incr i} {
         assert { [$cluster get key:$i] eq "val:$i" }
     }
 }
 
 test "Init migration of many slots" {
-    for {set slot 0} {$slot < 1000} {incr slot} {
+    # Valgrind makes cluster fix on 1000 half-migrated slots too slow for the
+    # dedicated valgrind jobs. Keep the default coverage in normal runs while
+    # still exercising simultaneous repair of many slots under valgrind.
+    for {set slot 0} {$slot < $migration_slots} {incr slot} {
         array set nodefrom [$cluster masternode_for_slot $slot]
         array set nodeto [$cluster masternode_notfor_slot $slot]
 
@@ -47,7 +53,7 @@ test "Fix cluster" {
 }
 
 test "Keys are accessible" {
-    for {set i 0} {$i < 40000} {incr i} {
+    for {set i 0} {$i < $key_count} {incr i} {
         assert { [$cluster get key:$i] eq "val:$i" }
     }
 }

@@ -309,7 +309,7 @@ start_server {tags {"cli logreqres:skip"}} {
     }
 
     test_tty_cli "Escape character in JSON mode" {
-        # reverse escapes and double quote
+        # backslash and double quote
         r hset escapes "\\" "\""
         assert_equal "1) \"\\\\\"\n2) \"\\\"\"" [run_cli hgetall escapes]
         assert_equal {{"\\":"\""}} [run_cli --json hgetall escapes]

@@ -38,6 +38,7 @@
 #include "server.h"
 #include "hotkeys.h"
 #include "cluster.h"
+#include "cluster_migrateslots.h"
 #include "cluster_bus.h"
 #include "cluster_state.h"
 #include "cluster_link.h"
@@ -210,6 +211,7 @@ typedef struct {
     unsigned int todo_send_ae_ack : 1;
     unsigned int todo_send_vote_response : 1;
     unsigned int todo_broadcast_vote_request : 1;
+    unsigned int slot_change_pending : 1;
     uint64_t persist_log_from;     /* First index to persist in next batch */
     uint64_t last_rewrite_applied; /* last_applied at last full rewrite */
 
@@ -445,6 +447,7 @@ static void clusterRaftStartElection(void);
 static clusterNode *clusterRaftSelectTransferTarget(void);
 static int clusterRaftRequestLeaderTransfer(void);
 static void clusterRaftMaybeSendTimeoutNow(void);
+static int clusterRaftLeaderHasFreshQuorum(mstime_t now);
 
 static void clusterRaftRandomizeElectionTimeout(void) {
     mstime_t base = server.cluster_node_timeout;
@@ -454,6 +457,47 @@ static void clusterRaftRandomizeElectionTimeout(void) {
 
 static int clusterRaftQuorum(void) {
     return server.cluster->size / 2 + 1;
+}
+
+static bool clusterRaftIsSlotChangePending(void) {
+    clusterRaftState *rs = RAFT_STATE();
+    if (!rs->slot_change_pending && clusterIsAnySlotExportFailoverGranted())
+        rs->slot_change_pending = 1;
+    return rs->slot_change_pending;
+}
+
+static int clusterRaftLogFullyApplied(void) {
+    clusterRaftState *rs = RAFT_STATE();
+    return rs->last_applied >= raftLogLastIndex();
+}
+
+/* Track the protocol hold; the migration code owns the actual write pause.
+ * Export timeout or cancellation must not clear an unresolved handoff.
+ * Arm only at FAILOVER-GRANTED: earlier pauses cannot be followed by a
+ * proposal, and a sibling still snapshotting is not a granted handoff. */
+static void clusterRaftSyncSlotChangePending(void) {
+    clusterRaftState *rs = RAFT_STATE();
+    if (!rs->slot_change_pending && !getPausedActionsWithPurpose(PAUSE_DURING_SLOT_MIGRATION)) return;
+    if (!rs->slot_change_pending && clusterIsAnySlotExportFailoverGranted()) rs->slot_change_pending = 1;
+    if (!rs->slot_change_pending) return;
+    if (!clusterIsAnySlotExportFailoverGranted() && rs->role == RAFT_ROLE_LEADER && clusterRaftLogFullyApplied() &&
+        clusterRaftLeaderHasFreshQuorum(monotonicMs())) {
+        rs->slot_change_pending = 0;
+    }
+}
+
+static void clusterRaftOnSlotOwnershipApplied(void) {
+    clusterUpdateSlotExportsOnOwnershipChange();
+    clusterUpdateSlotImportsOnOwnershipChange();
+    if (RAFT_STATE()->slot_change_pending && !clusterIsAnySlotExportFailoverGranted() && clusterRaftLogFullyApplied())
+        RAFT_STATE()->slot_change_pending = 0;
+}
+
+static void clusterRaftReleaseSlotChangePendingIfCaughtUp(void) {
+    clusterRaftState *rs = RAFT_STATE();
+    if (!rs->slot_change_pending || clusterIsAnySlotExportFailoverGranted()) return;
+    if (!clusterRaftLogFullyApplied()) return;
+    rs->slot_change_pending = 0;
 }
 
 /* True if there are any nodes other than myself without the JOINING flag. */
@@ -1815,6 +1859,11 @@ static void raftLogApply(raftLogEntry *e) {
 
     /* Check pending proposals for a match and remove it. */
     clusterRaftCompletePendingProposal(e->type, e->data, entry_result);
+
+    if (e->type == RAFT_ENTRY_SLOT_CHANGE && entry_result == RAFT_RESULT_OK) {
+        /* Complete our import callback before revalidating ownership. */
+        clusterRaftOnSlotOwnershipApplied();
+    }
 }
 
 /* Apply all committed but unapplied log entries. */
@@ -2030,6 +2079,7 @@ static int clusterRaftProcessAppendEntries(clusterLink *link, int argc, sds *arg
         if (rs->commit_index > raftLogLastIndex()) rs->commit_index = raftLogLastIndex();
     }
     raftApplyCommitted();
+    clusterRaftReleaseSlotChangePendingIfCaughtUp();
 
     /* Forgotten: this link is unbound. Do not ACK. */
     if (!link->node) {
@@ -2399,6 +2449,7 @@ static int clusterRaftProcessInstallSnapshot(clusterLink *link, int argc, sds *a
     rs->todo_update_replication = 1;
     rs->todo_update_slot_coverage = 1;
     clearCachedClusterSlotsResponse();
+    clusterRaftOnSlotOwnershipApplied();
     /* If our primary is failed, schedule a failover, as applying its
      * NODE_FAIL would have done. */
     if (nodeIsReplica(myself) && myself->replicaof && nodeFailed(myself->replicaof) && !nodeCantFailover(myself)) {
@@ -2926,6 +2977,8 @@ static void clusterRaftCron(void) {
     mstime_t now = monotonicMs();
 
     clusterRaftAssertLearnerRole();
+    /* Synchronize the handoff hold after slot-migration timeout handling. */
+    clusterRaftSyncSlotChangePending();
 
     clusterRaftReapJoiningStubs();
 
@@ -3146,6 +3199,7 @@ static void clusterRaftCheckSlotCoverage(void) {
 static void clusterRaftBeforeSleep(bool blocked) {
     UNUSED(blocked);
     clusterRaftState *rs = RAFT_STATE();
+    clusterRaftSyncSlotChangePending();
 
     if (rs->todo_connect_nodes) {
         rs->todo_connect_nodes = 0;
@@ -4204,9 +4258,10 @@ static RaftProposalResult clusterRaftApplySlotChange(sds data, int validate_only
         for (int j = start; j <= end; j++) {
             clusterNode *old_owner = server.cluster->slots[j];
             if (old_owner == info.target_node) continue;
-            clusterRaftUpdateLocalSlotState(j, old_owner, info.target_node);
             if (old_owner) clusterDelSlot(j);
             if (info.target_node) clusterAddSlot(info.target_node, j);
+            /* Publish ownership before cleanup so its DELs are not exported. */
+            clusterRaftUpdateLocalSlotState(j, old_owner, info.target_node);
         }
     }
 
@@ -4923,7 +4978,8 @@ static int clusterRaftSpecialCommand(client *c) {
         addReply(c, shared.ok);
         return 1;
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "bumpepoch") && c->argc == 2) {
-        addReply(c, shared.ok);
+        /* No config epochs in Raft. Reply like gossip for tools and tests. */
+        addReplyStatusFormat(c, "BUMPED %llu", (unsigned long long)clusterGetShardEpoch(myself->shard_id));
         return 1;
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "addvoter") && c->argc == 3) {
         void *h = blockClientAsync(c);
@@ -4986,6 +5042,7 @@ clusterBusType clusterRaftBus = {
     .initNodeData = clusterRaftInitNodeData,
     .freeNodeData = clusterRaftFreeNodeData,
     .slotChange = clusterRaftSlotChange,
+    .isSlotChangePending = clusterRaftIsSlotChangePending,
     .cancelManualFailover = clusterRaftCancelManualFailover,
     .cancelAutomaticFailover = clusterRaftCancelAutomaticFailover,
     .forgetNode = clusterRaftForgetNode,

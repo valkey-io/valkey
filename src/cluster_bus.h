@@ -125,6 +125,12 @@ typedef struct clusterBusType {
      * to the callback, which is called when the change is applied. */
     void (*slotChange)(slotRange *ranges, int numranges, clusterNode *target, void *ctx, void (*callback)(void *ctx, const char *error));
 
+    /* True while a slot change affecting our slots may still be applied, e.g.
+     * after granting a slot handover whose outcome isn't decided yet. Callers
+     * that must not act on the current slot ownership until then, like the
+     * slot migration pause, wait while it's true. NULL means never. */
+    bool (*isSlotChangePending)(void);
+
     /* Clean up any protocol-specific manual failover state. Called when the
      * node's role changes and any in-progress manual failover state is no
      * longer relevant. */

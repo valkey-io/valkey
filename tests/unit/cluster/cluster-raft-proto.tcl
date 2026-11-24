@@ -410,7 +410,8 @@ test "Raft proto: INSTALL_SNAPSHOT validation and node removal" {
         set cport [expr {[srv 0 port] + 10000}]
         set node_id [R 0 CLUSTER MYID]
         set leader_id [string repeat "d" 40]
-        set leader_addr "127.0.0.1:9995@19995,,tls-port=0,shard-id=[string repeat e 40]"
+        set migration_listener [raft_listen migration_port]
+        set leader_addr "127.0.0.1:$migration_port@19995,,tls-port=0,shard-id=[string repeat e 40]"
         set node_addr "127.0.0.1:[srv 0 port]@$cport,,tls-port=0,shard-id=[string repeat a 40]"
         set c_id [string repeat "c" 40]
         set c_addr "127.0.0.1:9994@19994,,tls-port=0,shard-id=[string repeat f 40]"
@@ -522,6 +523,9 @@ test "Raft proto: INSTALL_SNAPSHOT validation and node removal" {
 
         # A snapshot that ends at an entry we already have doesn't discard
         # the entries after it, which we may have acknowledged.
+        assert_equal OK [R 0 CLUSTER MIGRATESLOTS SLOTSRANGE 0 0 NODE $leader_id]
+        set migration_fd [raft_accept $migration_listener]
+        test_defer [list close $migration_fd]
         set ae "AE $leader_id 1 15 1 15 3"
         for {set j 0} {$j < 3} {incr j} {
             append ae "\n1 NODE_INFO $leader_id $leader_addr noflags"
@@ -535,6 +539,20 @@ test "Raft proto: INSTALL_SNAPSHOT validation and node removal" {
         while {![string match "AE_ACK *" [set reply [raft_recv $fd]]]} {}
         assert_match "AE_ACK 1 1 18 *" $reply
         assert_equal 17 [CI 0 cluster_raft_last_applied]
+
+        # A full snapshot must invalidate an export whose slot went to another node.
+        set migration [lindex [R 0 CLUSTER GETSLOTMIGRATIONS] 0]
+        assert {[dict get $migration state] ni {failed cancelled success}}
+        set snapshot "INSTALL_SNAPSHOT $leader_id 1 20 1"
+        append snapshot "\n$leader_id $leader_addr master - 0 0 1 connected 1-16383"
+        append snapshot "\n$node_id $node_addr master - 0 0 1 connected"
+        append snapshot "\n$c_id $c_addr master - 0 0 1 connected 0"
+        raft_send $fd $snapshot
+        while {![string match "AE_ACK *" [set reply [raft_recv $fd]]]} {}
+        assert_match "AE_ACK 1 1 20 *" $reply
+        set migration [lindex [R 0 CLUSTER GETSLOTMIGRATIONS] 0]
+        assert_equal failed [dict get $migration state]
+        assert_match {*Slots are no longer owned by myself*} [dict get $migration message]
 
         close $fd_c
         close $fd

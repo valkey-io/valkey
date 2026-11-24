@@ -3090,7 +3090,24 @@ static void clusterRaftCron(void) {
 
     /* Automatic failover: propose FAILOVER when our scheduled time arrives. */
     if (rs->failover_time && now >= rs->failover_time) {
-        if (nodeIsReplica(myself) && myself->replicaof && nodeFailed(myself->replicaof)) {
+        if (!nodeIsReplica(myself) || !myself->replicaof || !nodeFailed(myself->replicaof)) {
+            /* The primary recovered or we are no longer its replica. */
+            rs->failover_time = 0;
+        } else if (server.cluster_replica_no_failover == CLUSTER_REPLICA_NO_FAILOVER_IF_EMPTY &&
+                   replicationGetReplicaOffset() == 0) {
+            /* Promoting an empty replica would lose all the data of the
+             * shard. Stay pending and check again on the next cron. */
+            static mstime_t last_log_time = 0;
+            if (now - last_log_time >= 1000) {
+                last_log_time = now;
+                serverLog(LL_NOTICE, "Currently unable to failover: Replication offset is 0 and no data has "
+                                     "been received from the primary. Please check the "
+                                     "'cluster-replica-no-failover' configuration option.");
+            }
+        } else if (!nodeCantFailover(myself)) {
+            /* Propose, unless cluster-replica-no-failover was set to yes after
+             * scheduling. Then stay pending, so the failover goes ahead once it
+             * is turned off. */
             rs->failover_time = 0;
             clusterNode *primary = myself->replicaof;
             serverLog(LL_NOTICE, "Automatic failover: proposing FAILOVER for primary %.40s.",
@@ -3272,6 +3289,7 @@ static void clusterRaftBeforeSleep(bool blocked) {
                 if (memcmp(sibling->name, myself->name, CLUSTER_NAMELEN) < 0) rank++;
             }
             mstime_t delay = rank * 1000;
+            if (server.debug_cluster_failover_delay >= 0) delay += server.debug_cluster_failover_delay;
             rs->failover_time = monotonicMs() + delay;
             /* The parenthesized part matches the gossip election log, so tests
              * can check the rank and offset the same way for both. */

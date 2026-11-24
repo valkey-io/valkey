@@ -112,8 +112,8 @@ static quicklistNode *_quicklistMergeNodes(quicklist *quicklist, quicklistNode *
 
 /* Memory accounting.
  *
- * quicklist->entries_alloc_bytes is the sum of the allocated size of the entry
- * of every node that is linked in the list.
+ * quicklist->alloc_bytes is the sum of the allocated size of every node that is
+ * linked in the list: the quicklistNode struct and its entry.
  *
  * With jemalloc the allocated size is computed from the node state, so an
  * update does not need to ask the allocator:
@@ -127,8 +127,9 @@ static quicklistNode *_quicklistMergeNodes(quicklist *quicklist, quicklistNode *
  * pointer, so it is cheap. Other allocators have no such call, and some keep
  * a bigger block when they shrink one, so there we ask zmalloc_size().
  *
- * A node's entry is added when the node is linked (__quicklistInsertNode())
- * and removed when it is unlinked (__quicklistDelNode()). Each change to the
+ * A node and its entry are added when the node is linked
+ * (__quicklistInsertNode()) and removed when it is unlinked
+ * (__quicklistDelNode()). Each change to the
  * entry of a linked node reads quicklistNodeEntryAllocSize() before the change
  * and updates the counter after it. Nodes that are not linked yet are not
  * tracked until they are inserted. */
@@ -150,20 +151,23 @@ static inline size_t quicklistNodeEntryAllocSize(const quicklistNode *node) {
  * of the node before the change. node->sz and node->encoding must already
  * describe the new entry. */
 static inline void quicklistTrackEntry(quicklist *quicklist, const quicklistNode *node, size_t before) {
-    quicklist->entries_alloc_bytes -= before;
-    quicklist->entries_alloc_bytes += quicklistNodeEntryAllocSize(node);
+    quicklist->alloc_bytes -= before;
+    quicklist->alloc_bytes += quicklistNodeEntryAllocSize(node);
 }
 
-/* Allocated size of one quicklistNode struct. All nodes have the same size, so
- * we measure it once with zmalloc_size() and use it for every node. */
-static size_t quicklistNodeAllocSize(void) {
+/* Allocated size of the quicklistNode struct of 'node'. With jemalloc all
+ * nodes get the same size class, so we compute it once. Other allocators (for
+ * example glibc) can give a bigger block for the same request, so there we
+ * ask zmalloc_size() for each node. */
+static inline size_t quicklistNodeStructAllocSize(const quicklistNode *node) {
+#if defined(USE_JEMALLOC)
+    (void)node;
     static size_t node_alloc_size = 0;
-    if (node_alloc_size == 0) {
-        quicklistNode *probe = zmalloc(sizeof(*probe));
-        node_alloc_size = zmalloc_size(probe);
-        zfree(probe);
-    }
+    if (node_alloc_size == 0) node_alloc_size = je_nallocx(sizeof(quicklistNode), 0);
     return node_alloc_size;
+#else
+    return zmalloc_size((void *)node);
+#endif
 }
 
 /* Return the allocated bytes of the quicklist in O(1): the struct, the node
@@ -172,17 +176,17 @@ static size_t quicklistNodeAllocSize(void) {
  * with zrealloc(). The bookmark names are not counted: only active defrag
  * uses bookmarks, and only for a short time. */
 size_t quicklistMemUsage(const quicklist *ql) {
-    return zmalloc_size((void *)ql) + ql->len * quicklistNodeAllocSize() + ql->entries_alloc_bytes;
+    return zmalloc_size((void *)ql) + ql->alloc_bytes;
 }
 
 /* Same as quicklistMemUsage(), but walks all nodes and asks the allocator for
- * the real size of each entry. O(N), for debug asserts and tests only. With
- * jemalloc this also checks that the sizes computed from the node state are
- * right. */
+ * the real size of each node struct and entry. O(N), for debug asserts and
+ * tests only. With jemalloc this also checks that the sizes computed from the
+ * node state are right. */
 size_t quicklistMemUsageDebug(const quicklist *ql) {
     size_t size = zmalloc_size((void *)ql);
     for (const quicklistNode *node = ql->head; node; node = node->next)
-        size += quicklistNodeAllocSize() + zmalloc_size(node->entry);
+        size += zmalloc_size((void *)node) + zmalloc_size(node->entry);
     return size;
 }
 
@@ -239,7 +243,7 @@ quicklist *quicklistCreate(void) {
     quicklist->head = quicklist->tail = NULL;
     quicklist->len = 0;
     quicklist->count = 0;
-    quicklist->entries_alloc_bytes = 0;
+    quicklist->alloc_bytes = 0;
     quicklist->compress = 0;
     quicklist->fill = -2;
     quicklist->bookmark_count = 0;
@@ -532,7 +536,7 @@ static void __quicklistInsertNode(quicklist *quicklist, quicklistNode *old_node,
 
     /* Update len first, so in __quicklistCompress we know exactly len */
     quicklist->len++;
-    quicklist->entries_alloc_bytes += quicklistNodeEntryAllocSize(new_node);
+    quicklist->alloc_bytes += quicklistNodeStructAllocSize(new_node) + quicklistNodeEntryAllocSize(new_node);
 
     if (old_node) quicklistCompress(quicklist, old_node);
 
@@ -787,9 +791,9 @@ static void __quicklistDelNode(quicklist *quicklist, quicklistNode *node) {
     /* Update len first, so in __quicklistCompress we know exactly len */
     quicklist->len--;
     quicklist->count -= node->count;
-    /* For the node that lost its listpack in lpMerge(), this is 0:
+    /* For the node that lost its listpack in lpMerge(), the entry part is 0:
      * _quicklistListpackMerge() already removed its size. */
-    quicklist->entries_alloc_bytes -= quicklistNodeEntryAllocSize(node);
+    quicklist->alloc_bytes -= quicklistNodeStructAllocSize(node) + quicklistNodeEntryAllocSize(node);
 
     /* If we deleted a node within our compress depth, we
      * now have compressed nodes needing to be decompressed. */
@@ -987,7 +991,7 @@ static quicklistNode *_quicklistListpackMerge(quicklist *quicklist, quicklistNod
         /* lpMerge() freed the listpack of 'nokeep' and set its entry to NULL.
          * Remove its old size here, and set sz to 0 so that
          * __quicklistDelNode() removes nothing more. */
-        quicklist->entries_alloc_bytes -= nokeep_before;
+        quicklist->alloc_bytes -= nokeep_before;
         nokeep->sz = 0;
         keep->recompress = 0; /* Prevent 'keep' from being recompressed if
                                * it becomes head or tail after merging. */

@@ -99,9 +99,9 @@ typedef struct quicklistBookmark {
 /* quicklist is a 48 byte struct (on 64-bit systems) describing a quicklist.
  * 'count' is the number of total entries.
  * 'len' is the number of quicklist nodes.
- * 'entries_alloc_bytes' is the allocated size of the 'entry' buffer of every
- *      node in the list (listpack, LZF or plain data). It does not count the
- *      quicklistNode structs. See quicklistMemUsage() in quicklist.c.
+ * 'alloc_bytes' is the allocated size of every node in the list: the
+ *      quicklistNode struct and its 'entry' buffer (listpack, LZF or plain
+ *      data). See quicklistMemUsage() in quicklist.c.
  * 'compress' is: 0 if compression disabled; otherwise, it's the number
  *                of quicklistNodes to leave uncompressed at ends of quicklist.
  * 'fill' is the user-requested (or default) fill factor.
@@ -112,7 +112,7 @@ typedef struct quicklist {
     quicklistNode *tail;
     unsigned long count;                  /* total count of all entries in all listpacks */
     unsigned long len;                    /* number of quicklistNodes */
-    size_t entries_alloc_bytes;           /* allocated bytes of all node entries */
+    size_t alloc_bytes;                   /* allocated bytes of all nodes and entries */
     signed int fill : QL_FILL_BITS;       /* fill factor for individual nodes */
     unsigned int compress : QL_COMP_BITS; /* depth of end nodes not to compress;0=off */
     unsigned int bookmark_count : QL_BM_BITS;

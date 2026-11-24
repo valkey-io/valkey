@@ -1924,6 +1924,7 @@ void memoryCommand(client *c) {
             "USAGE <key> [SAMPLES <count>]",
             "    Return memory in bytes used by <key> and its value. Nested values are",
             "    sampled up to <count> times (default: 5, 0 means sample all).",
+            "    Lists are always counted exactly, so SAMPLES does not change their result.",
             NULL,
         };
         addReplyHelp(c, help);

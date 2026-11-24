@@ -719,6 +719,7 @@ static int clusterRaftProcessHi(clusterLink *link, int argc, sds *argv) {
         } else if (sender != link->node) {
             clusterNode *handshake = link->node;
             link->node = sender;
+            if (sender->link) freeClusterLink(sender->link);
             sender->link = link;
             handshake->link = NULL;
             clusterDelNode(handshake);

@@ -212,6 +212,7 @@ int moduleTryAcquireGIL(void);
 void moduleReleaseGIL(void);
 void moduleNotifyKeyspaceEvent(int type, const char *event, robj *key, int dbid);
 unsigned long moduleNotifyKeyspaceSubscribersCnt(void);
+int moduleNeedsPerKeyDeleteEvents(void);
 void firePostExecutionUnitJobs(void);
 bool moduleHasPostExecUnitJobs(void);
 void moduleCallCommandFilters(client *c);

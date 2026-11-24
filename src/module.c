@@ -112,6 +112,12 @@ typedef struct ValkeyModuleSharedAPI ValkeyModuleSharedAPI;
 
 list *modules; /* List of ValkeyModule pointers, in load order. */
 
+/* Number of module data types with an unlink or unlink2 callback. Counted when
+ * the type is created rather than found through 'modules', which only gets the
+ * module after its OnLoad returns, while OnLoad can already create and delete
+ * values of the type. */
+static unsigned long moduleTypesWithUnlinkCnt = 0;
+
 /* Entries in the context->amqueue array, representing objects to free
  * when the callback returns. */
 struct AutoMemEntry {
@@ -7794,6 +7800,7 @@ moduleType *VM_CreateDataType(ValkeyModuleCtx *ctx, const char *name, int encver
     }
     memcpy(mt->name, name, sizeof(mt->name));
     listAddNodeTail(ctx->module->types, mt);
+    if (mt->unlink || mt->unlink2) moduleTypesWithUnlinkCnt++;
     return mt;
 }
 
@@ -9775,6 +9782,30 @@ int VM_NotifyKeyspaceEvent(ValkeyModuleCtx *ctx, int type, const char *event, Va
 
 unsigned long moduleNotifyKeyspaceSubscribersCnt(void) {
     return listLength(moduleKeyspaceSubscribers);
+}
+
+/* Return 1 if some module needs to hear about every key when keys are dropped
+ * in bulk, e.g. when the keys of a slot are deleted: a listener for key server
+ * events, a keyspace subscriber for generic events, or a module data type with
+ * an unlink callback. */
+int moduleNeedsPerKeyDeleteEvents(void) {
+    if (moduleTypesWithUnlinkCnt) return 1;
+
+    listIter li;
+    listNode *ln;
+
+    listRewind(ValkeyModule_EventListeners, &li);
+    while ((ln = listNext(&li))) {
+        ValkeyModuleEventListener *el = ln->value;
+        if (el->event.id == VALKEYMODULE_EVENT_KEY) return 1;
+    }
+
+    listRewind(moduleKeyspaceSubscribers, &li);
+    while ((ln = listNext(&li))) {
+        ValkeyModuleKeyspaceSubscriber *sub = ln->value;
+        if (sub->event_mask & NOTIFY_GENERIC) return 1;
+    }
+    return 0;
 }
 
 /* Dispatcher for keyspace notifications to module subscriber functions.
@@ -13693,6 +13724,13 @@ void moduleLoadFromQueue(void) {
 }
 
 void moduleFreeModuleStructure(struct ValkeyModule *module) {
+    listIter li;
+    listNode *ln;
+    listRewind(module->types, &li);
+    while ((ln = listNext(&li))) {
+        moduleType *mt = ln->value;
+        if (mt->unlink || mt->unlink2) moduleTypesWithUnlinkCnt--;
+    }
     listRelease(module->types);
     listRelease(module->filters);
     listRelease(module->usedby);

@@ -14,6 +14,7 @@
 #include <stdint.h>
 
 static ValkeyModuleType *LazyFreeLinkType;
+static long long unlink_count = 0;
 
 /* While set, freeing an object blocks, holding up the lazyfree BIO worker. */
 static volatile int hold_free = 0;
@@ -177,6 +178,37 @@ void LazyFreeLinkUnlink(ValkeyModuleString *key, const void *value) {
     VALKEYMODULE_NOT_USED(key);
     VALKEYMODULE_NOT_USED(value);
     /* Here you can know which key and value is about to be freed. */
+    unlink_count++;
+}
+
+int LazyFreeLinkUnlinkCount_RedisCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    VALKEYMODULE_NOT_USED(argv);
+    if (argc != 1) return ValkeyModule_WrongArity(ctx);
+    return ValkeyModule_ReplyWithLongLong(ctx,unlink_count);
+}
+
+/* Create a value at 'keyname' and flush its slot with CLUSTER FLUSHSLOT. Done
+ * from OnLoad, before the module is registered, to check that the unlink
+ * callback of a type created in OnLoad is still called. */
+int LazyFreeLinkFlushSlot(ValkeyModuleCtx *ctx, ValkeyModuleString *keyname) {
+    ValkeyModuleKey *key = ValkeyModule_OpenKey(ctx,keyname,VALKEYMODULE_WRITE);
+    struct LazyFreeLinkObject *hto = createLazyFreeLinkObject();
+    LazyFreeLinkInsert(hto,1);
+    ValkeyModule_ModuleTypeSetValue(key,LazyFreeLinkType,hto);
+    ValkeyModule_CloseKey(key);
+
+    ValkeyModuleCallReply *reply = ValkeyModule_Call(ctx,"CLUSTER","cs","KEYSLOT",keyname);
+    if (ValkeyModule_CallReplyType(reply) != VALKEYMODULE_REPLY_INTEGER) {
+        ValkeyModule_FreeCallReply(reply);
+        return VALKEYMODULE_ERR;
+    }
+    long long slot = ValkeyModule_CallReplyInteger(reply);
+    ValkeyModule_FreeCallReply(reply);
+
+    reply = ValkeyModule_Call(ctx,"CLUSTER","clc","FLUSHSLOT",slot,"SYNC");
+    int ret = ValkeyModule_CallReplyType(reply) == VALKEYMODULE_REPLY_STRING ? VALKEYMODULE_OK : VALKEYMODULE_ERR;
+    ValkeyModule_FreeCallReply(reply);
+    return ret;
 }
 
 int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
@@ -218,6 +250,15 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
     if (ValkeyModule_CreateCommand(ctx,"lazyfreelink.holdfree",
         LazyFreeLinkHoldFree_RedisCommand,"",0,0,0) == VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
+
+    if (ValkeyModule_CreateCommand(ctx,"lazyfreelink.unlinkcount",
+        LazyFreeLinkUnlinkCount_RedisCommand,"readonly",0,0,0) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
+
+    /* MODULE LOAD <path> flushslot <key> */
+    if (argc == 2 && !strcasecmp(ValkeyModule_StringPtrLen(argv[0],NULL),"flushslot")) {
+        if (LazyFreeLinkFlushSlot(ctx,argv[1]) == VALKEYMODULE_ERR) return VALKEYMODULE_ERR;
+    }
 
     return VALKEYMODULE_OK;
 }

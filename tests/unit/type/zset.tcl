@@ -2602,15 +2602,15 @@ start_server {tags {"zset"}} {
             r multi
             r zadd zset{t} 1 one
             r pexpire zset{t} 100
-            r debug sleep 0.2
+            r debug sleep 0.5
             r exec
 
             assert_equal {} [$rd read]
             set end [clock milliseconds]
 
-            # Before the fix in #13004, this time would have been 1200+ (i.e. more than 1200ms),
-            # now it should be 1000, but in order to avoid timing issues, we increase the range a bit.
-            assert_range [expr $end-$start] 1000 1150
+            # Before the fix in #13004, this time would have been 1500+ (the 500ms sleep plus
+            # a new 1000ms timeout), now it should be 1000. The range leaves room for slow systems.
+            assert_range [expr $end-$start] 1000 1400
             puts "Time: [expr $end-$start]"
 
             r debug set-active-expire 1

@@ -432,6 +432,101 @@ void trackingInvalidateKey(client *c, robj *keyobj, int bcast) {
     raxRemove(TrackingTable, (unsigned char *)key, keylen, NULL);
 }
 
+/* Reply blocking delivers invalidation messages only once the write is
+ * durable, but the tracking table must still change at write time: a client
+ * that reads the key after the write registers it again and must stay
+ * tracked. So the work of trackingInvalidateKey() is split in two:
+ * trackingDetachKeyClients() runs at write time and removes the key from the
+ * table, returning the clients to notify, and trackingDeliverKeyInvalidation()
+ * sends the messages later. The NOLOOP check uses the client that ran the
+ * write, as in trackingInvalidateKey(). Returns NULL when nobody tracks the
+ * key; the caller frees the array with zfree(). */
+uint64_t *trackingDetachKeyClients(robj *keyobj, size_t *count) {
+    *count = 0;
+    if (TrackingTable == NULL) return NULL;
+    unsigned char *key = (unsigned char *)objectGetVal(keyobj);
+    size_t keylen = sdslen(objectGetVal(keyobj));
+    void *result;
+    if (!raxFind(TrackingTable, key, keylen, &result)) return NULL;
+    rax *ids = result;
+
+    uint64_t *targets = zmalloc(sizeof(uint64_t) * raxSize(ids));
+    raxIterator ri;
+    raxStart(&ri, ids);
+    raxSeek(&ri, "^", NULL, 0);
+    while (raxNext(&ri)) {
+        uint64_t id;
+        memcpy(&id, ri.key, sizeof(id));
+        client *target = lookupClientByID(id);
+        if (target == NULL || !(target->flag.tracking) || target->flag.tracking_bcast) continue;
+        if (target->flag.tracking_noloop && target == server.current_client) continue;
+        targets[(*count)++] = id;
+    }
+    raxStop(&ri);
+
+    TrackingTableTotalItems -= raxSize(ids);
+    raxFree(ids);
+    raxRemove(TrackingTable, key, keylen, NULL);
+    if (*count == 0) {
+        zfree(targets);
+        return NULL;
+    }
+    return targets;
+}
+
+/* Send the messages for a key detached by trackingDetachKeyClients(), and
+ * queue it for BCAST clients. 'c' is the client that wrote the key, or NULL. */
+void trackingDeliverKeyInvalidation(client *c, robj *keyobj, const uint64_t *ids, size_t count) {
+    if (TrackingTable == NULL) return;
+    if (raxSize(PrefixTable) > 0)
+        trackingRememberKeyToBroadcast(c, (char *)objectGetVal(keyobj), sdslen(objectGetVal(keyobj)));
+    for (size_t i = 0; i < count; i++) {
+        client *target = lookupClientByID(ids[i]);
+        if (target == NULL || !(target->flag.tracking) || target->flag.tracking_bcast) continue;
+        sendTrackingMessage(target, (char *)objectGetVal(keyobj), sdslen(objectGetVal(keyobj)), 0);
+    }
+}
+
+/* The same split for trackingInvalidateKeysOnFlush(): free the table now and
+ * return the tracking clients, which trackingDeliverFlushInvalidation()
+ * notifies later. */
+uint64_t *trackingDetachAllClients(int async, size_t *count) {
+    *count = 0;
+    uint64_t *targets = NULL;
+    if (server.tracking_clients) {
+        targets = zmalloc(sizeof(uint64_t) * server.tracking_clients);
+        listNode *ln;
+        listIter li;
+        listRewind(server.clients, &li);
+        while ((ln = listNext(&li)) != NULL && *count < server.tracking_clients) {
+            client *c = listNodeValue(ln);
+            if (c->flag.tracking) targets[(*count)++] = c->id;
+        }
+    }
+    if (TrackingTable) {
+        if (async) {
+            freeTrackingRadixTreeAsync(TrackingTable);
+        } else {
+            freeTrackingRadixTree(TrackingTable);
+        }
+        TrackingTable = raxNew();
+        TrackingTableTotalItems = 0;
+    }
+    if (*count == 0) {
+        zfree(targets);
+        return NULL;
+    }
+    return targets;
+}
+
+void trackingDeliverFlushInvalidation(const uint64_t *ids, size_t count) {
+    for (size_t i = 0; i < count; i++) {
+        client *c = lookupClientByID(ids[i]);
+        if (c == NULL || !c->flag.tracking) continue;
+        sendTrackingMessage(c, objectGetVal(shared.null[c->resp]), sdslen(objectGetVal(shared.null[c->resp])), 1);
+    }
+}
+
 /* Whether any tracking (client-side-caching) key invalidation is pending
  * flush. A tiny accessor over server.tracking_pending_keys rather than
  * having callers reach into the list themselves, so this file stays the

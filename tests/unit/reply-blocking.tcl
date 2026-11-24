@@ -2753,3 +2753,200 @@ start_server {tags {"repl durability external:skip"} overrides {appendonly yes a
         verify_no_log_message 0 "*ASSERTION FAILED*" 0
     }
 }
+
+start_server {tags {"repl durability external:skip"} overrides {appendonly yes appendfsync always bio-aof-offload-enabled yes}} {
+    test "NOLOOP: a deferred invalidation is not sent to the client that wrote the key" {
+        set rd [valkey_deferring_client]
+        $rd hello 3
+        $rd read
+        $rd client tracking on noloop
+        $rd read
+        $rd get nl:own
+        $rd read
+        $rd get nl:other
+        $rd read
+        # Our own write must not invalidate; another client's must.
+        $rd set nl:own v
+        assert_equal OK [$rd read]
+        r set nl:other v
+        $rd ping
+        set got {}
+        while 1 {
+            set m [$rd read]
+            if {$m eq {PONG}} break
+            lappend got $m
+        }
+        assert_equal {{invalidate nl:other}} $got
+        $rd close
+    }
+
+    test "NOLOOP in BCAST mode: a deferred invalidation skips the writer" {
+        set rd [valkey_deferring_client]
+        $rd hello 3
+        $rd read
+        $rd client tracking on bcast prefix nlb: noloop
+        $rd read
+        $rd set nlb:own v
+        assert_equal OK [$rd read]
+        r set nlb:other v
+        $rd ping
+        set got {}
+        while 1 {
+            set m [$rd read]
+            if {$m eq {PONG}} break
+            lappend got $m
+        }
+        assert_equal {{invalidate nlb:other}} $got
+        $rd close
+    }
+
+    test "REDIRECT: a read after a write stays tracked when the write's invalidation is delivered" {
+        set rd_inv [valkey_deferring_client]
+        $rd_inv client id
+        set inv_id [$rd_inv read]
+        $rd_inv subscribe __redis__:invalidate
+        $rd_inv read
+        set rd_reader [valkey_deferring_client]
+        $rd_reader client tracking on redirect $inv_id
+        assert_equal OK [$rd_reader read]
+        r set rd:k v1
+        $rd_reader get rd:k
+        assert_equal v1 [$rd_reader read]
+
+        r DEBUG reply-blocking-pause aof
+        # While paused, reads and writes from a synchronous client would wait.
+        set off0 [s master_repl_offset]
+        set w1 [valkey_deferring_client]
+        $w1 set rd:k v2
+        wait_for_condition 50 20 {[s master_repl_offset] > $off0} else {fail "write not applied"}
+        set off_a [s master_repl_offset]
+        # A later write the reader's reply also waits for.
+        set w2 [valkey_deferring_client]
+        $w2 set rd:other x
+        # The reader reads the new value, which tracks rd:k again.
+        $rd_reader multi
+        $rd_reader read
+        $rd_reader get rd:k
+        $rd_reader read
+        $rd_reader get rd:other
+        $rd_reader read
+        $rd_reader exec
+
+        # The first write is durable: its invalidation goes out.
+        r DEBUG reply-blocking-ack aof $off_a
+        assert_equal OK [$w1 read]
+        assert_equal {message __redis__:invalidate rd:k} [$rd_inv read]
+        r DEBUG reply-blocking-resume aof
+        assert_equal {v2 x} [$rd_reader read]
+
+        # The reader's second read is still tracked.
+        r set rd:k v3
+        assert_equal {message __redis__:invalidate rd:k} [$rd_inv read]
+        foreach c [list $w1 $w2 $rd_reader $rd_inv] { $c close }
+    }
+
+    test "FLUSHALL: a read after the flush stays tracked when the flush's invalidation is delivered" {
+        set rd_inv [valkey_deferring_client]
+        $rd_inv client id
+        set inv_id [$rd_inv read]
+        $rd_inv subscribe __redis__:invalidate
+        $rd_inv read
+        set rd_reader [valkey_deferring_client]
+        $rd_reader client tracking on redirect $inv_id
+        assert_equal OK [$rd_reader read]
+        r DEBUG reply-blocking-pause aof
+        set off0 [s master_repl_offset]
+        set w [valkey_deferring_client]
+        $w flushall
+        wait_for_condition 50 20 {[s master_repl_offset] > $off0} else {fail "flush not applied"}
+        set w2 [valkey_deferring_client]
+        $w2 set fl:k v
+        $rd_reader get fl:k
+        r DEBUG reply-blocking-resume aof
+        assert_equal OK [$w read]
+        assert_equal OK [$w2 read]
+        $w2 close
+        assert_equal v [$rd_reader read]
+        assert_equal {message __redis__:invalidate {}} [$rd_inv read]
+        r set fl:k v2
+        assert_equal {message __redis__:invalidate fl:k} [$rd_inv read]
+        foreach c [list $w $rd_reader $rd_inv] { $c close }
+    }
+}
+
+start_server {tags {"repl durability external:skip"} overrides {appendonly yes appendfsync always bio-aof-offload-enabled yes hz 1}} {
+    test "BCAST: the invalidation goes out with the writer's reply, not a loop later" {
+        set b [valkey_deferring_client]
+        $b hello 3
+        $b read
+        $b client tracking on bcast prefix bc:
+        $b read
+        r DEBUG reply-blocking-pause aof
+        set w [valkey_deferring_client]
+        $w set bc:k v
+        after 100
+        r DEBUG reply-blocking-resume aof
+        assert_equal OK [$w read]
+        # With hz 1, a broadcast left for the next beforeSleep() can wait ~1s.
+        set fd [$b channel]
+        fconfigure $fd -blocking 0
+        set got ""
+        set start [clock milliseconds]
+        while {[clock milliseconds] - $start < 300 && ![string match *bc:k* $got]} {
+            append got [read $fd]
+            after 5
+        }
+        fconfigure $fd -blocking 1
+        assert_match {*bc:k*} $got
+        $w close
+        $b close
+    }
+}
+
+start_server {tags {"repl durability external:skip"} overrides {appendonly yes appendfsync always bio-aof-offload-enabled yes notify-keyspace-events KEA busy-reply-threshold 10}} {
+    test "An allow-busy command during a busy script does not release the script's keyspace event" {
+        set sub [valkey_deferring_client]
+        $sub subscribe __keyspace@9__:ab:k
+        $sub read
+        r DEBUG reply-blocking-pause aof
+        set busy [valkey_deferring_client]
+        set off0 [s master_repl_offset]
+        $busy set ab:before x
+        wait_for_condition 50 20 {[s master_repl_offset] > $off0} else {fail "write not applied"}
+        set off_before [s master_repl_offset]
+        $busy eval {
+            redis.call('set', KEYS[1], 'v')
+            local t = redis.call('time')
+            while true do
+                local n = redis.call('time')
+                if (n[1] - t[1]) * 1000000 + (n[2] - t[2]) > 1000000 then break end
+            end
+            return 1
+        } 1 ab:k
+        wait_for_condition 100 20 {
+            [catch {r ping} e] == 1 && [string match {BUSY*} $e]
+        } else {
+            fail "script did not become busy"
+        }
+        # CLIENT ID is allowed while the script runs, and is finalized then.
+        set other [valkey_deferring_client]
+        $other client id
+        $other read
+        wait_for_condition 100 50 {[catch {r ping} e] == 0} else {fail "script did not finish"}
+        # Only the write before the script is durable: the script's event,
+        # which belongs to a later offset, must stay held.
+        r DEBUG reply-blocking-ack aof $off_before
+        assert_equal OK [$busy read]
+        set fd [$sub channel]
+        fconfigure $fd -blocking 0
+        set got ""
+        set start [clock milliseconds]
+        while {[clock milliseconds] - $start < 300} { append got [read $fd]; after 5 }
+        fconfigure $fd -blocking 1
+        assert_equal "" $got
+        r DEBUG reply-blocking-resume aof
+        assert_equal 1 [$busy read]
+        assert_equal {message __keyspace@9__:ab:k set} [$sub read]
+        foreach c [list $sub $busy $other] { $c close }
+    }
+}

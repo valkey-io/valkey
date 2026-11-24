@@ -1150,6 +1150,17 @@ void debugCommand(client *c) {
         } else {
             addReplyError(c, "No such reply-blocking provider");
         }
+    } else if (!strcasecmp(objectGetVal(c->argv[1]), "reply-blocking-ack") && c->argc == 4) {
+        long long offset;
+        if (strcasecmp(objectGetVal(c->argv[2]), "aof")) {
+            addReplyError(c, "No such reply-blocking provider");
+        } else if (getLongLongFromObjectOrReply(c, c->argv[3], &offset, NULL) == C_OK) {
+            if (ackPausedAofReplyBlocking(offset) == C_OK) {
+                addReply(c, shared.ok);
+            } else {
+                addReplyError(c, "The AOF provider is not paused");
+            }
+        }
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "force-free-primary-async") && c->argc == 3) {
         server.debug_force_free_primary_async = atoi(objectGetVal(c->argv[2]));
         addReply(c, shared.ok);

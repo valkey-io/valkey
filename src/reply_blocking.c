@@ -72,7 +72,10 @@ long long getAofDurableOffset(void) {
         return server.reply_blocking.previous_acked_offset;
     }
     if (server.reply_blocking.aof_paused) {
-        return server.reply_blocking.aof_paused_offset;
+        /* Paused: durable up to the frozen offset (raised by DEBUG
+         * reply-blocking-ack), but never past what is really fsynced. */
+        long long fsynced = aofAckedOffset();
+        return fsynced < server.reply_blocking.aof_paused_offset ? fsynced : server.reply_blocking.aof_paused_offset;
     }
     return aofAckedOffset();
 }
@@ -98,6 +101,16 @@ void pauseAofReplyBlocking(void) {
 /* Resume AOF reply-blocking progress (via DEBUG command).
  * After resuming, triggers a reply-blocking progress check to unblock any
  * clients that can now proceed. */
+/* While paused, acknowledge up to offset, so tests can release one write and
+ * keep a later one held. getAofDurableOffset() still caps it at what is
+ * really fsynced, so a write not yet on disk is released once it is. */
+int ackPausedAofReplyBlocking(long long offset) {
+    if (!server.reply_blocking.aof_paused) return C_ERR;
+    if (offset > server.reply_blocking.aof_paused_offset) server.reply_blocking.aof_paused_offset = offset;
+    notifyReplyBlockingProgress();
+    return C_OK;
+}
+
 void resumeAofReplyBlocking(void) {
     server.reply_blocking.aof_paused = false;
     // Trigger a reply-blocking check to unblock any clients that can now proceed
@@ -517,6 +530,11 @@ void unblockResponsesWithAckOffset(const reply_blocking_t *rb_state, const long 
     }
 
     executeDeferredTasksForAck(consensus_ack_offset);
+    /* Deferred key invalidations queue keys for BCAST clients, and the
+     * writers' replies were just released: send the BCAST messages now, not
+     * at the next beforeSleep(). Inside a command (e.g. DEBUG
+     * reply-blocking-resume) they wait for beforeSleep(), as usual. */
+    if (server.execution_nesting == 0) trackingBroadcastInvalidationMessages();
 }
 
 /*================================= Post-ack handlers ======================= */
@@ -819,8 +837,10 @@ void finalizeCommandReplyBlocking(client *c) {
         blockClientOnReplOffset(c, blocking_repl_offset);
     }
     finalizeMonitors(c, blocking_repl_offset);
-
-    certifyPendingDeferredTasks();
+    /* Deferred tasks are certified by postExecutionUnitOperations(), once the
+     * outermost execution unit has propagated. Certifying here would give a
+     * busy script's tasks the pre-script offset when an allow-busy command
+     * finishes during the yield. */
 }
 
 /*================================= Lifecycle =============================== */

@@ -79,10 +79,12 @@ static void executeKeyspaceNotifyTask(const taskWaitingAck *task) {
 
 // Create the key invalidation task.
 static taskWaitingAck *createKeyInvalidationTask(va_list ap) {
-    /* A key invalidation task has 2 arguments:
+    /* A key invalidation task has 4 arguments:
      * 1. client* which generated the modification on the key
-     * 2. serverObject* that is modified */
-    int argc = 2;
+     * 2. serverObject* that is modified
+     * 3. uint64_t* ids of the clients to notify (from trackingDetachKeyClients)
+     * 4. the number of ids */
+    int argc = 4;
     taskWaitingAck *task = zcalloc(sizeof(taskWaitingAck));
     task->argv = zmalloc(argc * sizeof(void *));
     for (int i = 0; i < argc; i++) {
@@ -125,6 +127,7 @@ static void destroyKeyInvalidationTask(void *ptr) {
         robj *key = (robj *)task->argv[1];
         decrRefCount(key);
     }
+    zfree(task->argv[2]);
     zfree(task->argv);
     zfree(task);
 }
@@ -138,15 +141,17 @@ static void destroyClientForKeyInvalidationTask(void *task_ptr) {
 
 // Execute the key invalidation task.
 static void executeKeyInvalidationTask(const taskWaitingAck *task) {
-    trackingInvalidateKey((client *)task->argv[0], (robj *)task->argv[1], 1);
+    trackingDeliverKeyInvalidation((client *)task->argv[0], (robj *)task->argv[1], (const uint64_t *)task->argv[2],
+                                   (size_t)(uintptr_t)task->argv[3]);
 }
 
 /*================================= Flush Invalidation Task ================== */
 
 // Create the flush invalidation task.
 static taskWaitingAck *createFlushInvalidationTask(va_list ap) {
-    // Flush invalidation task has the flush's async flag as argument
-    int argc = 1;
+    /* A flush invalidation task has 2 arguments: the ids of the tracking
+     * clients to notify (from trackingDetachAllClients) and their number. */
+    int argc = 2;
     taskWaitingAck *task = zcalloc(sizeof(taskWaitingAck));
     task->argv = zmalloc(argc * sizeof(void *));
     for (int i = 0; i < argc; i++) {
@@ -158,15 +163,14 @@ static taskWaitingAck *createFlushInvalidationTask(va_list ap) {
 // Destroy the flush invalidation task.
 static void destroyFlushInvalidationTask(void *ptr) {
     taskWaitingAck *task = (taskWaitingAck *)ptr;
+    zfree(task->argv[0]);
     zfree(task->argv);
     zfree(task);
 }
 
 // Execute the flush invalidation task.
 static void executeFlushInvalidationTask(const taskWaitingAck *task) {
-    /* Pass through the original flush's async flag, which decides whether the
-     * tracking table is freed in the background. */
-    trackingInvalidateKeysOnFlush((int)(intptr_t)task->argv[0]);
+    trackingDeliverFlushInvalidation((const uint64_t *)task->argv[0], (size_t)(uintptr_t)task->argv[1]);
 }
 
 /*================================= Default callback ========================= */
@@ -237,16 +241,30 @@ bool replyBlockingSignalModifiedKey(struct client *c, struct serverDb *db, struc
      * declare and writes that have no command at all. */
     trackModifiedKey(db, key);
 
-    // Defer key invalidation messages until the reply-blocking providers acknowledge.
-    return replyBlockingRegisterPostCommitTask(POST_COMMIT_KEY_INVALIDATION_TASK,
-                                               (void *)c, (void *)key);
+    /* Update the tracking table now, so a client that reads the key after
+     * this write stays tracked, and defer only the messages until the
+     * reply-blocking providers acknowledge the write. */
+    size_t count;
+    uint64_t *ids = trackingDetachKeyClients(key, &count);
+    if (!replyBlockingRegisterPostCommitTask(POST_COMMIT_KEY_INVALIDATION_TASK, (void *)c, (void *)key, (void *)ids,
+                                             (void *)(uintptr_t)count)) {
+        zfree(ids);
+    }
+    return true;
 }
 
 
 bool replyBlockingSignalFlushedDb(int async) {
-    // Defer flush invalidation messages until the reply-blocking providers acknowledge.
-    return replyBlockingRegisterPostCommitTask(POST_COMMIT_FLUSH_INVALIDATION_TASK,
-                                               (void *)(intptr_t)async);
+    if (!isPrimaryReplyBlockingEnabled()) return false;
+    /* Clear the tracking table now and defer only the messages until the
+     * reply-blocking providers acknowledge the flush. */
+    size_t count;
+    uint64_t *ids = trackingDetachAllClients(async, &count);
+    if (!replyBlockingRegisterPostCommitTask(POST_COMMIT_FLUSH_INVALIDATION_TASK, (void *)ids,
+                                             (void *)(uintptr_t)count)) {
+        zfree(ids);
+    }
+    return true;
 }
 
 /*================================= Task Execution =========================== */

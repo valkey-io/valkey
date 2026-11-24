@@ -51,10 +51,10 @@ AE <leader-id> <term> <prev-log-idx> <prev-log-term> <commit> <round> <count>
     With zero entries, serves as a heartbeat. <round> counts the leader's
     AE broadcasts, for ReadIndex (see UNCHANGED).
 
-AE_ACK <term> <success> <last-log-index> <round> <repl-offset>
+AE_ACK <term> <success> <verified-log-index> <round> <repl-offset>
     Response to AE. Reports whether entries were accepted, the
-    follower's last log index for matchIndex tracking, the last AE round
-    it got from this leader, and the node's replication offset.
+    follower's last verified log index for matchIndex tracking, the last
+    AE round it got from this leader, and the node's replication offset.
 
 INSTALL_SNAPSHOT <leader-id> <term> <last-index> <last-term>
     Sent by the leader instead of AE to a follower that needs entries

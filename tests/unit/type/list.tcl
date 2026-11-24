@@ -1134,6 +1134,7 @@ foreach {pop} {BLPOP BLMPOP_LEFT} {
         r rpush k hello
         r select 9
         set rd [valkey_deferring_client]
+        test_defer [list $rd close]
         $rd brpop k 5
         wait_for_blocked_clients_count 1
         r swapdb 1 9
@@ -1148,6 +1149,7 @@ foreach {pop} {BLPOP BLMPOP_LEFT} {
         r rpush k hello
         r pexpire k 100
         set rd [valkey_deferring_client]
+        test_defer [list $rd close]
         $rd deferred 0
         $rd select 9
         set id [$rd client id]
@@ -1194,6 +1196,7 @@ foreach {pop} {BLPOP BLMPOP_LEFT} {
         r debug set-active-expire 0
 
         set rd [valkey_deferring_client]
+        test_defer [list $rd close]
         $rd client id
         set id [$rd read]
         $rd brpop k 0

@@ -38,6 +38,7 @@
 #include "server.h"
 #include "hotkeys.h"
 #include "cluster.h"
+#include "cluster_migrateslots.h"
 #include "cluster_bus.h"
 #include "cluster_state.h"
 #include "cluster_link.h"
@@ -212,6 +213,7 @@ typedef struct {
     unsigned int todo_send_ae_ack : 1;
     unsigned int todo_send_vote_response : 1;
     unsigned int todo_broadcast_vote_request : 1;
+    unsigned int slot_change_pending : 1;
     uint64_t persist_log_from;     /* First index to persist in next batch */
     uint64_t last_rewrite_applied; /* last_applied at last full rewrite */
 
@@ -226,7 +228,9 @@ typedef struct {
     int votes_received;
     int pre_votes_received;
     mstime_t election_timeout;            /* Randomized timeout */
-    mstime_t last_heartbeat;              /* Last time we heard from leader */
+    mstime_t election_timer_start;        /* Follower or candidate */
+    mstime_t last_heartbeat_sent;         /* Leader: last AE broadcast */
+    mstime_t last_leader_contact;         /* Last AE or snapshot from a leader, for the lease */
     mstime_t pre_vote_started;            /* Last time we started a pre-vote round */
     mstime_t last_repl_offsets_broadcast; /* Last REPL_OFFSETS broadcast */
     mstime_t joiner_since;                /* When we became a joiner (for timeout) */
@@ -446,6 +450,7 @@ static clusterNode *clusterRaftSelectTransferTarget(void);
 static int clusterRaftRequestLeaderTransfer(void);
 static void clusterRaftMaybeSendTimeoutNow(void);
 static void raftSetVerifiedIndex(uint64_t msg_term, uint64_t verified_index, bool force);
+static int clusterRaftLeaderHasFreshQuorum(mstime_t now);
 
 static void clusterRaftRandomizeElectionTimeout(void) {
     mstime_t base = server.cluster_node_timeout;
@@ -455,6 +460,47 @@ static void clusterRaftRandomizeElectionTimeout(void) {
 
 static int clusterRaftQuorum(void) {
     return server.cluster->size / 2 + 1;
+}
+
+static bool clusterRaftIsSlotChangePending(void) {
+    clusterRaftState *rs = RAFT_STATE();
+    if (!rs->slot_change_pending && clusterIsAnySlotExportFailoverGranted())
+        rs->slot_change_pending = 1;
+    return rs->slot_change_pending;
+}
+
+static int clusterRaftLogFullyApplied(void) {
+    clusterRaftState *rs = RAFT_STATE();
+    return rs->last_applied >= raftLogLastIndex();
+}
+
+/* Track the protocol hold; the migration code owns the actual write pause.
+ * Export timeout or cancellation must not clear an unresolved handoff.
+ * Arm only at FAILOVER-GRANTED: earlier pauses cannot be followed by a
+ * proposal, and a sibling still snapshotting is not a granted handoff. */
+static void clusterRaftSyncSlotChangePending(void) {
+    clusterRaftState *rs = RAFT_STATE();
+    if (!rs->slot_change_pending && !getPausedActionsWithPurpose(PAUSE_DURING_SLOT_MIGRATION)) return;
+    if (!rs->slot_change_pending && clusterIsAnySlotExportFailoverGranted()) rs->slot_change_pending = 1;
+    if (!rs->slot_change_pending) return;
+    if (!clusterIsAnySlotExportFailoverGranted() && rs->role == RAFT_ROLE_LEADER && clusterRaftLogFullyApplied() &&
+        clusterRaftLeaderHasFreshQuorum(monotonicMs())) {
+        rs->slot_change_pending = 0;
+    }
+}
+
+static void clusterRaftOnSlotOwnershipApplied(void) {
+    clusterUpdateSlotExportsOnOwnershipChange();
+    clusterUpdateSlotImportsOnOwnershipChange();
+    if (RAFT_STATE()->slot_change_pending && !clusterIsAnySlotExportFailoverGranted() && clusterRaftLogFullyApplied())
+        RAFT_STATE()->slot_change_pending = 0;
+}
+
+static void clusterRaftReleaseSlotChangePendingIfCaughtUp(void) {
+    clusterRaftState *rs = RAFT_STATE();
+    if (!rs->slot_change_pending || clusterIsAnySlotExportFailoverGranted()) return;
+    if (!clusterRaftLogFullyApplied()) return;
+    rs->slot_change_pending = 0;
 }
 
 /* True if there are any nodes other than myself without the JOINING flag. */
@@ -496,7 +542,7 @@ static void clusterRaftStepDown(mstime_t now, const char *reason) {
     memset(rs->voted_for, 0, CLUSTER_NAMELEN);
     memset(rs->leader, 0, CLUSTER_NAMELEN);
     clusterRaftRandomizeElectionTimeout();
-    rs->last_heartbeat = now;
+    rs->election_timer_start = now;
     rs->todo_save_config = 1;
     if (rs->role != old_role)
         serverLog(LL_NOTICE, "Stepping down: %s.", reason);
@@ -536,7 +582,7 @@ static void clusterRaftSingletonStepDown(void) {
     memset(rs->leader, 0, CLUSTER_NAMELEN);
     memset(rs->voted_for, 0, CLUSTER_NAMELEN);
     clusterRaftRandomizeElectionTimeout();
-    rs->last_heartbeat = monotonicMs();
+    rs->election_timer_start = monotonicMs();
     /* Clear singleton log — the leader's log is authoritative. */
     raftLogTruncateFrom(1);
     rs->last_applied = 0;
@@ -723,6 +769,7 @@ static int clusterRaftProcessHi(clusterLink *link, int argc, sds *argv) {
         } else if (sender != link->node) {
             clusterNode *handshake = link->node;
             link->node = sender;
+            if (sender->link) freeClusterLink(sender->link);
             sender->link = link;
             handshake->link = NULL;
             clusterDelNode(handshake);
@@ -1816,6 +1863,11 @@ static void raftLogApply(raftLogEntry *e) {
 
     /* Check pending proposals for a match and remove it. */
     clusterRaftCompletePendingProposal(e->type, e->data, entry_result);
+
+    if (e->type == RAFT_ENTRY_SLOT_CHANGE && entry_result == RAFT_RESULT_OK) {
+        /* Complete our import callback before revalidating ownership. */
+        clusterRaftOnSlotOwnershipApplied();
+    }
 }
 
 /* Apply all committed but unapplied log entries. */
@@ -1994,7 +2046,8 @@ static int clusterRaftProcessAppendEntries(clusterLink *link, int argc, sds *arg
 
     /* Accept heartbeat. */
     if (rs->role != RAFT_ROLE_JOINER && rs->role != RAFT_ROLE_LEARNER) rs->role = RAFT_ROLE_FOLLOWER;
-    rs->last_heartbeat = monotonicMs();
+    rs->election_timer_start = monotonicMs();
+    rs->last_leader_contact = rs->election_timer_start;
     clusterRaftSetLeader(argv[1]);
 
     /* Log consistency check: verify prev_log_index/term match. Entries have
@@ -2050,6 +2103,7 @@ static int clusterRaftProcessAppendEntries(clusterLink *link, int argc, sds *arg
         if (rs->commit_index > raftLogLastIndex()) rs->commit_index = raftLogLastIndex();
     }
     raftApplyCommitted();
+    clusterRaftReleaseSlotChangePendingIfCaughtUp();
 
     /* Forgotten: this link is unbound. Do not ACK. */
     if (!link->node) {
@@ -2226,7 +2280,8 @@ static int clusterRaftProcessInstallSnapshot(clusterLink *link, int argc, sds *a
     char old_shard_id[CLUSTER_NAMELEN];
     memcpy(old_shard_id, myself->shard_id, CLUSTER_NAMELEN);
     if (rs->role != RAFT_ROLE_JOINER && rs->role != RAFT_ROLE_LEARNER) rs->role = RAFT_ROLE_FOLLOWER;
-    rs->last_heartbeat = monotonicMs();
+    rs->election_timer_start = monotonicMs();
+    rs->last_leader_contact = rs->election_timer_start;
     clusterRaftSetLeader(argv[1]);
 
     /* If we're already past the snapshot, ignore.
@@ -2431,6 +2486,7 @@ static int clusterRaftProcessInstallSnapshot(clusterLink *link, int argc, sds *a
     rs->todo_update_replication = 1;
     rs->todo_update_slot_coverage = 1;
     clearCachedClusterSlotsResponse();
+    clusterRaftOnSlotOwnershipApplied();
     /* If our primary is failed, schedule a failover, as applying its
      * NODE_FAIL would have done. */
     if (nodeIsReplica(myself) && myself->replicaof && nodeFailed(myself->replicaof) && !nodeCantFailover(myself)) {
@@ -2484,14 +2540,18 @@ static int clusterRaftCanGrantVote(clusterRaftState *rs, uint64_t candidate_last
     if (rs->role == RAFT_ROLE_JOINER) return 0;
     if (nodeIsLearner(myself)) return 0;
 
-    /* Deny vote if we recently heard from the leader (leader lease).
-     * Use the base node-timeout, not the randomized election timeout —
-     * the randomization is for staggering elections, not for lease duration. */
+    /* Deny vote if we are the leader or recently heard from it (leader
+     * lease, Raft thesis 4.2.3). Only contact with the leader counts, not
+     * our own election timer, which also restarts on startup and after a
+     * pre-vote round. Use the base node-timeout, not the randomized election
+     * timeout — the randomization is for staggering elections, not for lease
+     * duration. */
+    if (rs->role == RAFT_ROLE_LEADER) return 0;
     mstime_t now = monotonicMs();
     mstime_t lease = server.cluster_node_timeout;
     if (lease < 1000) lease = 1000;
-    if (rs->leader[0] != '\0' &&
-        now - rs->last_heartbeat < lease) {
+    if (rs->leader[0] != '\0' && rs->last_leader_contact != 0 &&
+        now - rs->last_leader_contact < lease) {
         return 0;
     }
 
@@ -2529,6 +2589,9 @@ static int clusterRaftProcessPreVoteRequest(clusterLink *link, int argc, sds *ar
 static int clusterRaftProcessPreVoteResponse(clusterLink *link, int argc, sds *argv) {
     /* argv: PRE_VOTE <term> <granted> */
     if (argc < 3) return 1;
+
+    /* Any reply shows that the peer is alive, see clusterRaftBecomeLeader(). */
+    if (link->node) RAFT_NODE(link->node)->last_ack_time = monotonicMs();
 
     clusterRaftState *rs = RAFT_STATE();
     uint64_t msg_term = strtoull(argv[1], NULL, 10);
@@ -2577,7 +2640,7 @@ static int clusterRaftProcessRequestVote(clusterLink *link, int argc, sds *argv)
                    clusterRaftCanGrantVote(rs, candidate_last_index, candidate_last_term)) {
             granted = 1;
             memcpy(rs->voted_for, argv[1], CLUSTER_NAMELEN);
-            rs->last_heartbeat = monotonicMs(); /* Reset election timer */
+            rs->election_timer_start = monotonicMs(); /* Reset election timer */
             rs->todo_save_config = 1;
             serverLog(LL_NOTICE, "Voted for %.40s in term %llu.", argv[1], (unsigned long long)msg_term);
         }
@@ -2621,9 +2684,13 @@ static void clusterRaftBecomeLeader(void) {
         RAFT_NODE(peer)->pending_fail_change = 0;
         /* For the old leader, backdate last_ack_time to when we last
          * heard from it, so failure detection kicks in faster. This
-         * matters if the old leader is also a primary. */
+         * matters if the old leader is also a primary. Its vote replies
+         * count too: if it voted for us, it's alive. 0 means never
+         * checked, so use now if we haven't heard from it. */
         if (memcmp(peer->name, old_leader, CLUSTER_NAMELEN) == 0) {
-            RAFT_NODE(peer)->last_ack_time = rs->last_heartbeat;
+            mstime_t contact = rs->last_leader_contact;
+            if (RAFT_NODE(peer)->last_ack_time > contact) contact = RAFT_NODE(peer)->last_ack_time;
+            RAFT_NODE(peer)->last_ack_time = contact ? contact : monotonicMs();
         } else {
             RAFT_NODE(peer)->last_ack_time = monotonicMs();
         }
@@ -2634,12 +2701,16 @@ static void clusterRaftBecomeLeader(void) {
     uint64_t noop_idx = raftLogLastIndex() + 1;
     raftLogAppend(raftLogCreate(rs->current_term, noop_idx, RAFT_ENTRY_NOOP, sdsempty()));
     /* Immediate heartbeat to assert leadership. */
+    rs->last_heartbeat_sent = monotonicMs();
     clusterRaftBroadcastAppendEntries();
 }
 
 static int clusterRaftProcessRequestVoteResponse(clusterLink *link, int argc, sds *argv) {
     /* argv: VOTE <term> <granted> */
     if (argc < 3) return 1;
+
+    /* Any reply shows that the peer is alive, see clusterRaftBecomeLeader(). */
+    if (link->node) RAFT_NODE(link->node)->last_ack_time = monotonicMs();
 
     clusterRaftState *rs = RAFT_STATE();
     uint64_t msg_term = strtoull(argv[1], NULL, 10);
@@ -2695,7 +2766,7 @@ static void clusterRaftStartElection(void) {
     memcpy(rs->voted_for, myself->name, CLUSTER_NAMELEN);
     rs->votes_received = 1; /* Vote for self */
     clusterRaftRandomizeElectionTimeout();
-    rs->last_heartbeat = monotonicMs();
+    rs->election_timer_start = monotonicMs();
     rs->todo_save_config = 1;
     /* Defer sending RequestVote until after the term bump and self-vote
      * are persisted. Otherwise a crash could allow double-voting. */
@@ -2719,7 +2790,7 @@ static void clusterRaftInit(void) {
     server.cluster->protocol_data = rs;
     rs->role = RAFT_ROLE_FOLLOWER;
     clusterRaftRandomizeElectionTimeout();
-    rs->last_heartbeat = monotonicMs();
+    rs->election_timer_start = monotonicMs();
     rs->pending_proposals = listCreate();
     rs->pending_meets = listCreate();
     rs->deferred_meets = listCreate();
@@ -2943,6 +3014,8 @@ static void clusterRaftCron(void) {
     mstime_t now = monotonicMs();
 
     clusterRaftAssertLearnerRole();
+    /* Synchronize the handoff hold after slot-migration timeout handling. */
+    clusterRaftSyncSlotChangePending();
 
     clusterRaftReapJoiningStubs();
 
@@ -2990,7 +3063,7 @@ static void clusterRaftCron(void) {
         /* Follower/candidate: check election timeout. */
         if (nodeIsVoter(myself) &&
             (rs->role == RAFT_ROLE_FOLLOWER || rs->role == RAFT_ROLE_CANDIDATE) &&
-            now - rs->last_heartbeat > rs->election_timeout) {
+            now - rs->election_timer_start > rs->election_timeout) {
             clusterRaftStartPreVote();
         }
 
@@ -2998,7 +3071,7 @@ static void clusterRaftCron(void) {
             now - rs->pre_vote_started > rs->election_timeout) {
             rs->role = RAFT_ROLE_FOLLOWER;
             clusterRaftRandomizeElectionTimeout();
-            rs->last_heartbeat = now;
+            rs->election_timer_start = now;
         }
 
         if (rs->role == RAFT_ROLE_LEADER &&
@@ -3061,8 +3134,8 @@ static void clusterRaftCron(void) {
             /* Send periodic heartbeats. */
             mstime_t heartbeat_interval = rs->election_timeout / 10;
             if (heartbeat_interval < 100) heartbeat_interval = 100;
-            if (now - rs->last_heartbeat > heartbeat_interval) {
-                rs->last_heartbeat = now;
+            if (now - rs->last_heartbeat_sent > heartbeat_interval) {
+                rs->last_heartbeat_sent = now;
                 clusterRaftBroadcastAppendEntries();
             }
 
@@ -3163,6 +3236,7 @@ static void clusterRaftCheckSlotCoverage(void) {
 static void clusterRaftBeforeSleep(bool blocked) {
     UNUSED(blocked);
     clusterRaftState *rs = RAFT_STATE();
+    clusterRaftSyncSlotChangePending();
 
     if (rs->todo_connect_nodes) {
         rs->todo_connect_nodes = 0;
@@ -3563,16 +3637,22 @@ static void clusterRaftUnblockMeet(clusterNode *node) {
     sdsfree(addr);
 }
 
+/* The AEs sent to a follower on its outbound link are lost with it, so resend
+ * from its last acknowledged entry. Done when the link is freed, since a new
+ * link may take long to connect, e.g. a TLS handshake with a paused process. */
+static void clusterRaftOnLinkFree(struct clusterLink *link) {
+    if (link->node->link != link) return;
+    clusterNodeRaftData *rd = RAFT_NODE(link->node);
+    if (rd->replicating) {
+        rd->replicating = 0;
+        rd->next_index = rd->match_index + 1;
+    }
+}
+
 static void clusterRaftPostConnect(struct clusterLink *link) {
     if (myself->ip[0] == '\0' && server.cluster_announce_ip == NULL) {
         connAddrSockName(link->conn, myself->ip, sizeof(myself->ip), NULL);
         serverLog(LL_NOTICE, "IP address for this node updated to %s", myself->ip);
-    }
-    /* AEs queued on the old link are lost. */
-    clusterNodeRaftData *rd = link->node ? RAFT_NODE(link->node) : NULL;
-    if (rd && rd->replicating) {
-        rd->replicating = 0;
-        rd->next_index = rd->match_index + 1;
     }
     clusterRaftSendGreeting(link, "HELLO");
     if (link->node && nodeInHandshake(link->node)) {
@@ -4217,9 +4297,10 @@ static RaftProposalResult clusterRaftApplySlotChange(sds data, int validate_only
         for (int j = start; j <= end; j++) {
             clusterNode *old_owner = server.cluster->slots[j];
             if (old_owner == info.target_node) continue;
-            clusterRaftUpdateLocalSlotState(j, old_owner, info.target_node);
             if (old_owner) clusterDelSlot(j);
             if (info.target_node) clusterAddSlot(info.target_node, j);
+            /* Publish ownership before cleanup so its DELs are not exported. */
+            clusterRaftUpdateLocalSlotState(j, old_owner, info.target_node);
         }
     }
 
@@ -4939,7 +5020,8 @@ static int clusterRaftSpecialCommand(client *c) {
         addReply(c, shared.ok);
         return 1;
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "bumpepoch") && c->argc == 2) {
-        addReply(c, shared.ok);
+        /* No config epochs in Raft. Reply like gossip for tools and tests. */
+        addReplyStatusFormat(c, "BUMPED %llu", (unsigned long long)clusterGetShardEpoch(myself->shard_id));
         return 1;
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "addvoter") && c->argc == 3) {
         void *h = blockClientAsync(c);
@@ -4981,6 +5063,7 @@ clusterBusType clusterRaftBus = {
     .validateMessageHeader = clusterRaftValidateMessageHeader,
     .processMessage = clusterRaftProcessMessage,
     .postConnect = clusterRaftPostConnect,
+    .onLinkFree = clusterRaftOnLinkFree,
     .publishMessageLengthValid = clusterRaftPublishMessageLengthValid,
     .propagatePublish = clusterRaftPropagatePublish,
     .sendModuleMessage = clusterRaftSendModuleMessage,
@@ -5001,6 +5084,7 @@ clusterBusType clusterRaftBus = {
     .initNodeData = clusterRaftInitNodeData,
     .freeNodeData = clusterRaftFreeNodeData,
     .slotChange = clusterRaftSlotChange,
+    .isSlotChangePending = clusterRaftIsSlotChangePending,
     .cancelManualFailover = clusterRaftCancelManualFailover,
     .cancelAutomaticFailover = clusterRaftCancelAutomaticFailover,
     .forgetNode = clusterRaftForgetNode,

@@ -5,6 +5,7 @@
  */
 
 #include "cluster_migrateslots.h"
+#include "cluster_bus.h"
 #include "bio.h"
 #include "io_threads.h"
 #include "module.h"
@@ -121,10 +122,10 @@ static void finishSlotMigrationJob(slotMigrationJob *job,
                                    char *message);
 static void freeSlotMigrationJob(void *o);
 static sds generateSlotMigrationJobDescription(slotMigrationJob *job, clusterNode *other_node);
-static void slotExportTryUnpause(void);
 static slotMigrationJob *clusterLookupMigrationJob(sds name);
 static sds generateSyncSlotsEstablishCommand(slotMigrationJob *job);
 static void clusterCleanupSlotMigrationLog(size_t max_len);
+static void slotExportTryUnpause(void);
 
 /* Create an empty list of slot ranges. */
 list *createSlotRangeList(void) {
@@ -990,7 +991,7 @@ void clusterUpdateSlotImportsOnOwnershipChange(void) {
                 /* Close the client, but first unlink this migration to prevent it from being
                  * treated as a slot migration client from here on (e.g. preventing proxying
                  * of any pending commands to our old replicas). */
-                job->client->slot_migration_job = NULL;
+                if (job->client) job->client->slot_migration_job = NULL;
                 resetSlotMigrationJob(job);
             }
             continue;
@@ -998,6 +999,8 @@ void clusterUpdateSlotImportsOnOwnershipChange(void) {
         if (strlen(job->source_node_name) == 0) continue;
         clusterNode *n = getClusterNodeBySlotRanges(job->slot_ranges, NULL);
         if (n && !memcmp(n->name, job->source_node_name, CLUSTER_NAMELEN)) continue;
+        /* A snapshot can publish our takeover before its proposal callback runs. */
+        if (n == server.cluster->myself && job->state == SLOT_IMPORT_AWAITING_CLUSTER_COMMIT) continue;
         if (n == server.cluster->myself) {
             finishSlotMigrationJob(job, SLOT_MIGRATION_JOB_FAILED,
                                    "Slots were unexpectedly assigned to myself "
@@ -1651,15 +1654,17 @@ void clusterCommandSyncSlotsRequestFailover(client *c) {
         return;
     }
 
-    /* Renew our pause to help ensure we don't unpause before the gossip is
-     * propagated. If the existing pause is longer than this, it will be
-     * honored */
+    /* Allow time for ownership propagation. A protocol hold may outlive the
+     * job's timeout, so keep mf_end separate from the actual write pause. */
     mstime_t prop_deadline = mstime() + CLUSTER_OPERATION_TIMEOUT;
     if (c->slot_migration_job->mf_end < prop_deadline) {
         c->slot_migration_job->mf_end = prop_deadline;
-        pauseActions(PAUSE_DURING_SLOT_MIGRATION, prop_deadline,
-                     PAUSE_ACTIONS_CLIENT_WRITE_SET);
     }
+    mstime_t pause_end = clusterCurrentBus->isSlotChangePending
+                             ? LLONG_MAX
+                             : c->slot_migration_job->mf_end;
+    pauseActions(PAUSE_DURING_SLOT_MIGRATION, pause_end,
+                 PAUSE_ACTIONS_CLIENT_WRITE_SET);
 
     sendSyncSlotsMessage(c->slot_migration_job, "FAILOVER-GRANTED");
     updateSlotMigrationJobState(c->slot_migration_job,
@@ -1861,6 +1866,10 @@ void clusterFeedSlotExportJobs(int dbid, robj **argv, int argc, int slot) {
         return;
     }
 
+    /* After losing the slot, cleanup writes must not reach the target,
+     * which may still be consuming the export stream. */
+    if (server.cluster->slots[slot] != server.cluster->myself) return;
+
     listIter li;
     listNode *ln;
     listRewind(server.cluster->slot_migration_jobs, &li);
@@ -1927,12 +1936,10 @@ int checkSlotExportOwnership(slotMigrationJob *job, bool *migration_done) {
 }
 
 /* Called within topology updates to update any slot exports immediately
- * when the ownership changes. Will unpause if all paused slot migration jobs
- * are now done. */
+ * when ownership changes, then try to release the write pause. */
 void clusterUpdateSlotExportsOnOwnershipChange(void) {
     listNode *ln;
     listIter li;
-    int paused = 0;
     listRewind(server.cluster->slot_migration_jobs, &li);
     while ((ln = listNext(&li))) {
         slotMigrationJob *job = (slotMigrationJob *)ln->value;
@@ -1944,13 +1951,8 @@ void clusterUpdateSlotExportsOnOwnershipChange(void) {
         } else if (migration_done) {
             finishSlotMigrationJob(job, SLOT_MIGRATION_JOB_SUCCESS, NULL);
         }
-        if (job->mf_end) {
-            paused++;
-        }
     }
-    if (!paused && getPausedActionsWithPurpose(PAUSE_DURING_SLOT_MIGRATION)) {
-        unpauseActions(PAUSE_DURING_SLOT_MIGRATION);
-    }
+    slotExportTryUnpause();
 }
 
 bool clusterIsAnySlotExporting(void) {
@@ -1965,6 +1967,22 @@ bool clusterIsAnySlotExporting(void) {
         if (!isSlotMigrationJobFinished(job)) {
             return true;
         }
+    }
+    return false;
+}
+
+/* True if any in-progress export has granted failover to the target. */
+bool clusterIsAnySlotExportFailoverGranted(void) {
+    if (!server.cluster_enabled || !server.cluster) return false;
+    if (!server.cluster->slot_migration_jobs) return false;
+    listNode *ln;
+    listIter li;
+    listRewind(server.cluster->slot_migration_jobs, &li);
+    while ((ln = listNext(&li)) != NULL) {
+        slotMigrationJob *job = ln->value;
+        if (job->type != SLOT_MIGRATION_EXPORT) continue;
+        if (!isSlotMigrationJobInProgress(job)) continue;
+        if (job->state == SLOT_EXPORT_FAILOVER_GRANTED) return true;
     }
     return false;
 }
@@ -2434,9 +2452,12 @@ void clusterHandleSlotMigrationClientClose(slotMigrationJob *job) {
     /* If we have granted failover, the failover may have happened, but we don't
      * know. We keep the slot export around so that we remain paused until we
      * find out about the takeover (or until the pause times out).
+     * An import awaiting cluster commit must also wait for its proposal callback
+     * before deciding whether its imported keys should be cleaned up.
      *
      * Otherwise, we can mark it failed. */
-    if (job->state != SLOT_EXPORT_FAILOVER_GRANTED) {
+    if (job->state != SLOT_EXPORT_FAILOVER_GRANTED &&
+        job->state != SLOT_IMPORT_AWAITING_CLUSTER_COMMIT) {
         if (job->type == SLOT_MIGRATION_EXPORT) {
             finishSlotMigrationJob(job, SLOT_MIGRATION_JOB_FAILED,
                                    "Connection lost to target. Check CLUSTER "
@@ -2473,7 +2494,7 @@ void finishSlotMigrationJob(slotMigrationJob *job,
                             char *message) {
     updateSlotMigrationJobStatusMessage(job, message);
     if (job->type == SLOT_MIGRATION_EXPORT) {
-        /* If we finish the export, we should not remain paused */
+        /* This job no longer needs a pause. */
         job->mf_end = 0;
         slotExportTryUnpause();
     }
@@ -2640,6 +2661,7 @@ bool canSlotMigrationJobSendAck(slotMigrationJob *job) {
            job->state != SLOT_EXPORT_READ_AUTH_RESPONSE &&
            job->state != SLOT_EXPORT_SEND_ESTABLISH &&
            job->state != SLOT_EXPORT_READ_ESTABLISH_RESPONSE &&
+           job->state != SLOT_IMPORT_AWAITING_CLUSTER_COMMIT &&
            job->state != SLOT_IMPORT_OCCURRING_ON_PRIMARY;
 }
 
@@ -2652,10 +2674,11 @@ void clusterSlotMigrationCron(void) {
     while ((ln = listNext(&li)) != NULL) {
         job = ln->value;
 
-        /* Note that after granting failover, we no longer care about the
-         * connection timeout, since we will use pause timeout. */
+        /* Granted exports use the pause timeout. Imports awaiting cluster
+         * commit use the proposal callback, even if the connection is lost. */
         if (isSlotMigrationJobInProgress(job) &&
             job->state != SLOT_EXPORT_FAILOVER_GRANTED &&
+            job->state != SLOT_IMPORT_AWAITING_CLUSTER_COMMIT &&
             job->state != SLOT_IMPORT_OCCURRING_ON_PRIMARY) {
             serverAssert(job->type == SLOT_MIGRATION_EXPORT || job->client);
             /* For imports, last interaction will be set to the last
@@ -2698,8 +2721,10 @@ void clusterSlotMigrationCron(void) {
     slotExportTryUnpause();
 }
 
-void slotExportTryUnpause(void) {
+static void slotExportTryUnpause(void) {
     if (getPausedActionsWithPurpose(PAUSE_DURING_SLOT_MIGRATION) == 0) return;
+    if (clusterCurrentBus->isSlotChangePending &&
+        clusterCurrentBus->isSlotChangePending()) return;
     listNode *ln;
     listIter li;
     listRewind(server.cluster->slot_migration_jobs, &li);

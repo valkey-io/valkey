@@ -416,6 +416,7 @@ start_server {tags {"tracking network logreqres:skip"}} {
 
     test {BCAST with prefix collisions throw errors} {
         set r [valkey_client] 
+        test_defer [list $r close]
         catch {$r CLIENT TRACKING ON BCAST PREFIX FOOBAR PREFIX FOO} output
         assert_match {ERR Prefix 'FOOBAR'*'FOO'*} $output
 
@@ -1129,6 +1130,7 @@ start_server {tags {"tracking network"}} {
 
     test {Coverage: Basic CLIENT CACHING} {
         set rd_redirection [valkey_deferring_client]
+        test_defer [list $rd_redirection close]
         $rd_redirection client id
         set redir_id [$rd_redirection read]
         assert_equal {OK} [r CLIENT TRACKING on OPTIN REDIRECT $redir_id]

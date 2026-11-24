@@ -217,6 +217,8 @@ long long getAofDurableOffset(void);
 void pauseAofReplyBlocking(void);
 void resumeAofReplyBlocking(void);
 int ackPausedAofReplyBlocking(long long offset);
+void replyBlockingBeforeTimeoutReply(client *c);
+void replyBlockingAfterTimeoutReply(client *c);
 bool isClientReplyBufferLimited(client *c);
 bool isMonitorOutputHeld(const client *c);
 void replyBlockingBeforeWrittenOutputFreed(client *c, struct listNode *reply_block);

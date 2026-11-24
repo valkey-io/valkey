@@ -463,6 +463,35 @@ static inline int isCommandReplicatedToMonitors(void) {
     return listLength(server.monitors) && !server.loading;
 }
 
+/* The timeout reply of a command blocked on keys (BLPOP and friends) is added
+ * outside any command, when the client times out or gets CLIENT UNBLOCK. It
+ * says the keys are empty, so hold it until the writes that left them so are
+ * durable: record the position before the reply, then hold it at the highest
+ * not-yet-durable offset of the keys and their databases. */
+void replyBlockingBeforeTimeoutReply(client *c) {
+    if (!isPrimaryReplyBlockingEnabled() || c->flag.fake) return;
+    trackCommandPreExecutionPosition(c);
+}
+
+void replyBlockingAfterTimeoutReply(client *c) {
+    if (!c->reply_blocking_state.offset.recorded) return;
+    const long long acked = server.reply_blocking.previous_acked_offset;
+    serverDb *db = c->db;
+    long long offset = db->dirty_repl_offset > acked ? db->dirty_repl_offset : -1;
+    if (hashtableSize(db->uncommitted_keys) > 0) {
+        dictIterator *di = dictGetIterator(c->bstate->keys);
+        dictEntry *de;
+        while ((de = dictNext(di)) != NULL) {
+            robj *key = dictGetKey(de);
+            long long key_offset = getUncommittedKeyOffset(objectGetVal(key), db, acked);
+            if (key_offset > offset) offset = key_offset;
+        }
+        dictReleaseIterator(di);
+    }
+    if (offset > server.primary_repl_offset) offset = server.primary_repl_offset;
+    blockClientOnReplOffset(c, offset);
+}
+
 /* Snapshot the COB tail just before a parked deferred reply is committed, so the
  * durability boundary lands on the bytes about to be appended. Snapshotting here
  * (rather than reusing the pre-execution snapshot) keeps the raw reply-list pointer

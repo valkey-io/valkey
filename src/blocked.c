@@ -308,7 +308,11 @@ int blockedClientMayTimeout(client *c) {
  * unblockClient() will be called with the same client as argument. */
 void replyToBlockedClientTimedOut(client *c) {
     if (c->bstate->btype == BLOCKED_LIST || c->bstate->btype == BLOCKED_ZSET || c->bstate->btype == BLOCKED_STREAM) {
+        /* The empty reply reports what the client saw on its keys; hold it
+         * until the writes that left them empty are durable. */
+        replyBlockingBeforeTimeoutReply(c);
         addReplyNullArray(c);
+        replyBlockingAfterTimeoutReply(c);
         updateStatsOnUnblock(c, 0, 0, 0);
     } else if (c->bstate->btype == BLOCKED_WAIT) {
         if (c->cmd->proc == waitCommand) {

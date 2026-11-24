@@ -2950,3 +2950,34 @@ start_server {tags {"repl durability external:skip"} overrides {appendonly yes a
         foreach c [list $sub $busy $other] { $c close }
     }
 }
+
+start_server {tags {"repl durability external:skip"} overrides {appendonly yes appendfsync always bio-aof-offload-enabled yes}} {
+    foreach how {timeout unblock} {
+        test "A blocking pop ended by $how on a key emptied by a non-durable pop is held" {
+            r del bp:list
+            r rpush bp:list a
+            r DEBUG reply-blocking-pause aof
+            # Empties the list; not durable yet.
+            set w [valkey_deferring_client]
+            $w lpop bp:list
+            set rd [valkey_deferring_client]
+            $rd client id
+            set id [$rd read]
+            $rd blpop bp:list [expr {$how eq {timeout} ? 0.2 : 0}]
+            wait_for_blocked_clients_count 1
+            if {$how eq {unblock}} { r client unblock $id timeout }
+            wait_for_blocked_clients_count 0
+            after 200
+            set fd [$rd channel]
+            fconfigure $fd -blocking 0
+            set got [read $fd]
+            fconfigure $fd -blocking 1
+            assert_equal "" $got
+            r DEBUG reply-blocking-resume aof
+            assert_equal a [$w read]
+            assert_equal {} [$rd read]
+            $w close
+            $rd close
+        }
+    }
+}

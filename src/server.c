@@ -5386,9 +5386,6 @@ int finishShutdown(void) {
     /* Fire the shutdown modules event. */
     moduleFireServerEvent(VALKEYMODULE_EVENT_SHUTDOWN, 0, NULL);
 
-    /* Cleanup reply-blocking tracking resources. */
-    replyBlockingCleanup();
-
     /* Remove the pid file if possible and needed. */
     if (server.daemonize || server.pidfile) {
         serverLog(LL_NOTICE, "Removing the pid file.");
@@ -5406,6 +5403,10 @@ int finishShutdown(void) {
     closeListeningSockets(1);
 
     moduleUnloadAllModules();
+
+    /* Cleanup reply-blocking tracking resources, after modules are unloaded:
+     * a module's OnUnload may write keys, which reach trackModifiedKey(). */
+    replyBlockingCleanup();
 
     /* Module unloading may drain IO queues, so stop workers afterward. */
     killIOThreads();

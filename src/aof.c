@@ -1189,6 +1189,12 @@ static void processAofBioFlushResult(void) {
         server.aof_last_incr_size += nwritten;
         server.aof_last_incr_fsync_offset = server.aof_last_incr_size;
         server.aof_last_fsync = server.mstime;
+        /* Like the synchronous path: a write that succeeds clears an earlier
+         * write error, so writes stop failing with MISCONF. */
+        if (server.aof_last_write_status == C_ERR) {
+            serverLog(LL_NOTICE, "AOF write error looks solved. The server can write again.");
+            server.aof_last_write_status = C_OK;
+        }
         atomic_store_explicit(&server.aof_bio_flush_state, AOF_BIO_FLUSH_IDLE, memory_order_release);
         notifyReplyBlockingProgress();
         return;

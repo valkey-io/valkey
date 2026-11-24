@@ -551,8 +551,11 @@ void notifyReplyBlockingProgress(void) {
 
 /*================================= Function Store Tracking ================== */
 
+/* A FUNCTION subcommand other than HELP. Most commands have no parent, so
+ * this costs one pointer check for them. */
 bool isFunctionRWCommand(client *c) {
-    return (c->argc > 0 && (!strcasecmp(objectGetVal(c->argv[0]), "FUNCTION"))) && !(c->argc > 1 && !strcasecmp(objectGetVal(c->argv[1]), "HELP"));
+    return c->cmd->parent != NULL && c->cmd->proc != functionHelpCommand &&
+           !strcmp(c->cmd->parent->declared_name, "function");
 }
 
 bool isFunctionStoreRWCommand(client *c) {
@@ -923,8 +926,8 @@ sds genReplyBlockingInfoString(sds info) {
 
     info = sdscatprintf(info,
                         "reply_blocking_enabled:1\r\n"
-                        "reply_blocking_read_blocked_count:%lld\r\n"
-                        "reply_blocking_write_blocked_count:%lld\r\n"
+                        "reply_blocking_read_blocked_count:%llu\r\n"
+                        "reply_blocking_write_blocked_count:%llu\r\n"
                         "reply_blocking_clients_waiting_ack:%lu\r\n"
                         "reply_blocking_clients_disconnected_before_unblocking:%llu\r\n"
                         "reply_blocking_uncommitted_keys:%llu\r\n"
@@ -962,6 +965,6 @@ void replyBlockingReset(void) {
              * that were parked at the durable offset. */
             wakeReplicasForDurableProgress();
         }
-        clearAllUncommittedKeys();
+        replyBlockingClearDatasetState();
     }
 }

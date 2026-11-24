@@ -179,6 +179,8 @@ typedef struct {
     /* Volatile Raft state */
     enum raftRole role;
     uint64_t commit_index;
+    uint64_t ae_ack_term;  /* Term of the leader we have verified our log against */
+    uint64_t ae_ack_index; /* Last verified log index, for sending in AE_ACK*/
 
     /* Log */
     raftLogEntry **log;
@@ -447,6 +449,7 @@ static void clusterRaftStartElection(void);
 static clusterNode *clusterRaftSelectTransferTarget(void);
 static int clusterRaftRequestLeaderTransfer(void);
 static void clusterRaftMaybeSendTimeoutNow(void);
+static void raftSetVerifiedIndex(uint64_t msg_term, uint64_t verified_index, bool force);
 static int clusterRaftLeaderHasFreshQuorum(mstime_t now);
 
 static void clusterRaftRandomizeElectionTimeout(void) {
@@ -584,6 +587,7 @@ static void clusterRaftSingletonStepDown(void) {
     raftLogTruncateFrom(1);
     rs->last_applied = 0;
     rs->commit_index = 0;
+    raftSetVerifiedIndex(rs->current_term, rs->last_applied, true);
 }
 
 /* Propose NODE_JOIN + SLOT_CHANGE for ourselves. Called once, before the
@@ -1980,12 +1984,16 @@ static void clusterRaftBroadcastAppendEntries(void) {
     dictReleaseIterator(di);
 }
 
-/* AE_ACK <term> <success> <last-log-index> */
-static void clusterRaftSendAppendEntriesResponse(clusterLink *link, uint64_t term, int success) {
+/* Send an AppendEntries response to the leader. Because we do not pair up AE
+ * calls and replies, we need to send additional info so the leader tracks
+ * progress accurately, namely the index that we have safely verified. This is
+ * not necessarily the last log entry, because it may be from a stale tail.
+ * Format: AE_ACK <term> <success> <verified-log-index> [<repl-offset>] */
+static void clusterRaftSendAppendEntriesResponse(clusterLink *link, uint64_t term, uint64_t verified_index, int success) {
     long long offset = nodeIsReplica(myself) ? replicationGetReplicaOffset() : server.primary_repl_offset;
     sds msg = wireNewMsg("AE_ACK");
     msg = sdscatfmt(msg, " %U %i %U %I", (unsigned long long)term, success,
-                    (unsigned long long)raftLogLastIndex(), (long long)offset);
+                    (unsigned long long)verified_index, (long long)offset);
     msg = wireFinishMsg(msg);
     clusterRaftSendMsg(link, msg);
 }
@@ -1997,6 +2005,22 @@ static void clusterRaftSetLeader(const char *leader_id) {
     if (memcmp(rs->leader, leader_id, CLUSTER_NAMELEN) == 0) return;
     memcpy(rs->leader, leader_id, CLUSTER_NAMELEN);
     if (listLength(rs->pending_proposals) > 0) rs->todo_retry_proposals = 1;
+}
+
+/* Store the maximum log index that we have verified, and no more, for sending
+ * with AE_ACK. This may be called repeatedly before clusterRaftBeforeSleep()
+ * is called. It is the caller's responsibility to correctly provide the
+ * verified index. Ordinarily, this should only progress forward, however we
+ * may need to force the value e.g. during NODE_FORGET */
+static void raftSetVerifiedIndex(uint64_t msg_term, uint64_t verified_index, bool force) {
+    clusterRaftState *rs = RAFT_STATE();
+    if ((rs->ae_ack_term < msg_term) || force) {
+        rs->ae_ack_term = msg_term;
+        rs->ae_ack_index = 0;
+    }
+    if ((rs->ae_ack_index < verified_index) || force) {
+        rs->ae_ack_index = verified_index;
+    }
 }
 
 static int clusterRaftProcessAppendEntries(clusterLink *link, int argc, sds *argv, sds *entry_lines, int entry_line_count) {
@@ -2014,7 +2038,7 @@ static int clusterRaftProcessAppendEntries(clusterLink *link, int argc, sds *arg
     int entry_count = atoi(argv[6]);
 
     if (msg_term < rs->current_term) {
-        clusterRaftSendAppendEntriesResponse(link, rs->current_term, 0);
+        clusterRaftSendAppendEntriesResponse(link, rs->current_term, raftLogLastIndex(), 0);
         return 1;
     }
 
@@ -2030,7 +2054,7 @@ static int clusterRaftProcessAppendEntries(clusterLink *link, int argc, sds *arg
      * term >= 1, so 0 means we don't know the entry and never matches. */
     uint64_t local_prev_term = raftLogTermAt(prev_log_index);
     if (prev_log_index > 0 && (local_prev_term == 0 || local_prev_term != prev_log_term)) {
-        clusterRaftSendAppendEntriesResponse(link, rs->current_term, 0);
+        clusterRaftSendAppendEntriesResponse(link, rs->current_term, raftLogLastIndex(), 0);
         return 1;
     }
 
@@ -2088,13 +2112,20 @@ static int clusterRaftProcessAppendEntries(clusterLink *link, int argc, sds *arg
     }
 
     /* Defer AE_ACK until after persistence in beforeSleep. This ensures
-     * entries are on stable storage before the leader counts our ACK. */
+     * entries are on stable storage before the leader counts our ACK. If we
+     * have no entries sent, we have verified our prev_log_index and term.
+     * Otherwise, we can verify up to the new index applied */
+    if (entry_line_count == 0) {
+        raftSetVerifiedIndex(msg_term, prev_log_index, false);
+    } else {
+        raftSetVerifiedIndex(msg_term, new_index - 1, false);
+    }
     rs->todo_send_ae_ack = 1;
     return 1;
 }
 
 static int clusterRaftProcessAppendEntriesResponse(clusterLink *link, int argc, sds *argv) {
-    /* argv: AE_ACK <term> <success> <last-log-index> [<repl-offset>] */
+    /* argv: AE_ACK <term> <success> <verified-log-index> [<repl-offset>] */
     if (argc < 4) return 1;
     serverLog(LL_DEBUG, "Received AE_ACK: term=%s success=%s last_index=%s from %.40s",
               argv[1], argv[2], argv[3], link->node ? link->node->name : "?");
@@ -2253,18 +2284,22 @@ static int clusterRaftProcessInstallSnapshot(clusterLink *link, int argc, sds *a
     rs->last_leader_contact = rs->election_timer_start;
     clusterRaftSetLeader(argv[1]);
 
-    /* If we're already past the snapshot, ignore. */
+    /* If we're already past the snapshot, ignore.
+     * We can ack up to our commit index as far as this function knows */
     if (snap_index <= rs->last_applied) {
+        raftSetVerifiedIndex(msg_term, rs->commit_index, false);
         rs->todo_send_ae_ack = 1;
         return 1;
     }
 
     /* If our log has the snapshot's last entry, keep the entries after it,
      * which we may have acknowledged, and just commit up to the snapshot
-     * (Raft paper, section 7). */
+     * (Raft paper, section 7). We can ack up to our commit index as far as
+     * this function knows */
     if (raftLogTermAt(snap_index) == snap_term) {
         if (snap_index > rs->commit_index) rs->commit_index = snap_index;
         raftApplyCommitted();
+        raftSetVerifiedIndex(msg_term, rs->commit_index, false);
         rs->todo_send_ae_ack = 1;
         return 1;
     }
@@ -2290,14 +2325,14 @@ static int clusterRaftProcessInstallSnapshot(clusterLink *link, int argc, sds *a
             serverLog(LL_WARNING, "Rejecting INSTALL_SNAPSHOT from %.40s: invalid node line: %s",
                       argv[1], config_lines[i]);
             dictRelease(seen);
-            clusterRaftSendAppendEntriesResponse(link, rs->current_term, 0);
+            clusterRaftSendAppendEntriesResponse(link, rs->current_term, raftLogLastIndex(), 0);
             return 1;
         }
     }
     if (!sender_included) {
         serverLog(LL_WARNING, "Rejecting INSTALL_SNAPSHOT from %.40s: the sender isn't included", argv[1]);
         dictRelease(seen);
-        clusterRaftSendAppendEntriesResponse(link, rs->current_term, 0);
+        clusterRaftSendAppendEntriesResponse(link, rs->current_term, raftLogLastIndex(), 0);
         return 1;
     }
 
@@ -2445,6 +2480,8 @@ static int clusterRaftProcessInstallSnapshot(clusterLink *link, int argc, sds *a
         rs->todo_full_sync = 1;
         myself->repl_offset = 0; /* As when applying SET_REPLICA_OF. */
     }
+    /* We can ack up to our commit index as far as this function knows */
+    raftSetVerifiedIndex(msg_term, rs->commit_index, false);
     rs->todo_send_ae_ack = 1;
     rs->todo_update_replication = 1;
     rs->todo_update_slot_coverage = 1;
@@ -3265,13 +3302,15 @@ static void clusterRaftBeforeSleep(bool blocked) {
         myself->repl_offset = replicationGetReplicaOffset();
     }
 
+    /* We need to send only a verified response
+     * If our term has been bumped, we should not send a verified ack from a past term */
     if (rs->todo_send_ae_ack) {
         rs->todo_send_ae_ack = 0;
         clusterNode *leader = clusterLookupNode(rs->leader, CLUSTER_NAMELEN);
         /* AE arrives on the inbound link (leader connects to us). */
         clusterLink *link = leader ? (leader->inbound_link ? leader->inbound_link : leader->link) : NULL;
-        if (link) {
-            clusterRaftSendAppendEntriesResponse(link, rs->current_term, 1);
+        if (link && rs->ae_ack_term == rs->current_term) {
+            clusterRaftSendAppendEntriesResponse(link, rs->ae_ack_term, rs->ae_ack_index, 1);
         }
     }
 
@@ -4595,6 +4634,7 @@ static void clusterRaftForgetMyself(void) {
      * have left. Drop them so a restart cannot apply them as a singleton. */
     rs->commit_index = rs->last_applied;
     raftLogTruncateFrom(rs->last_applied + 1);
+    raftSetVerifiedIndex(rs->current_term, rs->last_applied, true);
     rs->todo_save_config = 1;
 }
 
@@ -4927,6 +4967,8 @@ static void clusterRaftResetCluster(int hard) {
     }
     listEmpty(rs->deferred_meets);
     rs->current_term = 0;
+    rs->ae_ack_index = 0;
+    rs->ae_ack_term = 0;
     memset(rs->leader, 0, CLUSTER_NAMELEN);
     memset(rs->voted_for, 0, CLUSTER_NAMELEN);
     rs->commit_index = 0;

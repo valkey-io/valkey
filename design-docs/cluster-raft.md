@@ -50,9 +50,9 @@ AE <leader-id> <term> <prev-log-idx> <prev-log-term> <commit> <count>
     Followed by <count> entry lines: <term> <type> <data>.
     With zero entries, serves as a heartbeat.
 
-AE_ACK <term> <success> <last-log-index> <repl-offset>
+AE_ACK <term> <success> <verified-log-index> <repl-offset>
     Response to AE. Reports whether entries were accepted, the
-    follower's last log index for matchIndex tracking, and the
+    follower's last verified log index for matchIndex tracking, and the
     node's replication offset.
 
 VOTE_REQ <candidate-id> <term> <last-log-index> <last-log-term>

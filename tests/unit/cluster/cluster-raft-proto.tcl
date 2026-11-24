@@ -362,6 +362,49 @@ test "Raft proto: PRE_VOTE granted after node-timeout even with randomized elect
     }
 }
 
+test "Raft proto: PRE_VOTE lease only counts contact with the leader" {
+    # The lease must not restart with our own election timer, which happens
+    # on startup and when a pre-vote round times out. Otherwise two followers
+    # can deny each other's pre-votes for a long time after the leader fails.
+    start_server {overrides {cluster-enabled yes cluster-protocol raft cluster-node-timeout 1000}} {
+        set cport [expr {[srv 0 port] + 10000}]
+        set node_id [R 0 CLUSTER MYID]
+        set leader_id [string repeat "d" 40]
+        set leader_addr "127.0.0.1:9995@19995,,tls-port=0,shard-id=[string repeat e 40]"
+
+        # Form a 2-node cluster with a fake leader, as above.
+        set fd [raft_connect_fake_node 127.0.0.1 $cport $leader_id $leader_addr]
+        raft_send $fd "MEET cluster"
+        assert_match "ADD_ME*" [raft_recv $fd]
+        set node_addr "127.0.0.1:[srv 0 port]@$cport,,tls-port=0,shard-id=[string repeat a 40]"
+        raft_send $fd "AE $leader_id 1 0 0 2 2\n1 NODE_JOIN $leader_id $leader_addr voter\n1 NODE_JOIN $node_id $node_addr voter"
+        assert_match "AE_ACK *" [raft_recv $fd]
+        close $fd
+
+        # After a restart, the persisted leader has no lease.
+        restart_server 0 true false
+        assert_equal $leader_id [CI 0 cluster_raft_leader]
+        set fd [raft_connect_fake_node 127.0.0.1 $cport $leader_id $leader_addr]
+        raft_send $fd "PRE_VOTE_REQ $leader_id 2 2 1"
+        assert_match "PRE_VOTE 2 1" [raft_recv $fd]
+
+        # Nor right after our own pre-vote round times out.
+        wait_for_condition 500 10 {
+            [CI 0 cluster_raft_role] eq "pre-candidate"
+        } else {
+            fail "no pre-vote"
+        }
+        wait_for_condition 500 10 {
+            [CI 0 cluster_raft_role] eq "follower"
+        } else {
+            fail "pre-vote round did not time out"
+        }
+        raft_send $fd "PRE_VOTE_REQ $leader_id 2 2 1"
+        assert_match "PRE_VOTE 2 1" [raft_recv $fd]
+        close $fd
+    }
+}
+
 test "Raft proto: INSTALL_SNAPSHOT validation and node removal" {
     start_server {overrides {cluster-enabled yes cluster-protocol raft cluster-node-timeout 1000}} {
         set cport [expr {[srv 0 port] + 10000}]
@@ -1062,6 +1105,55 @@ proc raft_recv_until {fd pattern {timeout 5000}} {
     while {1} {
         set msg [raft_recv $fd [expr {max(1, $deadline - [clock milliseconds])}]]
         if {[string match $pattern $msg]} {return $msg}
+    }
+}
+
+test "Raft proto: a new leader doesn't treat the old leader as failed if it voted" {
+    # Two voters: the old leader's vote is needed, so it's alive. Its last AE
+    # is older than the node timeout, but its vote replies count as contact,
+    # so the new leader doesn't step down or propose NODE_FAIL for it before
+    # its first AE_ACK.
+    start_server {overrides {cluster-enabled yes cluster-protocol raft cluster-node-timeout 2000}} {
+        set cport [expr {[srv 0 port] + 10000}]
+        set node_id [R 0 CLUSTER MYID]
+        set node_addr "127.0.0.1:[srv 0 port]@$cport,,tls-port=0,shard-id=[string repeat t 40]"
+        set a_id [string repeat "a" 40]
+        set listen_a [raft_listen a_cport]
+        set a_addr "127.0.0.1:[expr {$a_cport - 10000}]@$a_cport,,tls-port=0,shard-id=[string repeat s 40]"
+
+        # A leads a 2-voter cluster with the node, then goes silent.
+        set fd_a [raft_connect_fake_node 127.0.0.1 $cport $a_id $a_addr]
+        raft_send $fd_a "AE $a_id 2 0 0 2 2\n2 NODE_JOIN $node_id $node_addr voter\n2 NODE_JOIN $a_id $a_addr voter"
+        assert_match "AE_ACK 2 1 2 *" [raft_recv $fd_a]
+        set out_a [raft_accept $listen_a]
+        assert_match "HELLO *" [raft_recv $out_a]
+        raft_send $out_a "HI $a_id $a_addr"
+
+        # A grants the pre-vote and the vote.
+        assert_match "PRE_VOTE_REQ $node_id 3 *" [raft_recv_until $out_a "PRE_VOTE_REQ *" 10000]
+        raft_send $out_a "PRE_VOTE 3 1"
+        assert_match "VOTE_REQ $node_id 3 *" [raft_recv_until $out_a "VOTE_REQ *"]
+        raft_send $out_a "VOTE 3 1"
+        wait_for_condition 50 10 {
+            [CI 0 cluster_raft_role] eq "leader"
+        } else {
+            fail "node didn't become leader"
+        }
+
+        # A doesn't ack. Before the fix, the new leader stepped down in its
+        # first cron tick, since A's last AE was older than the node timeout.
+        # The cron checks quorum freshness before it sends a heartbeat, so
+        # the first heartbeat after the election's AE shows it stayed leader.
+        # Without ACKs, the leader drops the link after half the node timeout.
+        for {set i 0} {$i < 2} {incr i} {
+            if {[catch {raft_recv_until $out_a "AE *" 2000} ae]} {
+                fail "new leader stopped sending AEs (role [CI 0 cluster_raft_role])"
+            }
+            assert_no_match "*NODE_FAIL*" $ae
+        }
+        assert_equal leader [CI 0 cluster_raft_role]
+
+        foreach fd [list $fd_a $out_a] {close $fd}
     }
 }
 

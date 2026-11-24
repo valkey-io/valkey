@@ -302,6 +302,9 @@ static int shouldDeferPushMessage(client *c) {
  * Copy avoidance can be allowed only for regular Valkey clients
  * that use _writeToClient handler to write replies to client connection */
 static int isCopyAvoidPreferred(client *c, robj *obj) {
+    /* Without an object only the I/O threads threshold can make copy avoidance preferred, so skip the
+     * per-client checks below (this runs for every appended reply piece) when it can't apply. */
+    if (!obj && !(server.min_io_threads_copy_avoid && server.io_threads_num >= server.min_io_threads_copy_avoid)) return 0;
     if (c->flag.fake || isDeferredReplyEnabled(c)) return 0;
     /* Skip copy avoidance when push bytes would be deferred into pending_push_messages. */
     if (shouldDeferPushMessage(c)) return 0;
@@ -1527,52 +1530,12 @@ void addReplyBulkLen(client *c, robj *obj) {
     _addReplyLongLongWithPrefix(c, len, '$');
 }
 
-/* Try to avoid whole bulk string copy to a reply buffer
- * If copy avoidance allowed then only pointer to object and string will be copied to the buffer */
-static int tryAvoidBulkStrCopyToReply(client *c, robj *obj) {
-    if (!isCopyAvoidPreferred(c, obj)) return C_ERR;
-    if (prepareClientToWrite(c) != C_OK) return C_ERR;
-
-    _addBulkStrRefToBufferOrList(c, obj);
-
-    return C_OK;
-}
-
-/* Add an Object as a bulk reply */
-void addReplyBulk(client *c, robj *obj) {
-    if (tryAvoidBulkStrCopyToReply(c, obj) == C_OK) {
-        /* If copy avoidance allowed, then we explicitly maintain net_output_bytes_curr_cmd.
-         * We determine per-reply if tracking is enabled by checking the config in the main thread. */
-        if (server.commandlog[COMMANDLOG_TYPE_LARGE_REPLY].threshold != -1) {
-            serverAssert(obj->encoding == OBJ_ENCODING_RAW);
-            size_t str_len = sdslen(objectGetVal(obj));
-            uint32_t num_len = digits10(str_len);
-            /* RESP encodes bulk strings as $<length>\r\n<data>\r\n */
-            c->net_output_bytes_curr_cmd += (num_len + 3); /* $<length>\r\n */
-            c->net_output_bytes_curr_cmd += str_len;       /* <data> */
-            c->net_output_bytes_curr_cmd += 2;             /* \r\n */
-        }
-        return;
-    }
-    addReplyBulkLen(c, obj);
-    addReply(c, obj);
-    addReplyProto(c, "\r\n", 2);
-}
-
-/* Add a C buffer as bulk reply */
-void addReplyBulkCBuffer(client *c, const void *p, size_t len) {
-    if (prepareClientToWrite(c) != C_OK) return;
-    _addReplyLongLongWithPrefix(c, len, '$');
-    _addReplyToBufferOrList(c, p, len);
-    _addReplyToBufferOrList(c, "\r\n", 2);
-}
-
-/* Fuse small bulk replies into one append to avoid repeating reply-routing
- * bookkeeping. The limit bounds the additional copy and stack usage. */
+/* Append "$<len>\r\n<p>\r\n" to an already prepared client. Small bulk replies
+ * are fused into one append to avoid repeating reply-routing bookkeeping per
+ * piece; the limit bounds the additional copy and stack usage. */
 #define BULK_REPLY_FUSE_LIMIT 512
 
-void addWritePreparedReplyBulkCBuffer(writePreparedClient *wpc, const void *p, size_t len) {
-    client *c = (client *)wpc;
+static void _addReplyBulkCBufferFused(client *c, const void *p, size_t len) {
     if (len <= BULK_REPLY_FUSE_LIMIT) {
         /* Keep reply routing and accounting in _addReplyToBufferOrList(). */
         char buf[LONG_STR_SIZE + 3 + BULK_REPLY_FUSE_LIMIT + 2];
@@ -1600,24 +1563,63 @@ void addWritePreparedReplyBulkCBuffer(writePreparedClient *wpc, const void *p, s
     _addReplyToBufferOrList(c, "\r\n", 2);
 }
 
-/* Add sds to reply (takes ownership of sds and frees it) */
-void addReplyBulkSds(client *c, sds s) {
-    if (prepareClientToWrite(c) != C_OK) {
-        sdsfree(s);
+/* Try to avoid whole bulk string copy to a reply buffer
+ * If copy avoidance allowed then only pointer to object and string will be copied to the buffer */
+static int tryAvoidBulkStrCopyToReply(client *c, robj *obj) {
+    if (!isCopyAvoidPreferred(c, obj)) return C_ERR;
+    if (prepareClientToWrite(c) != C_OK) return C_ERR;
+
+    _addBulkStrRefToBufferOrList(c, obj);
+
+    return C_OK;
+}
+
+/* Add an Object as a bulk reply */
+void addReplyBulk(client *c, robj *obj) {
+    if (tryAvoidBulkStrCopyToReply(c, obj) == C_OK) {
+        /* If copy avoidance allowed, then we explicitly maintain net_output_bytes_curr_cmd.
+         * We determine per-reply if tracking is enabled by checking the config in the main thread. */
+        if (server.commandlog[COMMANDLOG_TYPE_LARGE_REPLY].threshold != -1) {
+            serverAssert(obj->encoding == OBJ_ENCODING_RAW);
+            size_t str_len = sdslen(objectGetVal(obj));
+            uint32_t num_len = digits10(str_len);
+            /* RESP encodes bulk strings as $<length>\r\n<data>\r\n */
+            c->net_output_bytes_curr_cmd += (num_len + 3); /* $<length>\r\n */
+            c->net_output_bytes_curr_cmd += str_len;       /* <data> */
+            c->net_output_bytes_curr_cmd += 2;             /* \r\n */
+        }
         return;
     }
-    _addReplyLongLongWithPrefix(c, sdslen(s), '$');
-    _addReplyToBufferOrList(c, s, sdslen(s));
+    if (prepareClientToWrite(c) != C_OK) return;
+    if (sdsEncodedObject(obj)) {
+        _addReplyBulkCBufferFused(c, objectGetVal(obj), sdslen(objectGetVal(obj)));
+    } else {
+        serverAssert(obj->encoding == OBJ_ENCODING_INT);
+        char buf[LONG_STR_SIZE];
+        size_t len = ll2string(buf, sizeof(buf), (long)objectGetVal(obj));
+        _addReplyBulkCBufferFused(c, buf, len);
+    }
+}
+
+/* Add a C buffer as bulk reply */
+void addReplyBulkCBuffer(client *c, const void *p, size_t len) {
+    if (prepareClientToWrite(c) != C_OK) return;
+    _addReplyBulkCBufferFused(c, p, len);
+}
+
+void addWritePreparedReplyBulkCBuffer(writePreparedClient *wpc, const void *p, size_t len) {
+    _addReplyBulkCBufferFused((client *)wpc, p, len);
+}
+
+/* Add sds to reply (takes ownership of sds and frees it) */
+void addReplyBulkSds(client *c, sds s) {
+    if (prepareClientToWrite(c) == C_OK) _addReplyBulkCBufferFused(c, s, sdslen(s));
     sdsfree(s);
-    _addReplyToBufferOrList(c, "\r\n", 2);
 }
 
 void addWritePreparedReplyBulkSds(writePreparedClient *wpc, sds s) {
-    client *c = (client *)wpc;
-    _addReplyLongLongWithPrefix(c, sdslen(s), '$');
-    _addReplyToBufferOrList(c, s, sdslen(s));
+    _addReplyBulkCBufferFused((client *)wpc, s, sdslen(s));
     sdsfree(s);
-    _addReplyToBufferOrList(c, "\r\n", 2);
 }
 
 /* Set sds to a deferred reply (for symmetry with addReplyBulkSds it also frees the sds) */

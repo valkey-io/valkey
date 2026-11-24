@@ -1724,13 +1724,12 @@ static void clusterRaftClearOptionalNodeInfo(clusterNode *node) {
     node->replica_priority = 0;
 }
 
-/* Find a pending proposal matching type+data, fire its callback, and remove it.
- * Called both when an entry is applied (from raftLogApply) and when the leader
- * sends a REJECT for a forwarded proposal. */
-/* Complete the first matching pending proposal. With an index, the result
- * comes from applying that entry, which can only be a proposal's own entry if
- * it isn't below the proposal's min_index. An older identical entry would
- * otherwise complete a newer proposal whose own entry isn't committed yet. */
+/* Complete pending proposals matching type+data. For an applied entry, the
+ * result comes from applying it, and it completes every one whose min_index
+ * it isn't below, so that the entry isn't older than the proposal. An older
+ * identical entry would otherwise complete a newer proposal whose own entry
+ * isn't committed yet. Without an index (a REJECT, or a read on the leader),
+ * the result belongs to one proposal, so only the first one is completed. */
 static void clusterRaftCompletePendingProposal(int type, sds data, RaftProposalResult result, uint64_t index) {
     clusterRaftState *rs = RAFT_STATE();
     if (listLength(rs->pending_proposals) == 0) return;
@@ -1744,27 +1743,26 @@ static void clusterRaftCompletePendingProposal(int type, sds data, RaftProposalR
          * interchangeable, so this completes another one. */
         if (pp->wait_index) continue;
         if (index && index < pp->min_index) continue;
-        if (pp->type == type && !sdscmp(pp->data, data)) {
-            /* Resent to the new leader by the retry on leader change. */
-            if (result == RAFT_RESULT_LEADER_TRANSFER) return;
-            /* On stale epoch with retries remaining: mark deferred.
-             * The epoch update happens at retry time when the epoch has
-             * actually advanced (checked by raftRefreshEpochInData). */
-            if (result == RAFT_RESULT_STALE_EPOCH && pp->retries > 0) {
-                pp->retries--;
-                pp->deferred = 1;
-                /* The epoch may already have advanced before this rejection
-                 * arrived. Retry in case it did; raftRefreshEpochInData()
-                 * skips it otherwise. */
-                rs->todo_retry_deferred = 1;
-                return;
-            }
+        if (pp->type != type || sdscmp(pp->data, data)) continue;
+        /* Resent to the new leader by the retry on leader change. */
+        if (result == RAFT_RESULT_LEADER_TRANSFER) return;
+        /* On stale epoch with retries remaining: mark deferred.
+         * The epoch update happens at retry time when the epoch has
+         * actually advanced (checked by raftRefreshEpochInData). */
+        if (result == RAFT_RESULT_STALE_EPOCH && pp->retries > 0) {
+            pp->retries--;
+            pp->deferred = 1;
+            /* The epoch may already have advanced before this rejection
+             * arrived. Retry in case it did; raftRefreshEpochInData()
+             * skips it otherwise. */
+            rs->todo_retry_deferred = 1;
+        } else {
             if (pp->callback) pp->callback(pp->ctx, raftProposalResultMsg(result));
             sdsfree(pp->data);
             zfree(pp);
             listDelNode(rs->pending_proposals, ln);
-            break;
         }
+        if (!index) break;
     }
 }
 

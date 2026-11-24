@@ -178,6 +178,8 @@ typedef struct {
     /* Volatile Raft state */
     enum raftRole role;
     uint64_t commit_index;
+    uint64_t ae_ack_term;  /* Term of the leader we have verified our log against */
+    uint64_t ae_ack_index; /* Last verified log index, for sending in AE_ACK*/
 
     /* Log */
     raftLogEntry **log;
@@ -212,8 +214,6 @@ typedef struct {
     unsigned int todo_broadcast_vote_request : 1;
     uint64_t persist_log_from;     /* First index to persist in next batch */
     uint64_t last_rewrite_applied; /* last_applied at last full rewrite */
-    uint64_t ae_ack_index;
-    uint64_t ae_ack_term;
 
     /* The node that got our shard's last slot, for todo_lost_last_slot. */
     char lost_last_slot_target[CLUSTER_NAMELEN];
@@ -1955,12 +1955,11 @@ static void clusterRaftSetLeader(const char *leader_id) {
     if (listLength(rs->pending_proposals) > 0) rs->todo_retry_proposals = 1;
 }
 
-/* Set flag to send AE_ACK message when handling AE or INSTALL_SNAPSHOT. This
- * may be called repeatedly before clusterRaftBeforeSleep() is called. We store
- * the maximum commit that we have verified, and no more. It is the caller's
- * responsibility to correctly provide the verified index.
- * Ordinarily, this should only progress forward, however we may need to force
- * the value e.g. during NODE_FORGET */
+/* Store the maximum log index that we have verified, and no more, for sending
+ * with AE_ACK. This may be called repeatedly before clusterRaftBeforeSleep()
+ * is called. It is the caller's responsibility to correctly provide the
+ * verified index. Ordinarily, this should only progress forward, however we
+ * may need to force the value e.g. during NODE_FORGET */
 static void raftSetVerifiedIndex(uint64_t msg_term, uint64_t verified_index, bool force) {
     clusterRaftState *rs = RAFT_STATE();
     if ((rs->ae_ack_term < msg_term) || force) {
@@ -1971,7 +1970,6 @@ static void raftSetVerifiedIndex(uint64_t msg_term, uint64_t verified_index, boo
         rs->ae_ack_index = verified_index;
     }
 }
-
 
 static int clusterRaftProcessAppendEntries(clusterLink *link, int argc, sds *argv, sds *entry_lines, int entry_line_count) {
     /* argv: AE <leader-id> <term> <prev-log-idx> <prev-log-term> <commit> <count> */
@@ -2240,7 +2238,9 @@ static int clusterRaftProcessInstallSnapshot(clusterLink *link, int argc, sds *a
     }
 
     /* If our log has the snapshot's last entry, keep the entries after it,
-     * We can ack up to our commit index as far as this function knows */
+     * which we may have acknowledged, and just commit up to the snapshot
+     * (Raft paper, section 7). We can ack up to our commit index as far as
+     * this function knows */
     if (raftLogTermAt(snap_index) == snap_term) {
         if (snap_index > rs->commit_index) rs->commit_index = snap_index;
         raftApplyCommitted();

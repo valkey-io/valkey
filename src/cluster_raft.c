@@ -536,7 +536,6 @@ static void clusterRaftStepDown(mstime_t now, const char *reason) {
     if (rs->role != RAFT_ROLE_LEARNER && rs->role != RAFT_ROLE_JOINER)
         rs->role = RAFT_ROLE_FOLLOWER;
     rs->votes_received = 0;
-    memset(rs->voted_for, 0, CLUSTER_NAMELEN);
     memset(rs->leader, 0, CLUSTER_NAMELEN);
     clusterRaftRandomizeElectionTimeout();
     rs->election_timer_start = now;
@@ -1373,6 +1372,8 @@ static int clusterRaftMaybeStepDown(uint64_t term) {
     clusterRaftState *rs = RAFT_STATE();
     if (term > rs->current_term) {
         rs->current_term = term;
+        /* Only a new term clears our vote: we vote at most once per term. */
+        memset(rs->voted_for, 0, CLUSTER_NAMELEN);
         clusterRaftStepDown(monotonicMs(), "observed higher term");
         return 1;
     }

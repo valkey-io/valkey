@@ -4541,19 +4541,27 @@ static RaftProposalResult clusterRaftApplyDelVoter(sds data, int validate_only) 
 
     clusterNode *node = clusterLookupNode(argv[0], CLUSTER_NAMELEN);
     if (!node || (node->flags & CLUSTER_NODE_JOINING) || nodeIsLearner(node) ||
-        server.cluster->size <= 1 ||
-        memcmp(node->name, rs->leader, CLUSTER_NAMELEN) == 0) {
+        server.cluster->size <= 1) {
         sdsfreesplitres(argv, argc);
         return RAFT_RESULT_REJECTED;
     }
 
     if (validate_only) {
+        /* Not checked on apply, where nodes may know different leaders. */
+        bool is_leader = memcmp(node->name, rs->leader, CLUSTER_NAMELEN) == 0;
         sdsfreesplitres(argv, argc);
-        return RAFT_RESULT_OK;
+        return is_leader ? RAFT_RESULT_REJECTED : RAFT_RESULT_OK;
     }
 
     node->flags |= CLUSTER_NODE_LEARNER;
-    if (node == myself) rs->role = RAFT_ROLE_LEARNER;
+    if (node == myself) {
+        /* Elected before applying it: send the commit, then step down. */
+        if (rs->role == RAFT_ROLE_LEADER) {
+            clusterRaftBroadcastAppendEntries();
+            clusterRaftStepDown(monotonicMs(), "removed from the voters");
+        }
+        rs->role = RAFT_ROLE_LEARNER;
+    }
     server.cluster->size--;
     rs->todo_save_config = 1;
     sdsfreesplitres(argv, argc);

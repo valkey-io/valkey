@@ -2,7 +2,7 @@
 
 # Summary
 
-Valkey is adding first-class durability through **synchronous replication**, using the PacificA primary/backup replication framework. The design has four main parts:
+Valkey is adding first-class multi-node durability through **synchronous replication**, using the PacificA primary/backup replication framework. The design has four main parts:
 
 1. **Durability comes from synchronous replication.** The primary acknowledges a write only after every replica in the shard's *sync replica set* has received it.  
 2. **Cluster V2, a new durable, Raft-based cluster bus, stores the shard configuration authoritatively.** That configuration covers which node is primary and which replicas are eligible to take over. Cluster V2 is introduced as part of this design and replaces today's gossip-based cluster bus.  
@@ -23,7 +23,7 @@ The tools available today do not close that gap:
 
 | Mechanism | Limitation |
 | :---- | :---- |
-| `WAIT <replicas> <timeout>` | Puts durability management on the application. A propagation-based ack does not guarantee durability across failover, replica changes, or slot migration, because a replica that never got the write can still be promoted. |
+| `WAIT <replicas> <timeout>` | Puts durability management on the application. A propagation-based ack does not guarantee durability across failover, replica changes, or slot migration, because a replica that never got the write can still be promoted. It gives no read-committed isolation: other clients can read a write before it has replicated. It is also a synchronization point: `WAIT` blocks the client's command stream, so a client that pipelines or streams writes can't run the commands after a `WAIT` until the earlier writes have replicated. |
 | AOF with `appendfsync always` | Durable on a single node only. AOF is not a true write-ahead log: a failed write or fsync can still leave the change in the AOF, so the client's view and the server's state can diverge. The synchronous fsync on the main thread also costs throughput. |
 | `WAITAOF` | Same client-side complexity and the same single-node durability caveats as above. |
 
@@ -44,7 +44,7 @@ The underlying problem is that a success from the primary today confirms **accep
 * **Separation of metadata and data.** The problem splits into two parts: consistent cluster metadata storage, and synchronous data replication. The cluster metadata is owned by a new Raft-based cluster bus. Shard data follows the existing replication path, with an added protocol for acknowledgement and commit.  
 * **Authoritative acknowledgement.** A durable write's ack must be tied to a single, authoritative decision at the shard level. That keeps the ack valid through leader elections, slot migrations, and other topology changes.  
 * **Membership awareness.** During a cluster change, durability confirmation must come from the nodes that will be the final, authoritative owners of the data. A "lame duck" set of nodes that is about to lose authority must not be able to confirm a write.  
-* **Favor clear failure modes.** If a durable write can't be confirmed in time, the server returns an explicit error. Then the client knows the writer's state is unknown and can retry safely, provided the operation is idempotent. Some outcomes are unavoidably ambiguous (crashes, connection drops, failovers), but whenever the server has a choice, it returns an explicit error.
+* **Favor clear failure modes.** If a durable write can't be confirmed in time, the server returns an explicit error. Then the client knows the write's outcome is unknown and can retry safely, provided the operation is idempotent. Some outcomes are unavoidably ambiguous (crashes, connection drops, failovers), but whenever the server has a choice, it returns an explicit error.
 
 ## Interface and usability
 
@@ -71,7 +71,7 @@ Two approaches were explored for the data path:
 * **Data and consensus are separated.** In PacificA, consensus manages only configuration, which here lives in the Cluster V2 cluster bus: who is primary and who is in the sync replica set. The data path stays a simple primary/backup stream. This matches how Valkey works today and keeps the high-throughput data path free of per-write consensus overhead.  
 * **Existing replication is reused.** Valkey's `primary_repl_offset` is already a monotonically increasing, gap-free sequence for every write. It fills the role of PacificA's serial number, so no new log format or counter is needed. The *committed offset* is PacificA's commit point, expressed in bytes.  
 * **Disks are optional.** Durability comes from fully synchronous copies on independent replicas. On-disk persistence is an additional, independent option. Operators who want less chance of data loss can independently configure local persistence node-wise (AOF, RDB, fsync always). Operators who want strong consistency or pure in-memory redundancy without disk I/O can skip it, so long as they are comfortable with pure in-memory redundancy. This applies to data only: Cluster V2 always persists its Raft state (term, vote, and log) to local disk, because Raft isn't safe without it. See section 6\.  
-* **Delivery is incremental.** Each building block (write-behind AOF, the sync replication commit protocol, Cluster V2) is useful on its own and can ship separately.
+* **Delivery is incremental.** Each building block can ship separately. Write-behind AOF is useful on its own. The sync replication commit protocol on its own makes acknowledged writes durable in steady state, but a failover can still lose them until the sync replica set is committed to Cluster V2 (Milestone IV).
 
 # Architecture Overview
 
@@ -118,7 +118,7 @@ The foundation for every durability mode is a mechanism that **delays replies, n
 * **Uncommitted key tracking.** Modified keys are tracked per database, together with the replication offset at which they were dirtied. A **read** of an uncommitted key is reply-blocked just like a write, so no client ever sees uncommitted state. This includes non-replicating replies, such as `SETNX` returning `0` because of a write that isn't durable yet.  
 * **Keyspace-wide reads.** Commands that read the keyspace as a whole, not specific keys (`SCAN`, `KEYS`, `RANDOMKEY`, `DBSIZE`, `INFO keyspace`), can't be checked key by key. Their replies are held until the node's committed offset reaches the applied offset at the time the command ran.  
 * **Expiry and eviction.** Deletes caused by expiry or eviction are replicated writes, so the deleted key is marked dirty like any other write. A read that finds a key missing because it was just expired or evicted is held until that delete commits. Otherwise a client could read nil and then, after a failover, read the old value again.  
-* **Deferred client side effects.** Client keyspace notifications (pub/sub) and client-side caching invalidations are deferred until the write is durable. Module keyspace notifications follow different rules, described in [section 3](#3-module-keyspace-notifications).  
+* **Deferred client side effects.** Client keyspace notifications (pub/sub) and client-side caching invalidations are deferred until the write is durable. How module keyspace notifications are delivered is an open question; see [Open Questions](#module-keyspace-notifications).  
 * **fsync moves off the main thread.** For local durability (`appendfsync always`), AOF write and fsync run as a background job. The main thread keeps serving other clients while the fsync is in flight, and the zero-data-loss guarantee is preserved.
 
 The *committed offset* is the single abstraction that every durability source feeds. In Milestone I it is the AOF fsync offset. With synchronous replication it also covers replica acknowledgements, and durability can be configured as AOF **and** sync replication together.
@@ -204,7 +204,7 @@ sequenceDiagram
 
 *Write path: the primary assigns the write an offset, applies it and marks the key dirty, then forwards it to both sync replicas, which apply it and mark it dirty. Reads of the key are held until the committed offset passes the write. After both ACKs the primary commits and replies, and REPLCONF COMMIT releases held reads on the replicas.*
 
-A write-ahead mode for sync replicas is deferred and tracked separately in the **Deferred: Write-ahead replica reads** section. In that mode, replica reads never block but are only serializable.
+A write-ahead mode for sync replicas is deferred and tracked separately in the **Deferred: Write-ahead replica reads** section. In that mode, replica reads never block, but they can return a committed value that is out of date.
 
 **Note on read concern.** Today a client can't ask for a particular read consistency. `READONLY` is the only replica-read option, and `READONLY` reads keep being served after a sync replica is demoted to async. Until a read concern protocol exists (see Future Work), clients can't rely on linearizable reads from replicas. The lease rules in this design are in place so that it can be added later without protocol changes.
 
@@ -212,49 +212,7 @@ A write-ahead mode for sync replicas is deferred and tracked separately in the *
 
 **Tracking:** [valkey\#4027](https://github.com/valkey-io/valkey/issues/4027)
 
-Reply blocking holds replies, not command execution. So modules that subscribe to keyspace notifications can see a write before it is durable. Modules fall into two classes with conflicting needs:
-
-| Consumer class | Examples | Needs |
-| :---- | :---- | :---- |
-| **Change-time consumers** | Secondary indexes (such as ValkeySearch), in-process caches, idempotent fan-out | To see each change inline, in the same order as the keyspace, so derived state stays consistent with the data |
-| **Durability-sensitive consumers** | Forwarding to external systems, audit logs, change data capture | To know a write is durable before acting on it externally |
-
-The engine can't tell which class a module belongs to, so modules handle the distinction themselves, using the durable offset API below.
-
-### **Inline delivery**
-
-Module keyspace notifications are always delivered inline, at the moment the keyspace is modified and before the write is durable. This is the only delivery mode, for these reasons:
-
-* **Module client blocking** on keyspace events ([valkey\#1819](https://github.com/valkey-io/valkey/issues/1819)) only works correctly with inline delivery.  
-* **No stale-value hazard.** Reply blocking doesn't stop a second write to the same key from executing before the first write commits. A deferred callback could therefore read a newer value than the one it was notified about, which breaks read-after-write for change-time consumers.  
-* **Consistent with other module APIs**, which already observe state that isn't durable yet.
-
-An inline notification can describe a write that never commits. For example, the primary fails before the write commits, and every replica that already applied it is fully resynced from the new primary. Modules that keep derived state must treat inline notifications as provisional until durable. A full resync raises the existing flush and loading server events, which modules use to rebuild their derived state.
-
-### **Durable offset API**
-
-Modules get a generic way to learn when writes become durable, and to tell the core how far they have processed:
-
-| API | Purpose |
-| :---- | :---- |
-| `VM_GetCurrentOffset()` | Returns the node's applied offset: the latest write that has executed. |
-| `VM_GetDurableOffset()` | Returns the node's committed offset: the latest write that is durable under the configured policy (AOF fsync and/or sync replica acknowledgements). This is the node's local view, as described in section 2\. |
-| `ValkeyModuleEvent_DurableOffsetAdvanced` | A server event that fires when the node's committed offset advances, and carries the new committed offset. |
-| `VM_SetConsumedOffset(ctx, offset)` | Lets a module report the highest applied offset it has fully processed, for example indexed. The core uses it during slot migration. |
-
-**Example: read-committed secondary index**
-
-1. On each keyspace notification, the module records the end offset of the command that triggered the notification. During a notification, `VM_GetCurrentOffset()` must return that offset, not the end of the previous write.  
-2. As mutations are applied to the index, the module tracks the highest offset it has ingested (the index offset).  
-3. On a query such as `FT.SEARCH`, the module holds the response until `VM_GetDurableOffset()` reaches the index offset. It releases held queries from its `DurableOffsetAdvanced` event handler. Query results never reflect uncommitted writes.
-
-**Example: slot migration.** Slot migration needs the reverse direction: before the target shard takes ownership of a slot, the core must know that modules on the target have processed the migrated data. A module that keeps derived state reports its progress with `VM_SetConsumedOffset`. Before atomic slot migration finalizes on the target, the core waits until every module that has reported a consumed offset has reached the applied offset of the migrated data. Modules that never call `VM_SetConsumedOffset` aren't waited on.
-
-### **Design choices**
-
-* **Durable offset notification is a persistent server event, not a per-offset callback.** Modules subscribe once to `ValkeyModuleEvent_DurableOffsetAdvanced` through the existing server event mechanism. The event fires on the main thread at most once per event loop iteration, with the latest committed offset. Committed offsets only increase, so one event covers every earlier offset. Coalescing is built in, and modules never register per write.  
-* **Durability-sensitive consumers build on offsets, not on delayed notifications.** A module such as a change data capture forwarder records `VM_GetCurrentOffset()` with each inline notification, buffers the change, and forwards it once `DurableOffsetAdvanced` reports a committed offset at or past it. This keeps a single notification path in the core.  
-* **Consumed offsets are pushed by the module.** The core never calls into a module to ask how far it has processed. Modules report progress with `VM_SetConsumedOffset`, which keeps module code off the core's critical path.
+How modules see writes that aren't durable yet, and how they learn when a write becomes durable, is not decided yet. The current proposal is under [Open Questions](#module-keyspace-notifications).
 
 ## 4\. Shard configuration: primary, eligible, and ineligible nodes
 
@@ -377,7 +335,7 @@ The longer primary lease only matters when the primary itself fails or is partit
 **When a lease can't be renewed:**
 
 * **The primary** stops serving reads before its lease from any eligible replica expires, unless it has already demoted that replica. Because the read lease is shorter, a failed replica is normally demoted first, so in practice this only happens when the primary itself is partitioned from its replicas and the cluster bus.  
-* **A sync replica** stops serving linearizable reads before its read lease expires. It keeps serving reads the way an async replica does, which are serializable. Because clients can't ask for linearizable reads yet (see the note on read concern in section 2), this has no visible effect today. The rule is there for linearizable replica reads later.  
+* **A sync replica** stops serving linearizable reads before its read lease expires. It keeps serving reads the way an async replica does, which return committed data but can be out of date. Because clients can't ask for linearizable reads yet (see the note on read concern in section 2), this has no visible effect today. The rule is there for linearizable replica reads later.  
 * **A demotion waits out the replica's read lease.** The primary commits without a replica only after that replica's read lease must have expired and the demotion has committed to the cluster bus. Lease expiry alone isn't enough: until the demotion commits, the replica is still eligible and could be promoted on failover, so committing without it could lose writes. See the demotion flow in section 4\.
 
 **Fault detection:**
@@ -482,9 +440,9 @@ Cluster V2, the new durable, Raft-based cluster bus, is specified in its own des
 | :---- | :---- |
 | Acknowledged writes | Survive as long as the primary or at least one eligible sync replica survives. With `min-sync-replicas = 0`, writes committed while the sync replica set was empty exist only on the primary. |
 | Reads from the primary | **Linearizable.** |
-| Reads from sync replicas | Linearizable while the replica holds a valid read lease. Sync replicas use dirty key tracking to hold responses for keys that aren't committed yet. Without a valid lease, reads degrade to serializable. Clients can't ask for linearizable replica reads yet (see the note on read concern in section 2). |
-| Reads from async replicas | **Serializable.** They may lag, but never show uncommitted data, because they only receive committed writes. |
-| Uncommitted data | Never returned by core commands on any node. Modules can observe uncommitted writes through inline keyspace notifications and other module APIs (see section 3), so a module that serves queries must hold results until they are durable. |
+| Reads from sync replicas | Linearizable while the replica holds a valid read lease. Sync replicas use dirty key tracking to hold responses for keys that aren't committed yet. Without a valid lease, reads still return only committed data, but can be out of date. Clients can't ask for linearizable replica reads yet (see the note on read concern in section 2). |
+| Reads from async replicas | **Committed but possibly stale.** They may lag, but never show uncommitted data, because they only receive committed writes. |
+| Uncommitted data | Never returned by core commands on any node. Modules can observe uncommitted writes through inline keyspace notifications and other module APIs (see [Open Questions](#module-keyspace-notifications)), so a module that serves queries must hold results until they are durable. |
 | Disks | Optional. Strong consistency doesn't require local persistence, and AOF can be combined with sync replication for more durability. |
 
 ### **Example: availability with** `target-sync-replicas = 2` **and** `min-sync-replicas = 1`
@@ -519,7 +477,7 @@ With one primary and one sync replica, losing either node means writes can't be 
 | **QoS for system-critical traffic** ([\#4076](https://github.com/valkey-io/valkey/issues/4076)) | Planned for 9.2 | The replication stream to sync replicas, their acknowledgements, and `REPLCONF COMMIT` are now on the write critical path. They are classified as system-critical traffic, so client load can't delay commits. |
 | **Full sync from replica** ([\#2767](https://github.com/valkey-io/valkey/issues/2767)) | Planned for 10.0 | An async replica serving a full sync holds only committed writes. A sync replica may hold applied writes that haven't committed yet, so a node bootstrapped this way joins as an ineligible async replica, and becomes eligible only through the normal promotion flow after catching up with the primary. It never counts toward commits based on the snapshot alone. If the snapshot included writes that are later lost in a failover, the node is fully resynced, like any other replica that is ahead. |
 | **Forkless save and multi-threaded RDB save** ([\#4219](https://github.com/valkey-io/valkey/issues/4219), [\#2470](https://github.com/valkey-io/valkey/issues/2470)) | Planned for 9.2 | Snapshots contain only committed data. Before a snapshot starts, whether for a full sync or a backup, the node waits until its committed offset reaches its replication offset. A primary briefly holds new writes during this wait, and a replica briefly stops applying the replication stream. A later optimization avoids the stall: record the replication offset when the snapshot starts, write the snapshot right away, and finalize it (or send the EOF marker for a full sync) only once the committed offset reaches that offset. This also works for forkless save. This extends what the reply blocking PR (\#3381) already does for full syncs under AOF durability, where the primary drains the pending AOF fsync before forking. |
-| **Atomic slot migration, including dual-channel** ([\#2957](https://github.com/valkey-io/valkey/issues/2957)) | Planned for 10.0 | The target shard takes ownership of a slot only after the migrated data has committed in the target shard (acknowledged by its sync replicas), and after modules on the target have reported consumed offsets past it (see section 3). The ownership transfer itself is a Cluster V2 fence. |
+| **Atomic slot migration, including dual-channel** ([\#2957](https://github.com/valkey-io/valkey/issues/2957)) | Planned for 10.0 | The target shard takes ownership of a slot only after the migrated data has committed in the target shard (acknowledged by its sync replicas), and after modules on the target have reported consumed offsets past it (see [Open Questions](#module-keyspace-notifications)). The ownership transfer itself is a Cluster V2 fence. |
 | **Conditional `EXEC` and the Lua 5.5 engine** ([\#4019](https://github.com/valkey-io/valkey/pull/4019), [\#3062](https://github.com/valkey-io/valkey/issues/3062)) | Planned for 9.2 | Transactions and scripts are replicated as a unit, and their replies are held until the whole unit commits, like any other write. No special handling is needed. Messages published with `PUBLISH` or `SPUBLISH` inside a transaction or script are held with the unit's replies, so subscribers never hear about a write that doesn't commit. |
 | **Faster failover elections** ([\#3833](https://github.com/valkey-io/valkey/issues/3833)) | Planned for 9.2 | Applies to the gossip-based Cluster V1 bus. Durable shards use Cluster V2's lease-based failover instead. |
 | **Read commands on I/O threads** ([\#2022](https://github.com/valkey-io/valkey/issues/2022)) | Proposed | The uncommitted-key check must run before a read is served, wherever it executes. A read offloaded to an I/O thread checks the uncommitted-key set and falls back to the main thread when the key has an uncommitted write. |
@@ -545,6 +503,58 @@ The protocol is subtle, so it is checked in two ways before durable shards are g
 * **Jepsen-style testing.** A Jepsen (or Porcupine-based) test suite that injects partitions, crashes, clock skew, and slow disks against a real cluster and checks the resulting histories for linearizability. It is part of Milestone IV and gates general availability.
 
 A Lean 4 proof of the protocol is also in progress ([jjuleslasarte/valkey\#3](https://github.com/jjuleslasarte/valkey/pull/3)). It is not a requirement for general availability. It models one shard: the commit protocol, the shard configuration, promotion, demotion, failover, restarts with and without data, and both leases, with replication messages delayed or lost, lease messages delayed, reordered or lost, and replicas reconnecting through PSYNC's replication ID and offset check. For any number of nodes and every value of `min-sync-replicas`, it proves that no committed write is lost while the primary or an eligible sync replica keeps its data, that no write released as OK is lost, that a node serving a linearizable read under a lease holds exactly the committed history when the clock-drift margin is at least twice the maximum drift, and that every history of client writes and reads is linearizable (`safety`, `ackSafety`, `lease_safety`, `noStaleRead`, `linearizable`). Every theorem is checked by Lean's kernel on Lean's standard axioms, with no `sorry`. It doesn't cover forced or manual failover, slot migration or more than one shard, AOF, per-key dirty key tracking, liveness (for example, that a held reply is ever released), or the Cluster V2 implementation, which it assumes correct and treats as a compare-and-set register. [Appendix: What the Lean proof found](#appendix-what-the-lean-proof-found) lists the rules it shows are needed.
+
+# Open Questions
+
+## Module keyspace notifications
+
+**Tracking:** [valkey\#4027](https://github.com/valkey-io/valkey/issues/4027)
+
+**Question:** how should modules that subscribe to keyspace notifications see writes that aren't durable yet, and how do they learn when a write becomes durable? The proposal below is not agreed yet.
+
+**Proposal.** Reply blocking holds replies, not command execution. So modules that subscribe to keyspace notifications can see a write before it is durable. Modules fall into two classes with conflicting needs:
+
+| Consumer class | Examples | Needs |
+| :---- | :---- | :---- |
+| **Change-time consumers** | Secondary indexes (such as ValkeySearch), in-process caches, idempotent fan-out | To see each change inline, in the same order as the keyspace, so derived state stays consistent with the data |
+| **Durability-sensitive consumers** | Forwarding to external systems, audit logs, change data capture | To know a write is durable before acting on it externally |
+
+The engine can't tell which class a module belongs to, so modules handle the distinction themselves, using the durable offset API below.
+
+### **Inline delivery**
+
+Module keyspace notifications are always delivered inline, at the moment the keyspace is modified and before the write is durable. This is the only delivery mode, for these reasons:
+
+* **Module client blocking** on keyspace events ([valkey\#1819](https://github.com/valkey-io/valkey/issues/1819)) only works correctly with inline delivery.  
+* **No stale-value hazard.** Reply blocking doesn't stop a second write to the same key from executing before the first write commits. A deferred callback could therefore read a newer value than the one it was notified about, which breaks read-after-write for change-time consumers.  
+* **Consistent with other module APIs**, which already observe state that isn't durable yet.
+
+An inline notification can describe a write that never commits. For example, the primary fails before the write commits, and every replica that already applied it is fully resynced from the new primary. Modules that keep derived state must treat inline notifications as provisional until durable. A full resync raises the existing flush and loading server events, which modules use to rebuild their derived state.
+
+### **Durable offset API**
+
+Modules get a generic way to learn when writes become durable, and to tell the core how far they have processed:
+
+| API | Purpose |
+| :---- | :---- |
+| `VM_GetCurrentOffset()` | Returns the node's applied offset: the latest write that has executed. |
+| `VM_GetDurableOffset()` | Returns the node's committed offset: the latest write that is durable under the configured policy (AOF fsync and/or sync replica acknowledgements). This is the node's local view, as described in section 2\. |
+| `ValkeyModuleEvent_DurableOffsetAdvanced` | A server event that fires when the node's committed offset advances, and carries the new committed offset. |
+| `VM_SetConsumedOffset(ctx, offset)` | Lets a module report the highest applied offset it has fully processed, for example indexed. The core uses it during slot migration. |
+
+**Example: read-committed secondary index**
+
+1. On each keyspace notification, the module records the end offset of the command that triggered the notification. During a notification, `VM_GetCurrentOffset()` must return that offset, not the end of the previous write.  
+2. As mutations are applied to the index, the module tracks the highest offset it has ingested (the index offset).  
+3. On a query such as `FT.SEARCH`, the module holds the response until `VM_GetDurableOffset()` reaches the index offset. It releases held queries from its `DurableOffsetAdvanced` event handler. Query results never reflect uncommitted writes.
+
+**Example: slot migration.** Slot migration needs the reverse direction: before the target shard takes ownership of a slot, the core must know that modules on the target have processed the migrated data. A module that keeps derived state reports its progress with `VM_SetConsumedOffset`. Before atomic slot migration finalizes on the target, the core waits until every module that has reported a consumed offset has reached the applied offset of the migrated data. Modules that never call `VM_SetConsumedOffset` aren't waited on.
+
+### **Design choices**
+
+* **Durable offset notification is a persistent server event, not a per-offset callback.** Modules subscribe once to `ValkeyModuleEvent_DurableOffsetAdvanced` through the existing server event mechanism. The event fires on the main thread at most once per event loop iteration, with the latest committed offset. Committed offsets only increase, so one event covers every earlier offset. Coalescing is built in, and modules never register per write.  
+* **Durability-sensitive consumers build on offsets, not on delayed notifications.** A module such as a change data capture forwarder records `VM_GetCurrentOffset()` with each inline notification, buffers the change, and forwards it once `DurableOffsetAdvanced` reports a committed offset at or past it. This keeps a single notification path in the core.  
+* **Consumed offsets are pushed by the module.** The core never calls into a module to ask how far it has processed. Modules report progress with `VM_SetConsumedOffset`, which keeps module code off the core's critical path.
 
 # Future Work
 
@@ -596,13 +606,13 @@ A Lean 4 proof of the protocol is also in progress ([jjuleslasarte/valkey\#3](ht
 
 ## Summary
 
-In write-ahead mode, a sync replica **buffers and logs** each incoming write but **doesn't apply it** to its in-memory state until it learns that the write has committed. Replica reads never block, because uncommitted data is never in the replica's keyspace. It also lets a replica that is ahead of a new primary discard its uncommitted writes instead of doing a full resync. The tradeoff is that reads from such a replica are serializable, not linearizable: a read can return the last committed value while a newer write is already committed on the primary but not yet applied on the replica.
+In write-ahead mode, a sync replica **buffers and logs** each incoming write but **doesn't apply it** to its in-memory state until it learns that the write has committed. Replica reads never block, because uncommitted data is never in the replica's keyspace. It also lets a replica that is ahead of a new primary discard its uncommitted writes instead of doing a full resync. The tradeoff is that reads from such a replica are not linearizable: a read can return the last committed value while a newer write is already committed on the primary but not yet applied on the replica.
 
 |  | Write-behind (main design) | Write-ahead (deferred) |
 | :---- | :---- | :---- |
 | When a replica applies a write | On arrival, with the key marked dirty | On commit notification |
 | Reads of a key with an in-flight write | Held until commit | Served immediately with the previous committed value |
-| Replica read consistency | Linearizable | Serializable |
+| Replica read consistency | Linearizable | Committed, possibly stale |
 | Replica memory overhead | Dirty key tracking | Buffer of uncommitted writes |
 
 ## Write path
@@ -647,6 +657,17 @@ sequenceDiagram
 ```
 
 *Write-ahead replica reads: sync replicas buffer and log the write without applying it, so replica reads return the old value until REPLCONF COMMIT arrives and the buffered write is applied.*
+
+## Why write-behind first
+
+The first implementation uses write-behind sync replicas for these reasons:
+
+* **The replica's execution path doesn't change.** A sync replica applies the replication stream as it arrives, as every Valkey replica does today. The only addition is dirty key tracking, which the primary needs anyway (section 1).  
+* **Replica reads can be linearizable.** A read of a dirty key is held until the write commits, so a sync replica that holds a read lease serves linearizable reads. A write-ahead replica serves reads that are committed but possibly stale.  
+* **No buffer of uncommitted writes.** A write-ahead replica keeps every write it has received but not yet applied, in memory and in its log.  
+* **Failover doesn't wait on a buffer.** A write-behind replica that becomes primary has already applied its log. A write-ahead replica must first apply its buffered writes (question 2 below).
+
+The cost is that a replica that is ahead of a new primary needs a full resync (see Reconciliation in section 5), which write-ahead mode avoids (question 3 below).
 
 ## Questions to resolve
 

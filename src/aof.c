@@ -1180,11 +1180,14 @@ ssize_t aofWrite(int fd, const char *buf, size_t len) {
 /* Clear a latched BIO fsync error once its generation is covered by a
  * committed rewrite base and BIO_CLOSE_AOF is empty. BIO_AOF_FSYNC and
  * BIO_CLOSE_AOF share FIFO worker 1, so BIO_CLOSE_AOF == 0 guarantees all
- * pre-rotation jobs have finished. Reset aof_last_incr_fsync_offset before
+ * pre-rotation jobs have finished. Requiring aof_committed_base_fd_gen ==
+ * aof_fd_gen ensures no incremental file retired after the committed base
+ * skipped its fsync under C_ERR. Reset aof_last_incr_fsync_offset before
  * release-storing C_OK so the new incremental delta must be fsynced before
  * fsynced_reploff_pending advances. */
 void aofClearCoveredFsyncError(void) {
     if (server.aof_state == AOF_OFF || server.aof_committed_base_fd_gen == 0) return;
+    if (server.aof_committed_base_fd_gen != server.aof_fd_gen) return;
     if (atomic_load_explicit(&server.aof_bio_fsync_status, memory_order_acquire) != C_ERR) return;
     if (bioPendingJobsOfType(BIO_CLOSE_AOF) != 0) return;
     if (atomic_load_explicit(&server.aof_bio_fsync_error_gen, memory_order_relaxed) <

@@ -2200,7 +2200,7 @@ struct valkeyServer {
     _Atomic(uint64_t) aof_bio_fsync_error_gen;
     /* aof_fd_gen after rotation; rewrite base covers gens < this. */
     uint64_t aof_rewrite_base_fd_gen;
-    /* Highest committed rewrite base generation; errors with gen < this are covered. */
+    /* Highest committed rewrite base generation; covers retired gens < this when == aof_fd_gen. */
     uint64_t aof_committed_base_fd_gen;
 
     /* RDB persistence */

@@ -1246,6 +1246,28 @@ test "Raft proto: a proposal the leader says is unchanged completes once applied
         $rd close
         $rd2 close
         foreach fd [list $fd_a $out_a] {close $fd}
+
+        # After a reset, A forms a new cluster with the node, with a shorter
+        # log. The UNCHANGED index from the old cluster no longer matters.
+        R 0 cluster reset hard
+        set node_id [R 0 CLUSTER MYID]
+        set listen_a [raft_listen a_cport]
+        set a_addr "127.0.0.1:[expr {$a_cport - 10000}]@$a_cport,,tls-port=0,shard-id=[string repeat b 40]"
+        set fd_a [raft_connect_fake_node 127.0.0.1 $cport $a_id $a_addr]
+        raft_send $fd_a "MEET cluster"
+        assert_match "ADD_ME*" [raft_recv $fd_a]
+        raft_send $fd_a "AE $a_id 1 0 0 2 0 2\n1 NODE_JOIN $a_id $a_addr voter\n1 NODE_JOIN $node_id $node_addr voter"
+        assert_match "AE_ACK *" [raft_recv $fd_a]
+        set out_a [raft_accept $listen_a]
+        assert_match "HELLO *" [raft_recv $out_a]
+        raft_send $out_a "HI $a_id $a_addr"
+        set rd [valkey_deferring_client]
+        $rd cluster addslots 0
+        set propose [raft_recv_until $out_a "PROPOSE SLOT_CHANGE *"]
+        raft_send $fd_a "AE $a_id 1 2 1 3 0 1\n1 [string range $propose [string length "PROPOSE "] end]"
+        assert_equal OK [$rd read]
+        $rd close
+        foreach fd [list $fd_a $out_a] {close $fd}
     }
 }
 

@@ -563,6 +563,12 @@ static void clusterRaftSingletonStepDown(void) {
     raftLogTruncateFrom(1);
     rs->last_applied = 0;
     rs->commit_index = 0;
+    /* Indexes in our old log say nothing about the new cluster's log. */
+    rs->max_unchanged_index = 0;
+    listIter li;
+    listNode *ln;
+    listRewind(rs->pending_proposals, &li);
+    while ((ln = listNext(&li)) != NULL) ((raftPendingProposal *)listNodeValue(ln))->min_index = 0;
 }
 
 /* Propose NODE_JOIN + SLOT_CHANGE for ourselves. Called once, before the
@@ -5116,6 +5122,7 @@ static void clusterRaftResetCluster(int hard) {
     }
     listEmpty(rs->deferred_meets);
     listEmpty(rs->pending_reads);
+    rs->max_unchanged_index = 0;
     rs->current_term = 0;
     memset(rs->leader, 0, CLUSTER_NAMELEN);
     memset(rs->voted_for, 0, CLUSTER_NAMELEN);

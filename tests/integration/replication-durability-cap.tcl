@@ -229,6 +229,7 @@ foreach repl_compression {no yes} {
                 $rd close
                 wait_for_ofs_sync $primary $replica
                 assert_equal "value" [$replica get cap:psync]
+            }
 
             test "Parked replica is not written to repeatedly (compression=$repl_compression)" {
                 # A replica whose cursor sits at the durable limit must report
@@ -314,7 +315,6 @@ foreach repl_compression {no yes} {
                     fail "replica link did not come back up"
                 }
                 wait_for_ofs_sync $primary $replica
-            }
             }
         }
     }

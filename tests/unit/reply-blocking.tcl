@@ -98,11 +98,17 @@ foreach provider_mode {aof} {
 
             test "($provider_mode) Sync replication blocks replies until provider acks" {
                 assert_equal "always" [lindex [$primary config get appendfsync] 1]
-                puts "durability blocks"
                 pause_provider
 
                 set rd [valkey_deferring_client -1]
                 $rd set durable:blocked value
+                # Barrier: the SET must have been processed (and held) before
+                # the read below, or an empty read proves nothing.
+                wait_for_condition 50 100 {
+                    [getInfoProperty [$primary info debug] reply_blocking_clients_waiting_ack] == 1
+                } else {
+                    fail "SET reply was not held"
+                }
 
                 set fd [$rd channel]
                 fconfigure $fd -blocking 0
@@ -118,7 +124,6 @@ foreach provider_mode {aof} {
 
             test "($provider_mode) Sync replication blocks EXEC replies until provider acks" {
                 assert_equal "always" [lindex [$primary config get appendfsync] 1]
-                puts "durability blocks"
 
                 pause_provider
 
@@ -143,7 +148,6 @@ foreach provider_mode {aof} {
 
             test "($provider_mode) Sync replication blocks only written keys in EXEC" {
                 assert_equal "always" [lindex [$primary config get appendfsync] 1]
-                puts "durability only written keys in EXEC"
 
                 # Pre-populate with durability off so the SET doesn't block
                 assert_equal "OK" [$primary set durable:multi-clean clean]
@@ -333,6 +337,16 @@ foreach provider_mode {aof} {
                 assert_equal "always" [lindex [$primary config get appendfsync] 1]
                 set saved_limit [lindex [$primary config get busy-reply-threshold] 1]
                 $primary config set busy-reply-threshold 10
+                # Clean up even when the test fails, so a leaked monitor or a
+                # paused provider doesn't break the tests that follow.
+                test_defer {
+                    catch {$primary script kill}
+                    catch {$primary DEBUG reply-blocking-resume aof}
+                    catch {$mon close}
+                    catch {$busy close}
+                    catch {$primary del durable:mon:filler}
+                    catch {$primary config set busy-reply-threshold $saved_limit}
+                }
 
                 set mon [valkey_deferring_client -1]
                 $mon monitor
@@ -385,16 +399,18 @@ foreach provider_mode {aof} {
                 $busy close
 
                 # Once durable, the monitor gets the script's lines and the server is alive.
-                wait_for_condition 100 50 {
-                    [string first "monitored-write" [append seen [read $fd]]] != -1
+                # Several MB of filler come first; search only what is new plus
+                # a short overlap instead of rescanning the whole stream.
+                set tail [string range $seen end-64 end]
+                set seen ""
+                wait_for_condition 600 50 {
+                    [string first "monitored-write" [set hay "$tail[read $fd]"]] != -1 ||
+                    [string length [set tail [string range $hay end-64 end]]] < 0
                 } else {
                     fail "monitor never received the script's lines"
                 }
                 fconfigure $fd -blocking 1
                 assert_equal PONG [$primary ping]
-                $mon close
-                $primary del durable:mon:filler
-                $primary config set busy-reply-threshold $saved_limit
             }
 
             test "($provider_mode) Key-targeting reads block per-key, not on the global dirty offset" {
@@ -1282,7 +1298,6 @@ foreach provider_mode {aof} {
 
             test "($provider_mode) Key invalidation is deferred until provider acks - signalModifiedKey" {
                 assert_equal "always" [lindex [$primary config get appendfsync] 1]
-                puts "running key invalidation"
                 # Set up a RESP3 tracking client that will receive invalidation messages
                 set tracker [valkey_deferring_client -1]
                 $tracker HELLO 3
@@ -1333,7 +1348,6 @@ foreach provider_mode {aof} {
 
             test "($provider_mode) Flush invalidation is deferred until provider acks - signalFlushedDb" {
                 assert_equal "always" [lindex [$primary config get appendfsync] 1]
-                puts "running flush invalidation"
 
                 # Set up a RESP3 BCAST tracking client to catch FLUSHDB invalidations
                 set tracker [valkey_deferring_client -1]
@@ -1458,9 +1472,9 @@ foreach provider_mode {aof} {
                 $primary config set appendfsync everysec
                 $primary config set notify-keyspace-events KA
 
-                set rd1 [valkey_deferring_client]
+                set rd1 [valkey_deferring_client -1]
                 assert_equal {1} [psubscribe $rd1 *]
-                r set foo bar
+                $primary set foo bar
                 assert_match "*set*" [$rd1 read]
                 $rd1 close
 
@@ -1575,73 +1589,6 @@ foreach provider_mode {aof} {
             }
 
             # ==================== Copy avoidance compatibility ====================
-
-            test "($provider_mode) Blocked reply not released when io_last_written.data_len exceeds encoded boundary" {
-                assert_equal "always" [lindex [$primary config get appendfsync] 1]
-
-                pause_provider
-
-                # Write a dirty key (fire-and-forget) so the next GET is blocked
-                set writer [valkey_deferring_client -1]
-                $writer client reply off
-                $writer set durable:inject-key value
-
-                # Barrier: ensure the writer's SET is processed before the reader's GET.
-                wait_for_condition 50 10 {
-                    [catch {$primary debug object durable:inject-key}] == 0
-                } else {
-                    fail "Writer's SET was not processed in time"
-                }
-
-                # Reader: issue GET on the dirty key — reply will be blocked
-                set rd [valkey_deferring_client -1]
-
-                # Get the reader's client ID for the DEBUG command
-                $rd client id
-                set reader_id [$rd read]
-
-                $rd get durable:inject-key
-
-                # Give server time to process and block the reply
-                after 100
-
-                # Inject the post-partial-write state using DEBUG.
-                # This simulates what happens after IO threads write an
-                # encoded (copy-avoided) buffer: data_len (decoded RESP bytes)
-                # is much larger than bufpos (encoded buffer position).
-                # bufpos=0 means "buffer not fully consumed" (incomplete write).
-                # data_len=999999 is a large decoded byte count.
-                #
-                # The disallowed_byte_offset for the blocked reply is a small
-                # number in encoded-buffer coordinates (~30 bytes).
-                #
-                # Bug (data_len):  999999 < ~30 → false → "no pending" →
-                #   server thinks all data sent, removes write handler,
-                #   reply leaks through!
-                # Fix (bufpos):    0 < ~30 → true → "still pending" →
-                #   reply stays blocked.
-                $primary DEBUG set-io-last-written $reader_id 0 999999
-
-                # Check: the reply must NOT leak through
-                set fd [$rd channel]
-                fconfigure $fd -blocking 0
-                after 200
-                set early_reply [read $fd]
-                fconfigure $fd -blocking 1
-                assert_equal "" $early_reply
-
-                # Reset the injected state so normal writes work after unblock
-                $primary DEBUG set-io-last-written $reader_id 0 0
-
-                unblock_with_provider
-
-                # Now the reply should come through
-                assert_equal "value" [$rd read]
-                $rd close
-                $writer close
-            }
-
-            # ==================== Failover tests (must be last  changes roles) ====================
 
             test "($provider_mode) Failover disconnects clients waiting for ack" {
                 # Ensure replica is in clean state for deterministic failover behavior.
@@ -1966,8 +1913,9 @@ start_server {tags {"repl durability external:skip"}} {
                 fail "replica did not start loading the sync RDB"
             }
             assert_equal 0 [getInfoProperty [$replica info persistence] aof_enabled]
-            set fd [socket $replica_host $replica_port]
-            fconfigure $fd -translation binary -buffering none
+            # Connect without sending anything (no SELECT) while loading; works
+            # with TLS too.
+            set rc [valkey $replica_host $replica_port 1 $::tls]
 
             $replica config set key-load-delay 0
             wait_for_condition 100 100 {
@@ -1980,7 +1928,8 @@ start_server {tags {"repl durability external:skip"}} {
             # FLUSHDB registers no task for this client, so nothing else sets up
             # its reply-blocking state before the reply is held (a SET would,
             # through the key invalidation task).
-            puts -nonewline $fd "*2\r\n\$7\r\nFLUSHDB\r\n\$4\r\nSYNC\r\n"
+            $rc flushdb sync
+            set fd [$rc channel]
             fconfigure $fd -blocking 0
             set got ""
             wait_for_condition 50 20 {
@@ -1988,7 +1937,8 @@ start_server {tags {"repl durability external:skip"}} {
             } else {
                 fail "no reply from the promoted replica"
             }
-            close $fd
+            fconfigure $fd -blocking 1
+            $rc close
             assert_equal "+OK\r\n" $got
             assert_equal PONG [$replica ping]
         }

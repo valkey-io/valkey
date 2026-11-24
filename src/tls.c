@@ -499,108 +499,6 @@ static int tlsPasswordCallback(char *buf, int size, int rwflag, void *u) {
     return (int)pass_len;
 }
 
-/* Check a single X509 certificate validity */
-static bool isCertValid(X509 *cert) {
-    if (!cert) return false;
-#if OPENSSL_VERSION_NUMBER >= 0x40000000L
-    int error = 0;
-    if (X509_check_certificate_times(NULL, cert, &error) != 1) {
-        if (error == X509_V_ERR_ERROR_IN_CERT_NOT_BEFORE_FIELD) {
-            serverLog(LL_WARNING, "Certificate has an invalid notBefore field");
-        } else if (error == X509_V_ERR_ERROR_IN_CERT_NOT_AFTER_FIELD) {
-            serverLog(LL_WARNING, "Certificate has an invalid notAfter field");
-        }
-        return false;
-    }
-#else
-    const ASN1_TIME *not_before = X509_get0_notBefore(cert);
-    const ASN1_TIME *not_after = X509_get0_notAfter(cert);
-    if (!not_before || !not_after) return false;
-    if (X509_cmp_current_time(not_before) > 0 ||
-        X509_cmp_current_time(not_after) < 0) {
-        return false;
-    }
-#endif
-    return true;
-}
-
-/* Load all certificates from a directory into the X509_STORE
- * Returns true on success, false on failure */
-static bool loadCaCertDir(SSL_CTX *ctx, const char *ca_cert_dir) {
-    if (!ca_cert_dir) return true;
-
-    DIR *dir;
-    struct dirent *entry;
-    char full_path[PATH_MAX];
-    X509_STORE *store = SSL_CTX_get_cert_store(ctx);
-
-    if (!store) {
-        serverLog(LL_WARNING, "Failed to get X509_STORE from SSL_CTX");
-        return false;
-    }
-
-    dir = opendir(ca_cert_dir);
-    if (!dir) {
-        serverLog(LL_WARNING, "Failed to open CA certificate directory: %s", ca_cert_dir);
-        return false;
-    }
-
-    int loaded = 0;
-    while ((entry = readdir(dir)) != NULL) {
-        if (!strcmp(entry->d_name, ".") || !strcmp(entry->d_name, "..")) continue;
-
-        snprintf(full_path, sizeof(full_path), "%s/%s", ca_cert_dir, entry->d_name);
-        FILE *fp = fopen(full_path, "r");
-        if (!fp) continue;
-
-        X509 *cert = PEM_read_X509(fp, NULL, NULL, NULL);
-        fclose(fp);
-
-        if (cert) {
-            if (X509_STORE_add_cert(store, cert) != 1) {
-                unsigned long err = ERR_peek_last_error();
-                if (ERR_GET_REASON(err) != X509_R_CERT_ALREADY_IN_HASH_TABLE) {
-                    serverLog(LL_WARNING, "Failed to add CA certificate from %s to store", full_path);
-                    X509_free(cert);
-                    closedir(dir);
-                    return false;
-                }
-                ERR_clear_error();
-            }
-            X509_free(cert);
-            loaded++;
-        }
-    }
-
-    closedir(dir);
-
-    if (loaded == 0) {
-        serverLog(LL_WARNING, "No CA certificates loaded from directory: %s", ca_cert_dir);
-        return false;
-    }
-
-    return true;
-}
-
-/* Iterate over all CA certs in the SSL_CTX and fail-fast if any are invalid */
-static bool areAllCaCertsValid(SSL_CTX *ctx) {
-    X509_STORE *store = SSL_CTX_get_cert_store(ctx);
-    if (!store) return false;
-    STACK_OF(X509_OBJECT) *objs = X509_STORE_get0_objects(store);
-    if (!objs) return false;
-    for (int i = 0; i < sk_X509_OBJECT_num(objs); i++) {
-        X509_OBJECT *obj = sk_X509_OBJECT_value(objs, i);
-        int type = X509_OBJECT_get_type(obj);
-        if (type == X509_LU_X509) {
-            X509 *ca_cert = X509_OBJECT_get0_X509(obj);
-            if (ca_cert && !isCertValid(ca_cert)) {
-                return false;
-            }
-        }
-    }
-    return true;
-}
-
 /* Create a *base* SSL_CTX using the SSL configuration provided. The base context
  * includes everything that's common for both client-side and server-side connections.
  */
@@ -650,11 +548,6 @@ static SSL_CTX *createSSLContext(serverTLSContextConfig *ctx_config, int protoco
         goto error;
     }
 
-    if (!isCertValid(SSL_CTX_get0_certificate(ctx))) {
-        serverLog(LL_WARNING, "%s TLS certificate is invalid. Aborting TLS configuration.", client ? "Client" : "Server");
-        goto error;
-    }
-
     /* INFO reporting only. A failure leaves the field as none rather than refusing the
      * configuration. */
     if (out_info) tlsUpdateCertInfoFromCtx(ctx, &out_info->cert_expiry, &out_info->cert_serial);
@@ -669,11 +562,6 @@ static SSL_CTX *createSSLContext(serverTLSContextConfig *ctx_config, int protoco
         if (SSL_CTX_use_certificate_chain_file(ctx, alt_cert_file) <= 0) {
             ERR_error_string_n(ERR_get_error(), errbuf, sizeof(errbuf));
             serverLog(LL_WARNING, "Failed to load certificate: %s: %s", alt_cert_file, errbuf);
-            goto error;
-        }
-
-        if (!isCertValid(SSL_CTX_get0_certificate(ctx))) {
-            serverLog(LL_WARNING, "Alternate server TLS certificate is invalid. Aborting TLS configuration.");
             goto error;
         }
 
@@ -704,22 +592,11 @@ static SSL_CTX *createSSLContext(serverTLSContextConfig *ctx_config, int protoco
         }
     }
 
-    if (ctx_config->ca_cert_file || ctx_config->ca_cert_dir) {
-        if (SSL_CTX_load_verify_locations(ctx, ctx_config->ca_cert_file, ctx_config->ca_cert_dir) <= 0) {
-            ERR_error_string_n(ERR_get_error(), errbuf, sizeof(errbuf));
-            serverLog(LL_WARNING, "Failed to configure CA certificate(s) file/directory: %s", errbuf);
-            goto error;
-        }
-
-        if (!loadCaCertDir(ctx, ctx_config->ca_cert_dir)) {
-            serverLog(LL_WARNING, "Failed to load CA certificates from directory: %s", ctx_config->ca_cert_dir);
-            goto error;
-        }
-
-        if (!areAllCaCertsValid(ctx)) {
-            serverLog(LL_WARNING, "One or more loaded CA certificates are invalid. Aborting TLS configuration.");
-            goto error;
-        }
+    if ((ctx_config->ca_cert_file || ctx_config->ca_cert_dir) &&
+        SSL_CTX_load_verify_locations(ctx, ctx_config->ca_cert_file, ctx_config->ca_cert_dir) <= 0) {
+        ERR_error_string_n(ERR_get_error(), errbuf, sizeof(errbuf));
+        serverLog(LL_WARNING, "Failed to configure CA certificate(s) file/directory: %s", errbuf);
+        goto error;
     }
 
     if (ctx_config->ciphers && !SSL_CTX_set_cipher_list(ctx, ctx_config->ciphers)) {

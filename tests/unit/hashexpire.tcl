@@ -1088,8 +1088,13 @@ start_server {tags {"hashexpire"}} {
     }
 
     test {Hash TTL batch lookup handles live, expired, persistent and missing fields} {
+        set original_max [lindex [r config get hash-max-listpack-entries] 1]
+        r config set hash-max-listpack-entries 0
+        test_defer {r config set hash-max-listpack-entries $original_max}
+
         # Keep expired entries to test lookup filtering.
         r DEBUG SET-ACTIVE-EXPIRE 0
+        test_defer {r DEBUG SET-ACTIVE-EXPIRE 1}
         r del ttlbatchtest
         set live_fields {}
         set expired_fields {}
@@ -1129,8 +1134,7 @@ start_server {tags {"hashexpire"}} {
             }
             assert_equal -2 [lindex $result end]
         }
-        r DEBUG SET-ACTIVE-EXPIRE 1
-    } {OK} {needs:debug}
+    } {} {needs:debug}
 
     ##### EXPIRETIME ######
 

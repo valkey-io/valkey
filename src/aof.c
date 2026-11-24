@@ -2658,6 +2658,7 @@ int rewriteAppendOnlyFileRio(rio *aof) {
             if (rewriteObjectRio(aof, o, j) == C_ERR) goto werr;
         }
         kvstoreIteratorRelease(kvs_it);
+        kvs_it = NULL;
     }
     return C_OK;
 

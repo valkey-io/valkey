@@ -2501,8 +2501,8 @@ static void clusterRaftSendPreVoteResponse(clusterLink *link, uint64_t term, int
 }
 
 static int clusterRaftCanGrantVote(clusterRaftState *rs, uint64_t candidate_last_index, uint64_t candidate_last_term) {
+    /* Learners vote too: a candidate only counts its own voters. */
     if (rs->role == RAFT_ROLE_JOINER) return 0;
-    if (nodeIsLearner(myself)) return 0;
 
     /* Deny vote if we are the leader or recently heard from it (leader
      * lease, Raft thesis 4.2.3). Only contact with the leader counts, not

@@ -1148,11 +1148,15 @@ int TestReplDel(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
 void ReplDelTimerCallback(ValkeyModuleCtx *ctx, void *data) {
     ValkeyModuleString *keyname = data;
     ValkeyModuleKey *key = ValkeyModule_OpenKey(ctx, keyname, VALKEYMODULE_WRITE);
-    if (key != NULL) {
-        ValkeyModule_Replicate(ctx, "DEL", "s", keyname);
-        ValkeyModule_DeleteKey(key);
-        ValkeyModule_CloseKey(key);
+    if (key == NULL) {
+        /* A timer isn't blocked like a command, so the key may be in use by the forkless
+         * sync.  Retry on the next tick. */
+        ValkeyModule_CreateTimer(ctx, 1, ReplDelTimerCallback, keyname);
+        return;
     }
+    ValkeyModule_Replicate(ctx, "DEL", "s", keyname);
+    ValkeyModule_DeleteKey(key);
+    ValkeyModule_CloseKey(key);
     ValkeyModule_FreeString(NULL, keyname);
 }
 

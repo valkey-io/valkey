@@ -428,7 +428,11 @@ start_server {tags {"regression"}} {
 start_server {tags {"regression needs:debug"} overrides {io-threads 2 io-threads-always-active yes}} {
 
     test "Stale argc with DONT_PARSE should not crash" {
-        set fd [socket [srv 0 host] [srv 0 port]]
+        if {$::tls} {
+            set fd [::tls::socket [srv 0 host] [srv 0 port]]
+        } else {
+            set fd [socket [srv 0 host] [srv 0 port]]
+        }
         fconfigure $fd -translation binary -buffering full
 
         # Get client ID.
@@ -444,11 +448,19 @@ start_server {tags {"regression needs:debug"} overrides {io-threads 2 io-threads
 
         # Simulate an event that marks the client for closure.
         r DEBUG SET-CLOSE-AFTER-REPLY $cid
+        set net_in [get_field_in_client_list $cid [r client list id $cid] "tot-net-in"]
 
         # Send more data → DONT_PARSE → stale argc > 0 → pending_command → crash.
         puts -nonewline $fd "world\r\n"
         flush $fd
 
+        # Wait until the server has read the 7 bytes above. The read is counted
+        # in the same main-thread pass that would hit the crash.
+        wait_for_condition 50 100 {
+            [get_field_in_client_list $cid [r client list id $cid] "tot-net-in"] == $net_in + 7
+        } else {
+            fail "server did not read the remaining bytes"
+        }
         assert_equal [r PING] PONG
         catch {close $fd}
     }

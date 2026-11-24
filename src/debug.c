@@ -1193,8 +1193,9 @@ void debugCommand(client *c) {
             addReplyError(c, "No such client");
             return;
         }
-        target->flag.close_after_reply = 1;
+        /* Queue the reply first, so it is not dropped when targeting ourselves. */
         addReply(c, shared.ok);
+        target->flag.close_after_reply = 1;
     } else if (!handleDebugClusterCommand(c)) {
         addReplySubcommandSyntaxError(c);
         return;

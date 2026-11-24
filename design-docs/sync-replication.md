@@ -9,7 +9,7 @@ Valkey is adding first-class multi-node durability through **synchronous replica
 3. **Primary eligibility is committed to the cluster bus.** Only replicas that are fully caught up can become eligible for promotion, and that eligibility is recorded durably.  
 4. **Bidirectional leases prevent stale reads.** Leases are implicit in replication traffic. A replica's acknowledgements renew the primary's lease, so a replica can take over only after that lease has expired. The primary's commit messages renew each sync replica's read lease, so the primary commits without a replica only after that replica's lease has expired. The order in which replicas join and leave the sync replica set keeps a deposed primary from committing anything the new primary lacks. The leases make sure a node that loses its role also stops serving reads in time.
 
-Durability is configured on the server with two settings, `min-sync-replicas` and `target-sync-replicas`. Both are set on every node, and the current primary's values take effect. A per-replica `sync-eligible` setting controls which replicas may join the sync replica set. The shard's primary promotes replicas until the sync replica set reaches the target, and it rejects writes whenever the set falls below the minimum. Clients don't need any changes.
+Durability is configured on the server with two settings, `min-sync-replicas` and `target-sync-replicas`. Both are set on every node, and the current primary's values take effect. A per-replica `sync-eligible` setting controls which replicas may join the sync replica set. Each sync replica runs in one of two modes: write-ahead, the default, in which it logs each write and applies it only once it commits, or write-behind, in which it applies each write as it arrives. The shard's primary promotes replicas until the sync replica set reaches the target, and it rejects writes whenever the set falls below the minimum. Clients don't need any changes.
 
 The rest of this document gives the motivation, the requirements, the building blocks, the consistency guarantees, and the milestone plan. It consolidates the design discussion spread across the Valkey RFCs, GitHub issues, and draft PRs. See [References](#references).
 
@@ -114,11 +114,11 @@ flowchart TB
 
 The foundation for every durability mode is a mechanism that **delays replies, not command execution**, until a write is durable. It is called the Dirty Key Tracker, or reply blocking.
 
-* **Execute immediately, hold the reply.** A command runs right away and its reply goes into the client output buffer (COB). A byte-precise boundary in the COB stops the networking layer from flushing past it until the *committed offset* catches up. A pipelined client can have several boundaries, which unblock one after another. Each boundary also records the node's *replication ID* when the command ran. A boundary releases its reply as OK only while the node is still primary with that same replication ID. On a replica, a held read is released once the replica's committed offset passes it, and only while the replica still has the replication ID it had when the read ran. If the replica's replication ID changes first, the read is answered with `UNCOMMITTED`, because a full resync may have replaced the data the read saw. The ID also changes when a replica continues with a new primary after a failover, so some of those reads get `UNCOMMITTED` without need, which is safe.  
-* **Uncommitted key tracking.** Modified keys are tracked per database, together with the replication offset at which they were dirtied. A **read** of an uncommitted key is reply-blocked just like a write, so no client ever sees uncommitted state. This includes non-replicating replies, such as `SETNX` returning `0` because of a write that isn't durable yet.  
+* **Execute immediately, hold the reply.** A command runs right away and its reply goes into the client output buffer (COB). A byte-precise boundary in the COB stops the networking layer from flushing past it until the *committed offset* catches up. A pipelined client can have several boundaries, which unblock one after another. Each boundary also records the node's *replication ID* when the command ran. A boundary releases its reply as OK only while the node is still primary with that same replication ID. On a write-behind replica (section 2), a held read is released once the replica's committed offset passes it, and only while the replica still has the replication ID it had when the read ran. If the replica's replication ID changes first, the read is answered with `UNCOMMITTED`, because a full resync may have replaced the data the read saw. The ID also changes when a replica continues with a new primary after a failover, so some of those reads get `UNCOMMITTED` without need, which is safe. A write-ahead replica applies only committed writes, so it holds no read for an uncommitted write.  
+* **Uncommitted key tracking.** Modified keys are tracked per database, together with the replication offset at which they were dirtied. A **read** of an uncommitted key is reply-blocked just like a write, so no client ever sees uncommitted state. This includes non-replicating replies, such as `SETNX` returning `0` because of a write that isn't durable yet. A write-ahead replica has no uncommitted keys, because it applies a write only once the write has committed.  
 * **Keyspace-wide reads.** Commands that read the keyspace as a whole, not specific keys (`SCAN`, `KEYS`, `RANDOMKEY`, `DBSIZE`, `INFO keyspace`), can't be checked key by key. Their replies are held until the node's committed offset reaches the applied offset at the time the command ran.  
 * **Expiry and eviction.** Deletes caused by expiry or eviction are replicated writes, so the deleted key is marked dirty like any other write. A read that finds a key missing because it was just expired or evicted is held until that delete commits. Otherwise a client could read nil and then, after a failover, read the old value again.  
-* **Expiry on sync replicas.** A sync replica never expires a key by its own clock. It serves the key until the primary's delete arrives, and that delete is a dirty write like any other. So clock skew between the primary and a replica can't make the replica hide a key that the primary still serves, and only the primary decides when a key expires. The cost is that a replica can serve a key for a short time after its TTL by the replica's clock. Hash field expiration doesn't support passive expiration yet, so hashes with field TTLs need that work before this rule covers them.  
+* **Expiry on sync replicas.** A sync replica never expires a key by its own clock. It serves the key until the primary's delete arrives (on a write-ahead replica, until the delete commits and the replica applies it), and that delete is handled like any other write. So clock skew between the primary and a replica can't make the replica hide a key that the primary still serves, and only the primary decides when a key expires. The cost is that a replica can serve a key for a short time after its TTL by the replica's clock. Hash field expiration doesn't support passive expiration yet, so hashes with field TTLs need that work before this rule covers them.  
 * **Deferred client side effects.** Client keyspace notifications (pub/sub) and client-side caching invalidations are deferred until the write is durable. How module keyspace notifications are delivered is an open question; see [Open Questions](#module-keyspace-notifications).  
 * **fsync moves off the main thread.** For local durability (`appendfsync always`), AOF write and fsync run as a background job. The main thread keeps serving other clients while the fsync is in flight, and the zero-data-loss guarantee is preserved.
 
@@ -149,22 +149,78 @@ Two settings are configured on each node. Only the current primary's values take
 **On replicas**
 
 * `sync-eligible` (`yes` or `no`, default `no`) marks a replica as a candidate for the sync replica set. Unlike the two settings above, each replica's own value applies. Replicas that aren't sync-eligible are never promoted, so operators can deploy 1 primary \+ sync-eligible replicas \+ async read replicas. All asynchronous replication, including async replicas and cross-region replication, receives the stream only up to the primary's committed offset, so it never holds uncommitted writes. Only sync replicas receive writes before they commit, because their acknowledgements are what commits them. As a result, an async replica is never ahead of a new primary and normally continues with a partial resync after failover.  
+* `sync-replica-mode` (`write-ahead` or `write-behind`, default `write-ahead`) sets when a sync replica applies the writes it receives before they commit. The name is a placeholder, and the naming of the settings in this section is still open; `sync-eligible` may also be renamed to `repl-mode` (`sync` or `async`), a different setting from this one. Like `sync-eligible`, each replica's own value applies. Whether the mode should instead be one setting for the whole shard is an open question (see [Replica modes](#replica-modes)). A **write-ahead** replica appends the stream to its log on a background thread and applies an entry to its keyspace only once its committed offset passes the entry. A **write-behind** replica applies each write as it arrives and tracks the modified keys as dirty (section 1). The primary's commit rule is the same for both modes, because in both an acknowledgement means the replica holds the write. See [Write path](#write-path).  
 * A sync-eligible replica advertises itself during the replication handshake (`REPLCONF CAPA SYNC`) and catches up through the normal PSYNC and replication stream. A replica that doesn't send `REPLCONF CAPA SYNC`, including one running an older Valkey version, is never promoted and receives the stream only up to the committed offset, like any async replica.  
 * The primary sends its committed offset to replicas with `REPLCONF COMMIT <offset>`, either as its own message or piggybacked on the replication stream.  
-* A sync replica's `REPLCONF ACK <offset>` means it has received and applied the stream up to that offset. If the replica has `appendfsync always`, it acknowledges only after the AOF fsync for that offset completes, so a shard that uses both AOF and sync replication survives every node losing power at once. Because its acknowledgements are on the write's critical path, a sync replica sends `REPLCONF ACK` as soon as it has applied the writes it has read from the stream, not only once per second from the replication cron, or when the primary asks with `REPLCONF GETACK`, as replicas do today. A write's reply then waits at least until the slowest sync replica has received, applied and acknowledged it, and fsynced it with `appendfsync always`. Performance validation is tracked in [\#4029](https://github.com/valkey-io/valkey/issues/4029).
+* A sync replica's `REPLCONF ACK <offset>` means it holds the stream up to that offset: a write-ahead replica has appended it to its log, and a write-behind replica has applied it. If the replica has `appendfsync always`, it acknowledges only after that offset is fsynced (on a write-behind replica, the AOF fsync; on a write-ahead replica, an fsync of its log, because it hasn't applied the write yet), so a shard that uses both AOF and sync replication survives every node losing power at once. For write-ahead replicas this also depends on how the log is persisted and restored (see [Replica modes](#replica-modes), question 5, and Restarts in section 5). Because its acknowledgements are on the write's critical path, a sync replica sends `REPLCONF ACK` as soon as it has logged (write-ahead) or applied (write-behind) the writes it has read from the stream, not only once per second from the replication cron, or when the primary asks with `REPLCONF GETACK`, as replicas do today. A write's reply then waits at least until the slowest sync replica has received, logged or applied, and acknowledged it, and fsynced it with `appendfsync always`. Performance validation is tracked in [\#4029](https://github.com/valkey-io/valkey/issues/4029).
 
 **The committed offset is a per-node view**
 
 Every node tracks its own committed offset, and reply unblocking on a node depends only on that node's local view:
 
 * **On the primary**, the committed offset is computed from sync replica acknowledgements, as described above. The primary keeps each replica's acknowledged offset per connection, as Valkey's `repl_ack_off` is: when the primary accepts a replica's PSYNC, its record of that replica starts again from 0 and rises with the acknowledgements on the new connection. A sync replica that reconnects still holds every committed write, but the committed offset can't advance past what it has acknowledged on the new connection, so commits wait until it acknowledges again.  
-* **On a replica**, the committed offset is the last value received in `REPLCONF COMMIT`. It can trail the primary's but is never ahead of it.  
-* As a result, a key can already be clean on the primary while it is still dirty on a replica. Replica reads of that key are held a little longer, but they never return uncommitted data.  
-* **On promotion**, a new primary's local view can be behind writes the old primary had already acknowledged. Following PacificA, the new primary first *reconciles*: it commits the whole log it inherited, by the normal commit rule, so with at least `min-sync-replicas` sync replicas. Until it has, it doesn't serve clients, and promotion catch-up and full resync are measured against the end of that inherited log, not against its committed offset. See [Leases, fault detection, and failover](#5-leases-fault-detection-and-failover).
+* **On a replica**, the committed offset is the latest value received in `REPLCONF COMMIT` under its current replication history. It resets to the replica's applied offset whenever that history changes: on a full resync, where that is the snapshot's offset, and when a write-ahead replica truncates its log after a failover (see Truncating a write-ahead replica's log in section 5). A write-ahead replica applies a log entry only once a `COMMIT` received in that history passes it. In steady state the replica's committed offset can trail the primary's but is never ahead of it.  
+* As a result, a key can already be clean on the primary while it is still dirty on a write-behind replica, whose reads of that key are held a little longer. A write-ahead replica can still serve the key's previous committed value until it applies the write. Neither returns uncommitted data.  
+* **On promotion**, a new primary's local view can be behind writes the old primary had already acknowledged. Following PacificA, the new primary first *reconciles*: it commits the whole log it inherited, by the normal commit rule, so with at least `min-sync-replicas` sync replicas. Until it has, it doesn't serve clients, and promotion catch-up and full resync are measured against the end of that inherited log, not against its committed offset. A write-ahead replica that is promoted also applies the rest of its log before it serves clients. See [Leases, fault detection, and failover](#5-leases-fault-detection-and-failover).
 
 ### **Write path**
 
-Sync replicas use **dirty key tracking**. They apply each write as soon as it arrives but treat the modified keys as dirty, and a read of a dirty key is held until the replica's committed offset passes the write. This makes reads from sync replicas linearizable while the replica holds a read lease.
+The primary's side of the write path is the same for both replica modes. The modes differ in when a sync replica applies a write:
+
+* **Write-ahead (the default).** The replica appends each write to its log on a background thread and acknowledges it. It applies the entry to its keyspace only once its committed offset, learned from `REPLCONF COMMIT`, passes the entry. Its keyspace never holds an uncommitted write, so it has no dirty keys and its reads are never held. A read can return a committed value that is out of date: a write can be committed on the primary but not yet applied on the replica.  
+* **Write-behind.** The replica uses **dirty key tracking**. It applies each write as soon as it arrives but treats the modified keys as dirty, and a read of a dirty key is held until the replica's committed offset passes the write. This makes reads from write-behind sync replicas linearizable while the replica holds a read lease.
+
+|  | Write-ahead (default) | Write-behind |
+| :---- | :---- | :---- |
+| When a replica applies a write | Once its committed offset passes the write | On arrival, with the key marked dirty |
+| What `REPLCONF ACK` confirms | The write is in the replica's log | The write is applied |
+| Reads of a key with an in-flight write | Served immediately with the previous committed value | Held until commit |
+| Replica read consistency | Committed, possibly stale (linearizable reads are an [open question](#replica-modes)) | Linearizable while the replica holds a read lease |
+| Replica memory overhead | Log of writes not yet applied | Dirty key tracking |
+| Replica ahead of a new primary after failover | Discards its log past the end of the log the new primary inherited and continues with a partial resync (needs a PSYNC change, see Truncating a write-ahead replica's log in section 5) | Full resync |
+| Snapshot on the replica | Starts at once, at the replica's applied offset: the keyspace holds only committed writes | Waits until the committed offset reaches the replica's replication offset |
+| Promoted to primary | Applies the rest of its log before serving | Has already applied its log |
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant C as Client
+    participant C2 as Client 2
+    participant P as Primary
+    participant R1 as Sync replica 1
+    participant R2 as Sync replica 2
+
+    Note over C,R2: key1 = old_data
+    C->>P: SET key1 new_data
+    Note over P: Offset 101: apply, mark key1 dirty
+    par Replicate
+        P->>R1: Write at offset 101
+    and
+        P->>R2: Write at offset 101
+    end
+    Note over R1,R2: Append to log (background thread)<br/>do not apply yet
+    par Acknowledge
+        R1->>P: REPLCONF ACK 101
+    and
+        R2->>P: REPLCONF ACK 101
+    end
+    C2->>R1: GET key1
+    R1-->>C2: old_data (served, not held)
+    C2-xP: GET key1 (held, key1 dirty)
+    Note over P: Committed offset reaches 101
+    P-->>C2: new_data
+    P-->>C: +OK
+    par Commit notification
+        P->>R1: REPLCONF COMMIT 101
+    and
+        P->>R2: REPLCONF COMMIT 101
+    end
+    Note over R1,R2: Committed offset reaches 101<br/>apply the write
+    C2->>R1: GET key1
+    R1-->>C2: new_data
+```
+
+*Write path with write-ahead replicas (the default): the primary assigns the write an offset, applies it and marks the key dirty, then forwards it to both sync replicas, which append it to their logs without applying it and acknowledge. A read on a replica returns the old committed value until REPLCONF COMMIT arrives and the replica applies the write. On the primary, reads of the key are held until the committed offset passes the write.*
 
 ```mermaid
 sequenceDiagram
@@ -203,11 +259,27 @@ sequenceDiagram
     R2-->>C2: new_data
 ```
 
-*Write path: the primary assigns the write an offset, applies it and marks the key dirty, then forwards it to both sync replicas, which apply it and mark it dirty. Reads of the key are held until the committed offset passes the write. After both ACKs the primary commits and replies, and REPLCONF COMMIT releases held reads on the replicas.*
-
-A write-ahead mode for sync replicas is deferred and tracked separately in the **Deferred: Write-ahead replica reads** section. In that mode, replica reads never block, but they can return a committed value that is out of date.
+*Write path with write-behind replicas: the primary assigns the write an offset, applies it and marks the key dirty, then forwards it to both sync replicas, which apply it and mark it dirty. Reads of the key are held until the committed offset passes the write. After both ACKs the primary commits and replies, and REPLCONF COMMIT releases held reads on the replicas.*
 
 **Note on read concern.** Today a client can't ask for a particular read consistency. `READONLY` is the only replica-read option, and `READONLY` reads keep being served after a sync replica is demoted to async. Until a read concern protocol exists (see Future Work), clients can't rely on linearizable reads from replicas. The lease rules in this design are in place so that it can be added later without protocol changes.
+
+### **Write-ahead as the default**
+
+Sync replicas run write-ahead by default, and write-behind is an option. Write-ahead is the default for these reasons:
+
+* **Snapshots don't wait.** A write-ahead replica's keyspace holds only committed writes, so it can fork for a backup or a full sync at any time, and the snapshot records its applied offset. A write-behind replica must first stop applying the stream until its committed offset reaches its replication offset, unless it uses the optimization in the Forkless save row of [Cross-Feature Interactions](#cross-feature-interactions).  
+* **The replica's main thread is off the write path.** A write-ahead replica appends the stream to its log and acknowledges it on a background thread. A write's latency then doesn't depend on the replica's main thread executing it, or on client traffic the replica is serving.  
+* **No full resync for a replica that is ahead.** After a failover, a write-ahead replica that is ahead of the new primary discards the part of its log past the end of the log the new primary inherited and continues with a partial resync. A write-behind replica can't undo applied writes, so it needs a full resync (see Reconciliation in section 5).  
+* **Replica reads are never held.** Uncommitted writes are never in a write-ahead replica's keyspace.
+
+Write-behind stays available because it has its own advantages:
+
+* **Replica reads can be linearizable.** A read of a dirty key is held until the write commits, so a write-behind replica that holds a read lease serves linearizable reads. How a write-ahead replica would serve them is an open question (see [Replica modes](#replica-modes)).  
+* **No log of unapplied writes.** A write-ahead replica keeps every write it has received but not yet applied, in memory and in its log.  
+* **Failover doesn't wait on the log.** A write-behind replica that becomes primary has already applied its log. A write-ahead replica must first apply the rest of it.  
+* **The replica's execution path doesn't change.** A write-behind replica applies the replication stream as it arrives, as every Valkey replica does today.
+
+The default mode, write-ahead, is outside the Lean proof for now (see [Verification](#verification)).
 
 ## 3\. Module keyspace notifications
 
@@ -236,7 +308,7 @@ A replica that joins the shard is added as ineligible.
 
 The primary starts a promotion whenever the sync replica set is below `target-sync-replicas` and a sync-eligible replica is connected. Promotions run one replica at a time.
 
-1. **Catch up.** The replica syncs through PSYNC and the replication stream. The primary waits until the replica's acknowledged offset is at or past the primary's committed offset (or, while the primary is still reconciling after a takeover, the end of the log it inherited) and its replication lag is within threshold. While reconciling, the primary streams the inherited log past its committed offset to a candidate that sent `REPLCONF CAPA SYNC`, so the candidate can reach the end of that log. Such a candidate tracks dirty keys like a sync replica, so it never serves an uncommitted write. Other async replicas stay capped at the committed offset.  
+1. **Catch up.** The replica syncs through PSYNC and the replication stream. The primary waits until the replica's acknowledged offset is at or past the primary's committed offset (or, while the primary is still reconciling after a takeover, the end of the log it inherited) and its replication lag is within threshold. While reconciling, the primary streams the inherited log past its committed offset to a candidate that sent `REPLCONF CAPA SYNC`, so the candidate can reach the end of that log. Such a candidate handles those writes as a sync replica in its mode does: it logs them without applying them (write-ahead) or tracks dirty keys (write-behind), so it never serves an uncommitted write. Other async replicas stay capped at the committed offset.  
 2. **Start counting its acks.** The primary adds the replica to its commit calculation. From now on, a write commits only after this replica has also acknowledged it. This is stricter than needed, so it is always safe. Steps 1 and 2 happen together on the main thread, with no event loop iteration in between, so the committed offset can't move past the replica's acknowledged offset in the gap. From then on, the committed offset can't pass the replica's acknowledged offset, so the replica still has every committed write when it becomes eligible in step 4\. Step 2 is also when the primary stops capping the stream at the committed offset for this replica and starts sending it writes that haven't committed yet.  
 3. **Establish the primary lease.** The lease starts from the replication traffic already flowing: the replica's REPLCONF ACK starts the primary's lease. No separate lease messages are needed. The primary doesn't yet echo the replica's acknowledgements in `REPLCONF COMMIT`, so the replica holds no read lease: until step 4 commits, the primary can still remove the replica without the demotion flow, and so without waiting out a read lease.  
 4. **Commit to the cluster bus.** The primary proposes a compare-and-set that moves the replica from *ineligible* to *eligible*. Once it commits, the replica counts toward `min-sync-replicas` and can be promoted to primary on failover, and the primary starts echoing its acknowledgements in `REPLCONF COMMIT`, which starts the replica's read lease.
@@ -317,7 +389,7 @@ Leases run in both directions between the primary and each eligible replica. The
 | Lease | Holder | Promise from the other side | Renewed by | Protects |
 | :---- | :---- | :---- | :---- | :---- |
 | **Primary lease** | Primary | The replica won't try to take over until the lease expires. | The replica's `REPLCONF ACK`, which confirms it has received the stream up to an offset. | Linearizable reads on the primary |
-| **Replica read lease** | Sync replica | The primary won't commit a write without this replica's acknowledgement until the lease expires. | The primary's `REPLCONF COMMIT`, which echoes the replica's latest acknowledgement. | Linearizable reads on the sync replica |
+| **Replica read lease** | Sync replica | The primary won't commit a write without this replica's acknowledgement until the lease expires. | The primary's `REPLCONF COMMIT`, which echoes the replica's latest acknowledgement. | Linearizable reads on a write-behind sync replica (and on write-ahead replicas, if [Replica modes](#replica-modes) question 6 is adopted) |
 
 **Timing.** Each holder measures its lease from when it *sent* the message that the other side's reply confirms. Each grantor measures its promise from when it *received* that message. A message is always received after it is sent, so the holder's lease always expires before the grantor's promise does. Both sides use monotonic clocks. The holder treats its lease as expired at the lease duration minus a clock-drift margin. The grantor keeps its promise for the full lease duration. Because the two clocks can err in opposite directions, the margin must be at least twice the maximum clock drift.
 
@@ -343,7 +415,7 @@ The longer primary lease only matters when the primary itself fails or is partit
 
 * If the **primary** can't renew its lease from a replica, it demotes that replica using the demotion flow in section 4\.  
 * If a **replica** sees the primary's lease expire, it tries to move the primary to *ineligible* and promote itself. If several replicas try at once, the compare-and-set lets exactly one win. A partitioned replica can't promote itself.  
-* **The most up-to-date replica is preferred (best effort).** Each eligible replica waits before its attempt, with a delay based on its rank by replication offset among the eligible replicas. The replica with the highest offset normally goes first. Any eligible replica is safe to promote, because each one holds every committed write. Preferring the most up-to-date one keeps full resyncs after failover to a minimum.
+* **The most up-to-date replica is preferred (best effort).** Each eligible replica waits before its attempt, with a delay based on its rank by acknowledged offset (the end of its log) among the eligible replicas. The replica with the highest offset normally goes first. Any eligible replica is safe to promote, because each one holds every committed write. Preferring the most up-to-date one keeps full resyncs of write-behind replicas, and log truncation on write-ahead replicas, to a minimum.
 
 **Writes can't split-brain.** A deposed primary that hasn't yet learned the new configuration may still commit, using sync replicas that haven't learned it either. This is safe because of the two ordering rules in section 4: a replica counts toward commits before it becomes eligible, and stops counting only after it has become ineligible. So every write any primary commits is held by every replica that is eligible in the latest configuration, and only those replicas can take over (apart from a forced failover).
 
@@ -355,7 +427,7 @@ The longer primary lease only matters when the primary itself fails or is partit
 * **The new primary waits out old read leases.** After taking over, the new primary doesn't commit without any replica from the old configuration, and doesn't demote one, until one read lease duration plus the clock-drift margin has passed since the takeover committed. The old primary stopped granting read leases before the takeover, so by then every read lease it granted has expired.  
 * **Takeover timers restart on a configuration change.** A replica starts timing a new primary's lease when it learns of the configuration change from the cluster bus, as if it had just received traffic from the new primary.  
 * **Only eligible sync replicas hold read leases.** The primary echoes acknowledgements in `REPLCONF COMMIT` only to replicas that, when the `COMMIT` is sent, are in its sync replica set and are eligible in its shard configuration with the incarnation recorded there. A replica that isn't eligible yet can be removed without the demotion flow, and one with a stale incarnation is left out when a restarted primary rebuilds its sync replica set, so the primary would commit without either one while it still held a read lease. A `COMMIT` still in flight after a demotion can't extend the lease, because the lease runs from the send time of the echoed acknowledgement, which the demotion wait already covers.  
-* **Restarts.** Lease state is kept in memory. A node that restarts waits one full lease duration before it attempts a takeover or serves reads under a lease. A primary that restarts takes a new replication ID. Its old ID stays valid only as its secondary ID, up to the offset its restored data covers, so replicas can continue with PSYNC up to that point. A restored file can be older than the primary's log was, and the primary then writes new data at offsets a replica may already hold under the old ID. With the old ID kept as its main ID, that replica's PSYNC would pass and it would keep different data at those offsets. A replica that restarts keeps the replication ID its file records, the ID of the primary it last synced from, and offers it in PSYNC. A primary that restarts with its data also rebuilds its sync replica set from the eligible replicas in the current shard configuration whose incarnations match. It discards any acknowledgements it had cached and commits nothing until those replicas have acknowledged again. A primary that restarts has also lost the time it last heard from each replica, so it doesn't demote any replica until one read lease duration plus the clock-drift margin has passed since the restart.
+* **Restarts.** Lease state is kept in memory. A node that restarts waits one full lease duration before it attempts a takeover or serves reads under a lease. A primary that restarts takes a new replication ID. Its old ID stays valid only as its secondary ID, up to the offset its restored data covers, so replicas can continue with PSYNC up to that point. A restored file can be older than the primary's log was, and the primary then writes new data at offsets a replica may already hold under the old ID. With the old ID kept as its main ID, that replica's PSYNC would pass and it would keep different data at those offsets. A replica that restarts keeps the replication ID its file records, the ID of the primary it last synced from, and offers it in PSYNC. A write-ahead replica that restarts applies its restored log only up to its last applied offset, which its file records. It applies nothing further until it learns a committed offset from a `REPLCONF COMMIT` on a new connection in the same replication history, because the committed offset it knew was kept in memory and the entries past its applied offset may never have committed. It offers PSYNC at the end of its restored log. For the incarnation rule (section 6), its restored data is its keyspace and its restored log together, so it keeps its incarnation only if the restored log covers every write it acknowledged. A primary that restarts with its data also rebuilds its sync replica set from the eligible replicas in the current shard configuration whose incarnations match. It discards any acknowledgements it had cached and commits nothing until those replicas have acknowledged again. A primary that restarts has also lost the time it last heard from each replica, so it doesn't demote any replica until one read lease duration plus the clock-drift margin has passed since the restart.
 
 ### **Write behavior during faults**
 
@@ -363,7 +435,7 @@ Writes are never reported as successful until they commit. While a fault is bein
 
 | Phase | Writes | Reads |
 | :---- | :---- | :---- |
-| A sync replica is unresponsive and its read lease hasn't expired yet | Accepted and executed, but replies are held until the replica acknowledges or is demoted. Clients see higher latency, not errors. | Reads of keys written during this window are held. Other reads are served normally. |
+| A sync replica is unresponsive and its read lease hasn't expired yet | Accepted and executed, but replies are held until the replica acknowledges or is demoted. Clients see higher latency, not errors. | On the primary and on write-behind replicas, reads of keys written during this window are held. Write-ahead replicas serve the previous committed value. Other reads are served normally. |
 | Demotion committed, sync replica set ≥ `min-sync-replicas` | Held replies are released as soon as the remaining sync replicas have acknowledged. New writes proceed normally. | Normal. |
 | Demotion committed, sync replica set \< `min-sync-replicas` | New writes are **rejected before execution** with `NOREPLICAS`. Writes that already executed are **released immediately** with an `UNCOMMITTED` error. | Reads of keys with uncommitted writes are released with `UNCOMMITTED`. Other reads are served normally. |
 | A replica is promoted and the set is back to ≥ `min-sync-replicas` | Writes are accepted again. | Normal. Keys with uncommitted writes become readable once those writes commit. |
@@ -401,8 +473,8 @@ sequenceDiagram
     S2->>B: CAS: primary S2, eligible S1, P ineligible
     B--xS2: Rejected
     S2->>S1: PSYNC
-    S1-->>S2: Partial resync (full resync if S2 is ahead)
-    Note over S1: Reconcile: commit the inherited log<br/>then serve clients
+    S1-->>S2: Partial resync (full resync if S2 is write-behind and ahead)
+    Note over S1: Reconcile: commit the inherited log<br/>(write-ahead S1 also applies it), then serve clients
     C->>S1: Retried write (routed to new primary)
     S1-->>C: +OK
 ```
@@ -411,11 +483,13 @@ sequenceDiagram
 
 **After failover**, the new primary applies the `target-sync-replicas` and `min-sync-replicas` settings, and it promotes remaining caught-up replicas to restore the target.
 
-**Write unavailability during failover.** Writes are unavailable from the primary's failure until the new primary has reconciled. The window is made of up to one primary lease duration (the replica times it from the last traffic it received), the delay for the replica's offset rank, the takeover compare-and-set, and the time for the new sync replica set to reconnect and acknowledge the inherited log. A sync replica that is ahead of the new primary can't acknowledge, and every member of the sync replica set must, so the window then also includes its demotion, with the read lease wait after a takeover. If fewer than `min-sync-replicas` sync replicas remain, it also includes a full resync and a promotion. Cluster bus commits have no hard upper bound (section 5), so this lists the steps, not a time limit.
+**Write unavailability during failover.** Writes are unavailable from the primary's failure until the new primary has reconciled. The window is made of up to one primary lease duration (the replica times it from the last traffic it received), the delay for the replica's offset rank, the takeover compare-and-set, and the time for the new sync replica set to reconnect and acknowledge the inherited log. If the new primary was a write-ahead replica, the window also includes applying the rest of its log. A write-ahead sync replica that is ahead of the new primary discards its log past the end of the log the new primary inherited and acknowledges after a partial resync. A write-behind sync replica that is ahead can't acknowledge, and every member of the sync replica set must, so the window then also includes its demotion, with the read lease wait after a takeover. If fewer than `min-sync-replicas` sync replicas remain, it also includes a full resync and a promotion. Cluster bus commits have no hard upper bound (section 5), so this lists the steps, not a time limit.
 
-**Reconciliation.** Every eligible replica holds every committed write, so the new primary is guaranteed to have the full committed history. The remaining replicas reconnect to the new primary with PSYNC, fenced by the shard's configuration epoch. A replica at or behind the new primary's offset normally continues with a partial resync. PSYNC checks the replication ID as well as the offset, as it does in Valkey today: it continues only if the replica offers the new primary's replication ID, or its secondary ID no further than the offset where that ID ended. A replica that is not ahead but applied different writes, such as an isolated old primary, offers its own replication ID past that point, so it needs a full resync. Sync replicas apply writes as they arrive (write-behind), and applied writes can't be undone. So a replica that is ahead of the new primary, because it applied writes that never committed, needs a full resync. A full resync started while the new primary is still reconciling sends the replica the whole inherited log, not only the new primary's committed prefix. To keep this rare, failover prefers the most up-to-date replica (best effort, see fault detection above). Discarding an uncommitted tail without a full resync requires write-ahead replicas, which are future work.
+**Reconciliation.** Every eligible replica holds every committed write, so the new primary is guaranteed to have the full committed history. The remaining replicas reconnect to the new primary with PSYNC, fenced by the shard's configuration epoch. A replica at or behind the new primary's offset normally continues with a partial resync. PSYNC checks the replication ID as well as the offset, as it does in Valkey today: it continues only if the replica offers the new primary's replication ID, or its secondary ID no further than the offset where that ID ended. A replica that is not ahead but applied different writes, such as an isolated old primary, offers its own replication ID past that point, so it needs a full resync. A replica can be ahead of the new primary because it received writes that never committed. A write-ahead replica applies only committed writes, and every write committed before the takeover is in the log the new primary inherited, so its keyspace never goes past the end of that log. It discards the part of its log past the offset where its replication ID ends on the new primary, which is the end of the log the new primary inherited (where the new primary's secondary ID ends), and continues with a partial resync from that offset. The entries past that offset never committed, and the new primary may already have written different entries at the same offsets. While it is eligible, the replica never discards an entry at or before that offset, even past its own committed offset, because some of those entries may have committed without it learning so. A write-behind replica applies writes as they arrive, and applied writes can't be undone, so a write-behind replica that is ahead of the new primary needs a full resync. A full resync started while the new primary is still reconciling sends the replica the whole inherited log, not only the new primary's committed prefix. Failover prefers the most up-to-date replica (best effort, see fault detection above), which keeps full resyncs of write-behind replicas, and log truncation on write-ahead replicas, rare.
 
-**Committing the new primary's tail.** The new primary's log can extend past the old primary's committed offset. Following PacificA, that tail is kept, and it commits the normal way: once every replica in the new sync replica set has acknowledged it. Replicas that are still eligible but ahead of the new primary can't acknowledge until a full resync finishes, so the new primary demotes them with the normal demotion flow (including the read lease wait above) and promotes them again after they catch up.
+**Truncating a write-ahead replica's log.** Today PSYNC refuses a secondary ID offered past the offset where that ID ended, and the replica doesn't know that offset, so truncating at that offset is a protocol change. A write-ahead replica advertises a new capability in the replication handshake (a new `REPLCONF CAPA` value, name to be decided). When such a replica's PSYNC offers the new primary's secondary ID at an offset past the point where that ID ended, the new primary replies with that offset instead of starting a full resync. Only a node that acts as primary (section 6) replies this way. A replica never truncates below its applied offset. Offered such a point, it refuses, and it is demoted before any full resync, because an eligible replica must be demoted before it drops entries that may have committed. Otherwise the replica truncates its log at that offset, resets its committed offset (section 2), and the stream continues from that offset. A replica without the capability, such as a write-behind replica or one running an older Valkey version, still gets a full resync.
+
+**Committing the new primary's tail.** The new primary's log can extend past the old primary's committed offset. Following PacificA, that tail is kept, and it commits the normal way: once every replica in the new sync replica set has acknowledged it. Write-behind replicas that are still eligible but ahead of the new primary can't acknowledge until a full resync finishes, so the new primary demotes them with the normal demotion flow (including the read lease wait above) and promotes them again after they catch up. Write-ahead replicas that are ahead discard their log past the end of the log the new primary inherited, as above, and acknowledge without leaving the sync replica set.
 
 **Manual failover** uses a fence. The old primary records a *fenced* state in the cluster bus and stops accepting writes. The target replica catches up to the old primary's offset, and then commits itself as the new primary.
 
@@ -432,7 +506,7 @@ Cluster V2, the new durable, Raft-based cluster bus, is specified in its own des
 * **Compare-and-set updates**, so exactly one of any set of concurrent conflicting changes commits.  
 * **Primaryship is data in the log.** A node syncs to the latest log before it serves as a primary or re-enters the cluster.  
 * **Persistent Raft state.** Raft is safe only if each node keeps its term, vote, and log across restarts. Cluster V2 always persists them to local disk, even on nodes that keep no data on disk (like nodes.conf).  
-* **Restarted nodes rejoin as ineligible.** Each node has an incarnation ID that changes whenever it restarts without its data. It also changes when a node restarts from a persistence file that doesn't cover the highest offset the node has acknowledged, as a replica or as a primary, for example a file written before an acknowledged write without `appendfsync always`. A node keeps its incarnation only if its restored data covers every write it acknowledged. The shard configuration records the incarnation of each eligible replica, and the takeover compare-and-set checks it, so a node that comes back without writes it acknowledged can't be promoted. A node also acts as primary only while the shard configuration records its current incarnation for it. A primary that restarts with a new incarnation can still be named primary in the configuration, under its old incarnation, so it stops acting as primary (it accepts no writes and promotes no replica) until a new configuration names it with its current incarnation. It rejoins as an ineligible replica and becomes eligible again only through the promotion flow.  
+* **Restarted nodes rejoin as ineligible.** Each node has an incarnation ID that changes whenever it restarts without its data. It also changes when a node restarts from a persistence file that doesn't cover the highest offset the node has acknowledged, as a replica or as a primary, for example a file written before an acknowledged write without `appendfsync always`. That offset is lowered only when the node takes a new incarnation, or when a write-ahead replica truncates its log (section 5), because the entries it drops never committed. A node keeps its incarnation only if its restored data covers every write it acknowledged. The shard configuration records the incarnation of each eligible replica, and the takeover compare-and-set checks it, so a node that comes back without writes it acknowledged can't be promoted. A node also acts as primary only while the shard configuration records its current incarnation for it. A primary that restarts with a new incarnation can still be named primary in the configuration, under its old incarnation, so it stops acting as primary (it accepts no writes, promotes no replica, and answers no PSYNC with a truncation offset) until a new configuration names it with its current incarnation. It rejoins as an ineligible replica and becomes eligible again only through the promotion flow.  
 * **Correlated data loss is detected.** If every member of the sync replica set loses its data at once (for example, a zone outage with no local persistence), committed writes are lost. No eligible replica has a matching incarnation, so the shard stays unavailable until an operator recovers it, instead of silently serving a truncated history. Spreading sync replicas across failure domains, or turning on AOF, guards against this.  
 * **Slot ownership and migration fencing.** Slot assignments and migration fences are committed to the cluster bus, so two shards can never own a slot at once. This removes the slot migration rollback scenario described in the background section.  
 * **Self-contained.** It runs on the Valkey nodes, with no external coordination service.
@@ -443,7 +517,8 @@ Cluster V2, the new durable, Raft-based cluster bus, is specified in its own des
 | :---- | :---- |
 | Acknowledged writes | Survive as long as the primary or at least one eligible sync replica survives. With `min-sync-replicas = 0`, writes committed while the sync replica set was empty exist only on the primary. |
 | Reads from the primary | **Linearizable.** |
-| Reads from sync replicas | Linearizable while the replica holds a valid read lease. Sync replicas use dirty key tracking to hold responses for keys that aren't committed yet. Without a valid lease, reads still return only committed data, but can be out of date. Clients can't ask for linearizable replica reads yet (see the note on read concern in section 2). |
+| Reads from write-ahead sync replicas (the default) | **Committed but possibly stale.** Reads are never held, because the replica applies only committed writes, but a read can miss a write that has committed on the primary and isn't applied on the replica yet. How a write-ahead replica would serve linearizable reads is an open question (see [Replica modes](#replica-modes)). |
+| Reads from write-behind sync replicas | Linearizable while the replica holds a valid read lease. Write-behind sync replicas use dirty key tracking to hold responses for keys that aren't committed yet. Without a valid lease, reads still return only committed data, but can be out of date. Clients can't ask for linearizable replica reads yet (see the note on read concern in section 2). |
 | Reads from async replicas | **Committed but possibly stale.** They may lag, but never show uncommitted data, because they only receive committed writes. |
 | Uncommitted data | Never returned by core commands on any node. Modules can observe uncommitted writes through inline keyspace notifications and other module APIs (see [Open Questions](#module-keyspace-notifications)), so a module that serves queries must hold results until they are durable. |
 | Disks | Optional. Strong consistency doesn't require local persistence, and AOF can be combined with sync replication for more durability. |
@@ -465,12 +540,12 @@ With one primary and one sync replica, losing either node means writes can't be 
 
 # Configuration and Client Interface
 
-* **Server-side configuration.** `target-sync-replicas` and `min-sync-replicas` are configured per node, but **only the current primary's values take effect**. Replicas' values are ignored until they are promoted, and a newly promoted primary applies its own values. Operators should set the same values on every node in a shard, so behavior doesn't change after a failover. `target-sync-replicas` defaults to `-1` (all `sync-eligible` replicas) and `sync-eligible` defaults to `no`, so an upgraded cluster keeps today's asynchronous behavior, with no performance cost, until replicas are marked sync-eligible.  
+* **Server-side configuration.** `target-sync-replicas` and `min-sync-replicas` are configured per node, but **only the current primary's values take effect**. Replicas' values are ignored until they are promoted, and a newly promoted primary applies its own values. Operators should set the same values on every node in a shard, so behavior doesn't change after a failover. `target-sync-replicas` defaults to `-1` (all `sync-eligible` replicas) and `sync-eligible` defaults to `no`, so an upgraded cluster keeps today's asynchronous behavior, with no performance cost, until replicas are marked sync-eligible. Sync replicas are write-ahead unless their replica mode setting (a placeholder name, section 2) says otherwise.  
 * **No client changes.** In a durable shard, every write is acknowledged only after it commits. Applications don't call `WAIT` or opt in per connection.  
 * **`WAIT` is not the durability mechanism.** `WAIT` keeps its current best-effort semantics for compatibility, but the durability guarantees in this design don't depend on it.  
 * **Errors.** Writes rejected before execution because the shard is below `min-sync-replicas` get `NOREPLICAS` and are safe to retry. Writes that executed but couldn't commit get `UNCOMMITTED`, and their outcome is unknown. See "Write behavior during faults" in section 5\.  
 * **Cluster mode only.** Synchronous replication relies on Cluster V2 for the shard configuration, so durable shards are supported only in cluster mode. Standalone and Sentinel deployments keep today's asynchronous replication.  
-* **Topology exposure.** `CLUSTER SHARDS` and `CLUSTER NODES` keep reporting sync replicas with the replica role, for backward compatibility. Sync replicas get extra metadata (for example, a sync flag) so clients that want stronger read guarantees can route reads to them.
+* **Topology exposure.** `CLUSTER SHARDS` and `CLUSTER NODES` keep reporting sync replicas with the replica role, for backward compatibility. Sync replicas get extra metadata (for example, a sync flag and their replica mode) so clients that want stronger read guarantees can route reads to write-behind sync replicas.
 
 # Cross-Feature Interactions
 
@@ -478,8 +553,8 @@ With one primary and one sync replica, losing either node means writes can't be 
 | :---- | :---- | :---- |
 | **Throttling infrastructure and replication throttling** ([\#3963](https://github.com/valkey-io/valkey/issues/3963), [\#4356](https://github.com/valkey-io/valkey/pull/4356)) | Merged for 9.2 | Throttling pauses a client by removing its read handler and releases it at a controlled rate. Durability uses this to bound the memory held by replies waiting for commit: when a client's held replies pass a threshold, the client is paused before its next command until they are released. The check runs between commands, so one large reply can still pass the threshold, and `client-output-buffer-limit` still applies as a hard limit. Replication throttling slows writes when a replica falls behind, which keeps sync replicas within their lag threshold during write bursts so they aren't demoted. |
 | **QoS for system-critical traffic** ([\#4076](https://github.com/valkey-io/valkey/issues/4076)) | Planned for 9.2 | The replication stream to sync replicas, their acknowledgements, and `REPLCONF COMMIT` are now on the write critical path. They are classified as system-critical traffic, so client load can't delay commits. |
-| **Full sync from replica** ([\#2767](https://github.com/valkey-io/valkey/issues/2767)) | Planned for 10.0 | An async replica serving a full sync holds only committed writes. A sync replica may hold applied writes that haven't committed yet, so before it starts the snapshot it waits until its committed offset reaches its replication offset, as for every snapshot (next row). A node bootstrapped this way joins as an ineligible async replica, and becomes eligible only through the normal promotion flow after catching up with the primary. It never counts toward commits based on the snapshot alone. |
-| **Forkless save and multi-threaded RDB save** ([\#4219](https://github.com/valkey-io/valkey/issues/4219), [\#2470](https://github.com/valkey-io/valkey/issues/2470)) | Planned for 9.2 | Snapshots contain only committed data. Before a snapshot starts, whether for a full sync or a backup, the node waits until its committed offset reaches its replication offset. A primary briefly holds new writes during this wait, and a replica briefly stops applying the replication stream. A later optimization avoids the stall: record the replication offset when the snapshot starts, write the snapshot right away, and finalize it (or send the EOF marker for a full sync) only once the committed offset reaches that offset. This also works for forkless save. This extends what the reply blocking PR (\#3381) already does for full syncs under AOF durability, where the primary drains the pending AOF fsync before forking. |
+| **Full sync from replica** ([\#2767](https://github.com/valkey-io/valkey/issues/2767)) | Planned for 10.0 | An async replica serving a full sync holds only committed writes. A write-ahead sync replica applies only committed writes, so its keyspace is already a committed snapshot, at its applied offset. A write-behind sync replica may hold applied writes that haven't committed yet, so before it starts the snapshot it waits until its committed offset reaches its replication offset, as for every snapshot (next row). A node bootstrapped this way joins as an ineligible async replica, and becomes eligible only through the normal promotion flow after catching up with the primary. It never counts toward commits based on the snapshot alone. |
+| **Forkless save and multi-threaded RDB save** ([\#4219](https://github.com/valkey-io/valkey/issues/4219), [\#2470](https://github.com/valkey-io/valkey/issues/2470)) | Planned for 9.2 | Snapshots contain only committed data. Before a snapshot starts, whether for a full sync or a backup, the node waits until its committed offset reaches the offset its keyspace has applied. A primary briefly holds new writes during this wait, and a write-behind replica briefly stops applying the replication stream. A write-ahead replica needs no wait, because it applies only committed writes. Its snapshot records its applied offset, not the end of its log, and a full sync it serves, or a node restored from it, continues from that offset. A later optimization avoids the stall: record the replication offset when the snapshot starts, write the snapshot right away, and finalize it (or send the EOF marker for a full sync) only once the committed offset reaches that offset. This also works for forkless save. This extends what the reply blocking PR (\#3381) already does for full syncs under AOF durability, where the primary drains the pending AOF fsync before forking. |
 | **Atomic slot migration, including dual-channel** ([\#2957](https://github.com/valkey-io/valkey/issues/2957)) | Planned for 10.0 | The target shard takes ownership of a slot only after the migrated data has committed in the target shard (acknowledged by its sync replicas), and after modules on the target have reported consumed offsets past it (see [Open Questions](#module-keyspace-notifications)). The ownership transfer itself is a Cluster V2 fence. |
 | **Conditional `EXEC` and the Lua 5.5 engine** ([\#4019](https://github.com/valkey-io/valkey/pull/4019), [\#3062](https://github.com/valkey-io/valkey/issues/3062)) | Planned for 9.2 | Transactions and scripts are replicated as a unit, and their replies are held until the whole unit commits, like any other write. No special handling is needed. Messages published with `PUBLISH` or `SPUBLISH` inside a transaction or script are held with the unit's replies, so subscribers never hear about a write that doesn't commit. |
 | **Faster failover elections** ([\#3833](https://github.com/valkey-io/valkey/issues/3833)) | Planned for 9.2 | Applies to the gossip-based Cluster V1 bus. Durable shards use Cluster V2's lease-based failover instead. |
@@ -502,10 +577,10 @@ Related work: module APIs for durability ([\#4027](https://github.com/valkey-io/
 
 The protocol is subtle, so it is checked before durable shards are generally available:
 
-* **TLA+ specification.** A model of synchronous replication, the Cluster V2 shard configuration, and both leases, checked with TLC and published as work in progress in [sync-replication-spec](https://github.com/jjuleslasarte/valkey/tree/sync-repl-formal-spec/design-docs/sync-replication-spec). It covers promotion, demotion, failover, restarts that lose data, and lease expiry. Within small bounds (three nodes, two writes, a few configuration changes, one restart), TLC checks every reachable state of the replication model and finds that no committed or acknowledged write is lost. For the leases, TLC finds the runs that break four of the lease rules when each is removed, but its runs of the full lease model have not finished, so it doesn't establish that no read returns stale data. The Lean proof below covers that.  
+* **TLA+ specification.** A model of synchronous replication, the Cluster V2 shard configuration, and both leases, checked with TLC and published as work in progress in [sync-replication-spec](https://github.com/jjuleslasarte/valkey/tree/sync-repl-formal-spec/design-docs/sync-replication-spec). It covers promotion, demotion, failover, restarts that lose data, and lease expiry. Within small bounds (three nodes, two writes, a few configuration changes, one restart), TLC checks every reachable state of the replication model and finds that no committed or acknowledged write is lost. For the leases, TLC finds the runs that break four of the lease rules when each is removed, but its runs of the full lease model have not finished, so it doesn't establish that no read returns stale data. The Lean proof below covers that for shards whose sync replicas are write-behind.  
 * **Jepsen-style testing.** A Jepsen (or Porcupine-based) test suite that injects partitions, crashes, clock skew, and slow disks against a real cluster and checks the resulting histories for linearizability. It is part of Milestone IV and gates general availability.
 
-A Lean 4 proof of the protocol is also in progress ([jjuleslasarte/valkey\#3](https://github.com/jjuleslasarte/valkey/pull/3)). Formal verification is required before general availability, together with the Jepsen-style tests. Its required scope, for example whether it must also cover slot migration and Cluster V2, is still to be decided. It models one shard: the commit protocol, the shard configuration, promotion, demotion, failover, restarts with and without data, and both leases, with replication messages delayed or lost, lease messages delayed, reordered or lost, and replicas reconnecting through PSYNC's replication ID and offset check. For any number of nodes and every value of `min-sync-replicas`, it proves that no committed write is lost while the primary or an eligible sync replica keeps its data, that no write released as OK is lost, that a node serving a linearizable read under a lease holds exactly the committed history when the clock-drift margin is at least twice the maximum drift, and that every history of client writes and reads is linearizable (`safety`, `ackSafety`, `lease_safety`, `noStaleRead`, `linearizable`). Every theorem is checked by Lean's kernel on Lean's standard axioms, with no `sorry`. It doesn't cover forced or manual failover, slot migration or more than one shard, AOF, per-key dirty key tracking, liveness (for example, that a held reply is ever released), or the Cluster V2 implementation, which it assumes correct and treats as a compare-and-set register. [Appendix: What the Lean proof found](#appendix-what-the-lean-proof-found) lists the rules it shows are needed.
+A Lean 4 proof of the protocol is also in progress ([jjuleslasarte/valkey\#3](https://github.com/jjuleslasarte/valkey/pull/3)). Formal verification is required before general availability, together with the Jepsen-style tests. Its required scope, for example whether it must also cover slot migration and Cluster V2, is still to be decided. It models one shard: the commit protocol, the shard configuration, promotion, demotion, failover, restarts with and without data, and both leases, with replication messages delayed or lost, lease messages delayed, reordered or lost, and replicas reconnecting through PSYNC's replication ID and offset check. Its sync replicas are write-behind: each applies a write as it arrives. So its theorems cover the write-behind mode. The default mode, write-ahead, is outside the Lean proof for now, so the verification required before general availability must cover it too. No proof yet checks the write-ahead rules: truncation at the end of the log the new primary inherited, restart from the log, the snapshot's applied offset, and the committed offset per replication history. Modelling write-ahead replicas is still to do (tracked in the formal verification issue, [valkey\#5586](https://github.com/valkey-io/valkey/issues/5586)). For any number of nodes and every value of `min-sync-replicas`, it proves that no committed write is lost while the primary or an eligible sync replica keeps its data, that no write released as OK is lost, that a node serving a linearizable read under a lease holds exactly the committed history when the clock-drift margin is at least twice the maximum drift, and that every history of client writes and reads is linearizable (`safety`, `ackSafety`, `lease_safety`, `noStaleRead`, `linearizable`). Every theorem is checked by Lean's kernel on Lean's standard axioms, with no `sorry`. It doesn't cover forced or manual failover, slot migration or more than one shard, AOF, per-key dirty key tracking, liveness (for example, that a held reply is ever released), or the Cluster V2 implementation, which it assumes correct and treats as a compare-and-set register. [Appendix: Lean proof findings](#appendix-lean-proof-findings) lists the rules it shows are needed.
 
 # Open Questions
 
@@ -532,7 +607,7 @@ Module keyspace notifications are always delivered inline, at the moment the key
 * **No stale-value hazard.** Reply blocking doesn't stop a second write to the same key from executing before the first write commits. A deferred callback could therefore read a newer value than the one it was notified about, which breaks read-after-write for change-time consumers.  
 * **Consistent with other module APIs**, which already observe state that isn't durable yet.
 
-An inline notification can describe a write that never commits. For example, the primary fails before the write commits, and every replica that already applied it is fully resynced from the new primary. Modules that keep derived state must treat inline notifications as provisional until durable. A full resync raises the existing flush and loading server events, which modules use to rebuild their derived state.
+An inline notification can describe a write that never commits. For example, the primary fails before the write commits, and every write-behind replica that already applied it is fully resynced from the new primary. Modules that keep derived state must treat inline notifications as provisional until durable. A full resync raises the existing flush and loading server events, which modules use to rebuild their derived state.
 
 ### **Durable offset API**
 
@@ -559,16 +634,26 @@ Modules get a generic way to learn when writes become durable, and to tell the c
 * **Durability-sensitive consumers build on offsets, not on delayed notifications.** A module such as a change data capture forwarder records `VM_GetCurrentOffset()` with each inline notification, buffers the change, and forwards it once `DurableOffsetAdvanced` reports a committed offset at or past it. On a running node, an offset is reused only after a full resync, which fires the loading server event in every load mode. A change buffered before a full resync can't be matched to the new history by its offset, so the module doesn't forward it when the committed offset later passes that offset. How a module recovers such changes, for example by comparing them with the loaded data, is up to the module. A restart loses the buffer anyway. This keeps a single notification path in the core.  
 * **Consumed offsets are pushed by the module.** The core never calls into a module to ask how far it has processed. Modules report progress with `VM_SetConsumedOffset`, which keeps module code off the core's critical path.
 
+## Replica modes
+
+**Question:** what is still open about the two sync replica modes (section 2)?
+
+1. **Configuration.** The name of the mode setting is a placeholder. Is the mode chosen per replica, or for the whole shard?  
+2. **Promotion.** A write-ahead replica that becomes primary must apply the rest of its log during reconciliation before serving. How does that affect failover time?  
+3. **Reconciliation benefit.** A write-ahead replica that is ahead of a new primary discards part of its log instead of doing a full resync. How much does this shorten recovery for large datasets?  
+4. **Module notifications.** On a write-ahead replica, should module keyspace notifications fire when a write is logged or when it is applied?  
+5. **Log persistence.** With `appendfsync always`, a write-ahead replica must have its log on disk before it acknowledges. Is that log the AOF or a separate file? Whatever the answer, a replica that restarts from it follows the write-ahead restart rule (Restarts in section 5): it applies its log only up to its last applied offset until a `REPLCONF COMMIT` in the same replication history passes the rest, and it keeps its incarnation only if the restored log covers every write it acknowledged (section 6).  
+6. **Linearizable reads on write-ahead replicas.** A read lease promises that the primary commits no write without the replica's acknowledgement, so every write committed before a read arrives is in the replica's log. The replica may not know that the write has committed, because its committed offset trails the primary's. Waiting until the replica has applied up to the committed offset it knows is therefore not enough: the primary can commit a write and reply to its client before the replica's `REPLCONF COMMIT` arrives, and a read on the replica would then miss the write. One option is dirty key tracking over the log instead of over the keyspace. None of this is decided, and the Lean proof doesn't cover it.
+
 # Future Work
 
 * **Read concern configuration.** Supporting CLIENT READCONCERN with options such as COMMITTED, UNCOMMITTED, LINEARIZABLE. Additional options could be supported for UNCOMMITTED with bounded data loss (e.g. uncommitted reads, as long as they are no more than 1 sec dirty)  
-* **Write-ahead sync replicas.** Non-blocking replica reads, plus discarding an uncommitted tail after failover without a full resync. See the **Deferred: Write-ahead replica reads** section.  
 * **Opting out of durability per write.** Let some writes, such as cache entries colocated in a durable shard, skip waiting for commit.  
 * **Raft-based data replication**, if needs arise that PacificA-style replication can't meet. See Alternatives Considered.
 
 # Alternatives Considered
 
-* **Raft-based data replication** ([valkey-rfc\#33](https://github.com/valkey-io/valkey-rfc/pull/33), [valkey\#3019](https://github.com/valkey-io/valkey/issues/3019)). Strong guarantees, but every write would pay consensus costs on the data path, replicas would need deferred execution, and tolerating f failures would take 2f+1 copies. Deferred as possible future work.  
+* **Raft-based data replication** ([valkey-rfc\#33](https://github.com/valkey-io/valkey-rfc/pull/33), [valkey\#3019](https://github.com/valkey-io/valkey/issues/3019)). Strong guarantees, but every write would pay consensus costs on the data path, and tolerating f failures would take 2f+1 copies. Deferred as possible future work.  
 * **An external configuration manager** (for example, etcd or ZooKeeper) instead of the cluster bus. This would add an operational dependency and break the self-sufficient HA requirement. Building durable metadata into Cluster V2 keeps Valkey self-contained.  
 * **Extending `WAIT` and adding a per-connection durability opt-in**. This makes every application responsible for choosing where durability applies, mixes durable and non-durable writes in one shard history, and makes the guarantees harder to reason about. A shard-level `min-sync-replicas` / `target-sync-replicas` policy gives the same protection with no client changes.  
 * **Client-side `WAIT` / `WAITAOF` only.** Leaves correctness to every application and doesn't protect against promotion of a replica that lacks the write.  
@@ -603,86 +688,9 @@ Modules get a generic way to learn when writes become durable, and to tell the c
 * [PacificA: Replication in Log-Based Distributed Storage Systems (Microsoft Research, 2008\)](https://www.microsoft.com/en-us/research/wp-content/uploads/2008/02/tr-2008-25.pdf)  
 * [Hermes: A Fast, Fault-Tolerant and Linearizable Replication Protocol](https://hermes-protocol.com/)
 
-# Deferred: Write-ahead replica reads
+# Appendix: Lean proof findings
 
-**Status:** Deferred. The first implementation supports only write-behind sync replicas, as described in the main design. This section records the write-ahead alternative so it can be tracked and designed separately.
-
-## Summary
-
-In write-ahead mode, a sync replica **buffers and logs** each incoming write but **doesn't apply it** to its in-memory state until it learns that the write has committed. Replica reads never block, because uncommitted data is never in the replica's keyspace. It also lets a replica that is ahead of a new primary discard its uncommitted writes instead of doing a full resync. The tradeoff is that reads from such a replica are not linearizable: a read can return the last committed value while a newer write is already committed on the primary but not yet applied on the replica.
-
-|  | Write-behind (main design) | Write-ahead (deferred) |
-| :---- | :---- | :---- |
-| When a replica applies a write | On arrival, with the key marked dirty | On commit notification |
-| Reads of a key with an in-flight write | Held until commit | Served immediately with the previous committed value |
-| Replica read consistency | Linearizable | Committed, possibly stale |
-| Replica memory overhead | Dirty key tracking | Buffer of uncommitted writes |
-
-## Write path
-
-```mermaid
-sequenceDiagram
-    autonumber
-    participant C as Client
-    participant C2 as Client 2
-    participant P as Primary
-    participant R1 as Sync replica 1
-    participant R2 as Sync replica 2
-
-    Note over C,R2: key1 = old_data
-    C->>P: SET key1 new_data
-    Note over P: Offset 101: apply, mark key1 dirty
-    par Replicate
-        P->>R1: Write at offset 101
-    and
-        P->>R2: Write at offset 101
-    end
-    Note over R1,R2: Buffer and log the write<br/>do not apply it
-    par Acknowledge
-        R1->>P: REPLCONF ACK 101
-    and
-        R2->>P: REPLCONF ACK 101
-    end
-    C2->>R1: GET key1
-    R1-->>C2: old_data (served, not held)
-    C2-xP: GET key1 (held, key1 dirty)
-    Note over P: Committed offset reaches 101
-    P-->>C2: new_data
-    P-->>C: +OK
-    par Commit notification
-        P->>R1: REPLCONF COMMIT 101
-    and
-        P->>R2: REPLCONF COMMIT 101
-    end
-    Note over R1,R2: Apply the buffered write
-    C2->>R1: GET key1
-    R1-->>C2: new_data
-```
-
-*Write-ahead replica reads: sync replicas buffer and log the write without applying it, so replica reads return the old value until REPLCONF COMMIT arrives and the buffered write is applied.*
-
-## Why write-behind first
-
-The first implementation uses write-behind sync replicas for these reasons:
-
-* **The replica's execution path doesn't change.** A sync replica applies the replication stream as it arrives, as every Valkey replica does today. The only addition is dirty key tracking, which the primary needs anyway (section 1).  
-* **Replica reads can be linearizable.** A read of a dirty key is held until the write commits, so a sync replica that holds a read lease serves linearizable reads. A write-ahead replica serves reads that are committed but possibly stale.  
-* **No buffer of uncommitted writes.** A write-ahead replica keeps every write it has received but not yet applied, in memory and in its log.  
-* **Failover doesn't wait on a buffer.** A write-behind replica that becomes primary has already applied its log. A write-ahead replica must first apply its buffered writes (question 2 below).
-
-The cost is that a replica that is ahead of a new primary needs a full resync (see Reconciliation in section 5), which write-ahead mode avoids (question 3 below).
-
-## Questions to resolve
-
-1. **Configuration.** Is the mode chosen per replica, or for the whole shard?  
-2. **Promotion.** A write-ahead replica that becomes primary must apply its buffered writes during reconciliation before serving. How does that affect failover time?  
-3. **Reconciliation benefit.** Uncommitted writes are only buffered, so after a failover a replica that is ahead of the new primary can discard its buffer instead of doing a full resync. Write-behind replicas can't avoid that full resync, because applied writes can't be undone. How much does this shorten recovery for large datasets?  
-4. **Module notifications.** On a write-ahead replica, should module keyspace notifications fire when a write is buffered or when it is applied?  
-5. **Demand.** Which workloads need non-blocking replica reads enough to justify a second mode?
-
-# Appendix: What the Lean proof found
-
-The Lean proof described in [Verification](#verification) checks each rule below by removing it from the model and giving a run, every step checked by Lean, that ends in a lost committed write, a lost acknowledged write, or a stale linearizable read. The *Where stated* column names the section of this document that states the rule. The last column names the Lean theorem and the number of steps in its run. Runs use three nodes unless noted.
+The Lean proof described in [Verification](#verification) checks each rule below by removing it from the model and giving a run, every step checked by Lean, that ends in a lost committed write, a lost acknowledged write, or a stale linearizable read. The *Where stated* column names the section of this document that states the rule. The last column names the Lean theorem and the number of steps in its run. Runs use three nodes unless noted. The model's sync replicas are write-behind (see Verification), so these results are for that mode.
 
 ## Replication rules
 

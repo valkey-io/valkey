@@ -45,15 +45,16 @@ MEET_REJECTED
     Merging clusters is not supported. The CLUSTER MEET client
     receives an error.
 
-AE <leader-id> <term> <prev-log-idx> <prev-log-term> <commit> <count>
+AE <leader-id> <term> <prev-log-idx> <prev-log-term> <commit> <round> <count>
     AppendEntries. Carries log entries from leader to followers.
     Followed by <count> entry lines: <term> <type> <data>.
-    With zero entries, serves as a heartbeat.
+    With zero entries, serves as a heartbeat. <round> counts the leader's
+    AE broadcasts, for ReadIndex (see UNCHANGED).
 
-AE_ACK <term> <success> <last-log-index> <repl-offset>
+AE_ACK <term> <success> <last-log-index> <round> <repl-offset>
     Response to AE. Reports whether entries were accepted, the
-    follower's last log index for matchIndex tracking, and the
-    node's replication offset.
+    follower's last log index for matchIndex tracking, the last AE round
+    it got from this leader, and the node's replication offset.
 
 INSTALL_SNAPSHOT <leader-id> <term> <last-index> <last-term>
     Sent by the leader instead of AE to a follower that needs entries
@@ -90,11 +91,17 @@ UNCHANGED <index> <entry>
     Reply to PROPOSE for an entry that wouldn't change anything, as found
     by the leader's pre-validation: a SLOT_CHANGE for the current owner,
     a SET_REPLICA_OF that is already in effect, or a NODE_FORGET of an
-    unknown node. The leader sends it instead of appending the entry, if
-    it has applied its whole log and has a fresh quorum, so that its state
-    is the latest committed one. Otherwise it appends the entry, which
-    also succeeds when applied. The proposer replies OK to its client
-    once it has applied up to <index>, the leader's last applied index.
+    unknown node. If the leader has applied its whole log, it doesn't
+    append the entry. It sends UNCHANGED once a quorum has acked an AE
+    round sent after the proposal arrived, which shows that it was still
+    the leader, so that its state was the latest committed one
+    (ReadIndex, Raft thesis 6.4). If its state has changed by then, or it
+    hadn't applied its whole log, it appends the entry, which also
+    succeeds when applied. The proposer replies OK to its client once it
+    has applied up to <index>, the leader's last applied index. A
+    proposal is only completed by an applied entry from an index above
+    everything committed or reported as unchanged when it was made,
+    since an older identical entry isn't its own.
 
 FAILOVER_PREPARE
     Sent by a replica to its primary to request a coordinated failover.

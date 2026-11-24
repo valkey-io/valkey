@@ -849,8 +849,9 @@ unsigned int countKeysInSlotForDb(unsigned int hashslot, serverDb *db) {
 
 unsigned int countKeysInSlot(unsigned int slot) {
     unsigned int result = 0;
-    for (int i = 0; i < server.dbnum; i++) {
-        result += server.db[i] ? countKeysInSlotForDb(slot, server.db[i]) : 0;
+    serverDb *db;
+    forEachCreatedDb(db) {
+        result += countKeysInSlotForDb(slot, db);
     }
     return result;
 }

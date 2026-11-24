@@ -100,10 +100,10 @@ static int writeSelectDb(forklessSaveInfo *saveInfo, int new_db) {
 }
 
 static int writeDbSizeHints(forklessSaveInfo *saveInfo) {
-    for (int dbid = 0; dbid < server.dbnum; dbid++) {
-        serverDb *db = server.db[dbid];
-        if (db == NULL || dbSize(db) == 0) continue;
-        if (writeSelectDb(saveInfo, dbid) != C_OK) return C_ERR;
+    serverDb *db;
+    forEachCreatedDb(db) {
+        if (dbSize(db) == 0) continue;
+        if (writeSelectDb(saveInfo, db->id) != C_OK) return C_ERR;
         if (rdbSaveDbSizeHints(&saveInfo->save_rio, db, 0) < 0) return C_ERR;
     }
     return C_OK;

@@ -303,9 +303,10 @@ void computeDatasetDigest(unsigned char *final) {
 
     memset(final, 0, 20); /* Start with a clean result */
 
-    for (int j = 0; j < server.dbnum; j++) {
-        serverDb *db = server.db[j];
-        if (db == NULL || kvstoreSize(db->keys) == 0) continue;
+    serverDb *db;
+    forEachCreatedDb(db) {
+        if (kvstoreSize(db->keys) == 0) continue;
+        int j = db->id;
         kvstoreIterator *kvs_it = kvstoreIteratorInit(db->keys, HASHTABLE_ITER_SAFE | HASHTABLE_ITER_PREFETCH_VALUES);
 
         /* hash the DB id, so the same dataset moved in a different DB will lead to a different digest */

@@ -16,6 +16,23 @@ tags "modules" {
         }
     }
 
+    test {RDB save writes each database once when a module creates a database during the save} {
+        start_server [list overrides [list loadmodule "$testmodule"]] {
+            r select 9
+            r testrdb.set.key key1 value1
+            r set key2 value2
+            # The save of key1 creates db 2, which sorts before db 9 in the
+            # created-database list while db 9 is being saved.
+            r testrdb.create_db_on_save 2
+            r debug reload
+            assert_equal {value1} [r testrdb.get.key key1]
+            assert_equal {value2} [r get key2]
+            assert_equal 2 [r dbsize]
+            r select 2
+            assert_equal 0 [r dbsize]
+        }
+    }
+
     test {modules global are lost without aux} {
         set server_path [tmpdir "server.module-testrdb"]
         start_server [list overrides [list loadmodule "$testmodule" "dir" $server_path] keep_persistence true] {

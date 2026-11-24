@@ -8332,11 +8332,10 @@ unsigned int delKeysInSlot(unsigned int hashslot, int lazy, bool propagate_del, 
     unsigned int j = 0;
     int before_execution_nesting = server.execution_nesting;
 
-    for (int i = 0; i < server.dbnum; i++) {
+    serverDb *db;
+    forEachCreatedDb(db) {
         kvstoreHashtableIterator *kvs_di = NULL;
         void *next;
-        serverDb *db = server.db[i];
-        if (db == NULL) continue;
         kvs_di = kvstoreGetHashtableIterator(db->keys, hashslot, HASHTABLE_ITER_SAFE);
         while (kvstoreHashtableIteratorNext(kvs_di, &next)) {
             robj *valkey = next;

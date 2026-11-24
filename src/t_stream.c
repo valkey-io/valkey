@@ -124,37 +124,75 @@ static size_t streamConsumerMemUsage(streamConsumer *consumer) {
     return zmalloc_size(consumer) + sdsAllocSize(consumer->name) + raxAllocSize(consumer->pel);
 }
 
-/* Bytes counted for one NACK. All NACKs have the same requested size, but some
- * allocators (glibc) can still give one a bigger chunk. So we measure one NACK
- * once with zmalloc_size(), like the other terms, and use this value for every
- * NACK. This way the counter and the full walk always agree. */
-static size_t streamNACKAllocSize(void) {
+/* Allocated bytes of one NACK, as counted in stream->cgroups_memory_bytes.
+ *
+ * With jemalloc, every NACK is a zmalloc(sizeof(streamNACK)), so all NACKs get
+ * the same size class. je_nallocx() turns the request size into that size
+ * class without a pointer lookup, so we compute it once. Other allocators (for
+ * example glibc) can give a bigger block for the same request, so there we ask
+ * zmalloc_size() for each NACK. */
+static inline size_t streamNACKAllocSize(const streamNACK *nack) {
+#if defined(USE_JEMALLOC)
+    UNUSED(nack);
     static size_t nack_alloc_size = 0;
-    if (nack_alloc_size == 0) {
-        streamNACK *probe = zmalloc(sizeof(*probe));
-        nack_alloc_size = zmalloc_size(probe);
-        zfree(probe);
-    }
+    if (nack_alloc_size == 0) nack_alloc_size = je_nallocx(sizeof(streamNACK), 0);
     return nack_alloc_size;
+#else
+    return zmalloc_size((void *)nack);
+#endif
 }
 
-/* Allocated bytes of one consumer group without its consumers: the struct, its
- * PEL with the NACKs, and its consumers rax. This is O(1). */
+/* Allocated bytes of all NACKs in the PEL of cg, counted with zmalloc_size().
+ * This walks the PEL, so it is O(number of pending entries). */
+static size_t streamCGNacksMemUsageExact(streamCG *cg) {
+    size_t size = 0;
+    raxIterator ri;
+    raxStart(&ri, cg->pel);
+    raxSeek(&ri, "^", NULL, 0);
+    while (raxNext(&ri)) size += zmalloc_size(ri.data);
+    raxStop(&ri);
+    return size;
+}
+
+/* Allocated bytes of all NACKs in the PEL of cg, counted the same way as
+ * streamCreateNACK(). This is O(1) with jemalloc, and O(number of pending
+ * entries) with other allocators. */
+static size_t streamCGNacksMemUsage(streamCG *cg) {
+#if defined(USE_JEMALLOC)
+    return raxSize(cg->pel) * streamNACKAllocSize(NULL);
+#else
+    return streamCGNacksMemUsageExact(cg);
+#endif
+}
+
+/* Allocated bytes of one consumer group without its NACKs and consumers: the
+ * struct, its PEL rax and its consumers rax. This is O(1). */
 static size_t streamCGBaseMemUsage(streamCG *cg) {
-    return zmalloc_size(cg) + raxAllocSize(cg->pel) + raxAllocSize(cg->consumers) +
-           raxSize(cg->pel) * streamNACKAllocSize();
+    return zmalloc_size(cg) + raxAllocSize(cg->pel) + raxAllocSize(cg->consumers);
 }
 
-/* Allocated bytes of one consumer group, with its consumers. This walks the
- * consumers, so it is O(number of consumers). */
-static size_t streamCGMemUsage(streamCG *cg) {
-    size_t size = streamCGBaseMemUsage(cg);
+/* Allocated bytes of the consumers of cg. This walks the consumers, so it is
+ * O(number of consumers). */
+static size_t streamCGConsumersMemUsage(streamCG *cg) {
+    size_t size = 0;
     raxIterator ri;
     raxStart(&ri, cg->consumers);
     raxSeek(&ri, "^", NULL, 0);
     while (raxNext(&ri)) size += streamConsumerMemUsage(ri.data);
     raxStop(&ri);
     return size;
+}
+
+/* Allocated bytes of one consumer group, with its NACKs and consumers. */
+static size_t streamCGMemUsage(streamCG *cg) {
+    return streamCGBaseMemUsage(cg) + streamCGNacksMemUsage(cg) + streamCGConsumersMemUsage(cg);
+}
+
+/* Debug only, for the debugServerAssert() in streamMemUsage(). Same as
+ * streamCGMemUsage(), but it always counts the NACKs with zmalloc_size(), so
+ * the check also covers the je_nallocx() value used by the counter. */
+static size_t streamCGMemUsageDebug(streamCG *cg) {
+    return streamCGBaseMemUsage(cg) + streamCGNacksMemUsageExact(cg) + streamCGConsumersMemUsage(cg);
 }
 
 /* Debug only, for the debugServerAssert() in streamMemUsage(). Computes by a
@@ -165,7 +203,7 @@ static size_t streamCGroupsMemUsageDebug(const stream *s) {
     raxIterator ri;
     raxStart(&ri, s->cgroups);
     raxSeek(&ri, "^", NULL, 0);
-    while (raxNext(&ri)) size += streamCGMemUsage(ri.data);
+    while (raxNext(&ri)) size += streamCGMemUsageDebug(ri.data);
     raxStop(&ri);
     return size;
 }
@@ -2729,7 +2767,7 @@ cleanup: /* Cleanup. */
  * specified as argument of the function. */
 streamNACK *streamCreateNACK(stream *s, streamConsumer *consumer) {
     streamNACK *nack = zmalloc(sizeof(*nack));
-    s->cgroups_memory_bytes += streamNACKAllocSize();
+    s->cgroups_memory_bytes += streamNACKAllocSize(nack);
     nack->delivery_time = commandTimeSnapshot();
     nack->delivery_count = 1;
     nack->consumer = consumer;
@@ -2738,7 +2776,7 @@ streamNACK *streamCreateNACK(stream *s, streamConsumer *consumer) {
 
 /* Free a NACK entry. */
 void streamFreeNACK(stream *s, streamNACK *na) {
-    s->cgroups_memory_bytes -= streamNACKAllocSize();
+    s->cgroups_memory_bytes -= streamNACKAllocSize(na);
     zfree(na);
 }
 
@@ -2788,8 +2826,8 @@ streamCG *streamCreateCG(stream *s, char *name, size_t namelen, streamID *id, lo
     cg->last_id = *id;
     cg->entries_read = entries_read;
     raxInsert(s->cgroups, (unsigned char *)name, namelen, cg, NULL);
-    /* The group has no consumers yet. The cgroups rax itself is read live in
-     * streamMemUsage(). */
+    /* The group has no NACKs or consumers yet. The cgroups rax itself is read
+     * live in streamMemUsage(). */
     s->cgroups_memory_bytes += streamCGBaseMemUsage(cg);
     return cg;
 }

@@ -1151,7 +1151,25 @@ start_server {
             }
             r MEMORY USAGE mystream
         }
-        assert_morethan [r MEMORY USAGE mystream] $base
+        set with_groups [r MEMORY USAGE mystream]
+        assert_morethan $with_groups $base
+
+        # A consumer adds its own bytes (struct, name, PEL rax), and deleting
+        # it gives them back.
+        set name [string repeat y 200]
+        r XGROUP CREATECONSUMER mystream g0 $name
+        set with_consumer [r MEMORY USAGE mystream]
+        assert_morethan $with_consumer [expr {$with_groups + 200}]
+        r XGROUP DELCONSUMER mystream g0 $name
+        assert_equal $with_groups [r MEMORY USAGE mystream]
+
+        # Its pending entries add NACK bytes, and deleting the consumer drops
+        # them. An emptied rax can keep a few bytes more than before.
+        r XGROUP CREATECONSUMER mystream g0 $name
+        r XREADGROUP GROUP g0 $name COUNT 20 STREAMS mystream >
+        assert_morethan [r MEMORY USAGE mystream] $with_consumer
+        r XGROUP DELCONSUMER mystream g0 $name
+        assert_range [r MEMORY USAGE mystream] $with_groups [expr {$with_groups + 64}]
     }
 
     tags {"needs:debug"} {

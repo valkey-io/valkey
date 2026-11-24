@@ -303,9 +303,10 @@ void computeDatasetDigest(unsigned char *final) {
 
     memset(final, 0, 20); /* Start with a clean result */
 
-    for (int j = 0; j < server.dbnum; j++) {
-        serverDb *db = server.db[j];
-        if (db == NULL || kvstoreSize(db->keys) == 0) continue;
+    serverDb *db;
+    forEachCreatedDb(db) {
+        if (kvstoreSize(db->keys) == 0) continue;
+        int j = db->id;
         kvstoreIterator *kvs_it = kvstoreIteratorInit(db->keys, HASHTABLE_ITER_SAFE | HASHTABLE_ITER_PREFETCH_VALUES);
 
         /* hash the DB id, so the same dataset moved in a different DB will lead to a different digest */
@@ -559,6 +560,8 @@ void debugCommand(client *c) {
             "    Force TLS write error for testing.",
             "BIO-DRAIN <type>",
             "    Wait for the specified bio job queue to become empty.",
+            "SET-CLOSE-AFTER-REPLY <id>",
+            "    Mark a client to be closed after its pending replies are written.",
             NULL};
         addExtendedReplyHelp(c, help, clusterDebugCommandExtendedHelp());
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "segfault")) {
@@ -1183,6 +1186,17 @@ void debugCommand(client *c) {
         }
         bioDrainWorker(type);
         addReply(c, shared.ok);
+    } else if (!strcasecmp(objectGetVal(c->argv[1]), "set-close-after-reply") && c->argc == 3) {
+        long long target_id;
+        if (getLongLongFromObjectOrReply(c, c->argv[2], &target_id, NULL) != C_OK) return;
+        client *target = lookupClientByID(target_id);
+        if (!target) {
+            addReplyError(c, "No such client");
+            return;
+        }
+        /* Queue the reply first, so it is not dropped when targeting ourselves. */
+        addReply(c, shared.ok);
+        target->flag.close_after_reply = 1;
     } else if (!handleDebugClusterCommand(c)) {
         addReplySubcommandSyntaxError(c);
         return;

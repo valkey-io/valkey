@@ -1587,7 +1587,6 @@ werr:
  * error. */
 static int rdbSaveRioInternal(int req, int rdbver, rio *rdb, int *error, int rdbflags, rdbSaveInfo *rsi) {
     long key_counter = 0;
-    int j;
 
     if (rdbWriteHeader(rdb, req, rdbver, rdbflags, rsi) == C_ERR) goto werr;
 
@@ -1596,8 +1595,9 @@ static int rdbSaveRioInternal(int req, int rdbver, rio *rdb, int *error, int rdb
         /* RDB slot import info is encoded in a required opcode since exposing
          * importing slots is a consistency problem. */
         if (clusterRDBSaveSlotImports(rdb, rdbver) == C_ERR) goto werr;
-        for (j = 0; j < server.dbnum; j++) {
-            if (rdbSaveDb(rdb, j, rdbflags, rdbver, &key_counter) == -1) goto werr;
+        serverDb *db;
+        forEachCreatedDb(db) {
+            if (rdbSaveDb(rdb, db->id, rdbflags, rdbver, &key_counter) == -1) goto werr;
         }
     }
 
@@ -3784,10 +3784,7 @@ static int rdbLoadRioInternal(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadi
         rdb_loading_ctx->functions_lib_ctx = functionsLibCtxGetCurrent();
     }
 
-    if (rdb_loading_ctx->dbarray[0] == NULL) {
-        rdb_loading_ctx->dbarray[0] = createDatabase(0);
-    }
-    serverDb *db = rdb_loading_ctx->dbarray[0];
+    serverDb *db = createDatabaseInArrayIfNeeded(rdb_loading_ctx->dbarray, 0);
 
     /* Key-specific attributes, set by opcodes before the key type. */
     long long lru_idle = -1, lfu_freq = -1, expiretime = -1, now = mstime();
@@ -3893,10 +3890,7 @@ static int rdbLoadRioInternal(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadi
                           SERVER_TITLE, server.dbnum);
                 exit(1);
             }
-            if (rdb_loading_ctx->dbarray[dbid] == NULL) {
-                rdb_loading_ctx->dbarray[dbid] = createDatabase(dbid);
-            }
-            db = rdb_loading_ctx->dbarray[dbid];
+            db = createDatabaseInArrayIfNeeded(rdb_loading_ctx->dbarray, dbid);
             continue; /* Read next opcode. */
         } else if (type == RDB_OPCODE_RESIZEDB) {
             /* RESIZEDB: Hint about the size of the keys in the currently

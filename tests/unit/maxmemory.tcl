@@ -613,3 +613,36 @@ start_server {tags {"maxmemory" "external:skip"}} {
         assert_equal [r dbsize] {0}
     }
 }
+
+start_server {tags {"maxmemory external:skip"}} {
+    foreach policy {allkeys-random volatile-random} {
+        test "maxmemory - $policy evicts from databases created out of id order" {
+            r flushall
+            set limit [expr {[s used_memory]+100*1024}]
+            r config set maxmemory-policy $policy
+            r config set maxmemory $limit
+            set value [string repeat x 1024]
+            # Database 9 is created by the test client, databases 2 and 5 after
+            # it. Database 0 exists and stays empty. Writing about 2 MB into a
+            # 100 KB budget only succeeds by evicting keys from 2, 5 and 9.
+            set dbs {9 2 5}
+            set evicted_before [s evicted_keys]
+            for {set j 0} {$j < 2000} {incr j} {
+                r select [lindex $dbs [expr {$j % 3}]]
+                r setex "key:$j" 10000 $value
+            }
+            assert {[s evicted_keys] > $evicted_before}
+            assert {[s used_memory] < $limit + 16384}
+            set remaining 0
+            foreach db $dbs {
+                r select $db
+                incr remaining [r dbsize]
+            }
+            assert {$remaining > 0 && $remaining < 2000}
+            r select 0
+            assert_equal 0 [r dbsize]
+            r select 9
+            r config set maxmemory 0
+        }
+    }
+}

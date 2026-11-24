@@ -2630,9 +2630,10 @@ int rewriteAppendOnlyFileRio(rio *aof) {
 
     if (rewriteFunctions(aof) == C_ERR) goto werr;
 
-    for (j = 0; j < server.dbnum; j++) {
-        if (dbHasNoKeys(j)) continue;
-        serverDb *db = server.db[j];
+    serverDb *db;
+    forEachCreatedDb(db) {
+        if (kvstoreSize(db->keys) == 0) continue;
+        j = db->id;
 
         /* SELECT the new DB */
         if (rewriteSelectDbRio(aof, j) == C_ERR) goto werr;

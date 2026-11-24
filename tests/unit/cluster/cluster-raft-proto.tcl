@@ -1295,6 +1295,54 @@ test "Raft proto: the leader answers UNCHANGED only after a quorum acks a later 
     }
 }
 
+test "Raft proto: the leader completes its proposal only with its own entry" {
+    # A follower forwards the same slot change that a client later sends to
+    # the leader, and an entry that changes it comes in between. Committing
+    # the follower's entry doesn't complete the client's proposal.
+    start_server {overrides {cluster-enabled yes cluster-protocol raft cluster-node-timeout 20000}} {
+        set node_id [R 0 CLUSTER MYID]
+        set f_id [string repeat "f" 40]
+        set fd [raft_join_fake_follower $f_id [string repeat "9" 40]]
+        R 0 cluster addslots 0
+        raft_ack_until_idle $fd
+
+        # Make F a voter, so nothing commits without its ACK.
+        set rd [valkey_deferring_client]
+        $rd cluster addvoter $f_id
+        assert_equal OK [$rd read]
+        $rd close
+        set last [raft_ack_until_idle $fd]
+        set term [CI 0 cluster_raft_current_term]
+
+        # F proposes slot 1 to the node, then to F. Then a client proposes
+        # slot 1 to the node, which is the same as F's first entry.
+        set entry "SLOT_CHANGE - 0 $node_id 0 1"
+        raft_send $fd "PROPOSE $entry"
+        raft_send $fd "PROPOSE SLOT_CHANGE - 0 $f_id 0 1"
+        while {![string match "*SLOT_CHANGE - 0 $f_id 0 1*" [raft_recv_until $fd "AE *"]]} {}
+        set rd [valkey_deferring_client]
+        $rd cluster addslots 1
+        set ae [raft_recv_until $fd "AE *"]
+        assert_equal "1 $entry" [lindex [split $ae "\n"] 1]
+
+        # Committing F's entries doesn't complete it.
+        raft_send $fd "AE_ACK $term 1 [expr {$last + 2}] 0 0"
+        wait_for_condition 50 100 {
+            [CI 0 cluster_raft_last_applied] == $last + 2
+        } else {
+            fail "F's entries weren't applied"
+        }
+        assert_equal 1 [dict get [cluster_get_node_by_id 0 $f_id] slots]
+        assert_equal 1 [s blocked_clients]
+
+        # Its own entry does.
+        raft_send $fd "AE_ACK $term 1 [expr {$last + 3}] 0 0"
+        assert_equal OK [$rd read]
+        $rd close
+        close $fd
+    }
+}
+
 test "Raft proto: the leader doesn't append a slot change that changes nothing" {
     start_server {overrides {cluster-enabled yes cluster-protocol raft cluster-node-timeout 1000}} {
         set node_id [R 0 CLUSTER MYID]

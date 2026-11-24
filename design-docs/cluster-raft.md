@@ -100,8 +100,11 @@ UNCHANGED <index> <entry>
     succeeds when applied. The proposer replies OK to its client once it
     has applied up to <index>, the leader's last applied index. A
     proposal is only completed by an applied entry from an index above
-    everything committed or reported as unchanged when it was made,
-    since an older identical entry isn't its own.
+    everything committed or reported as unchanged when it was made (on
+    the leader, above its whole log), since an older identical entry
+    isn't its own. A follower can still match an older identical entry
+    that was committed before the proposal, if it hadn't learned that
+    yet.
 
 FAILOVER_PREPARE
     Sent by a replica to its primary to request a coordinated failover.

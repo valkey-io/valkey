@@ -988,8 +988,13 @@ static void clusterRaftPropose(sds entry, void *ctx, void (*callback)(void *ctx,
         pp->deferred = 0;
         pp->wait_index = 0;
         /* Our entry will come after everything that's committed, and after
-         * what a leader already said was unchanged. */
-        pp->min_index = (rs->commit_index > rs->max_unchanged_index ? rs->commit_index : rs->max_unchanged_index) + 1;
+         * what a leader already said was unchanged. On the leader, after
+         * its whole log. */
+        if (rs->role == RAFT_ROLE_LEADER) {
+            pp->min_index = raftLogLastIndex() + 1;
+        } else {
+            pp->min_index = (rs->commit_index > rs->max_unchanged_index ? rs->commit_index : rs->max_unchanged_index) + 1;
+        }
         /* Entry types carrying shard epochs get automatic retry. */
         switch (type) {
         case RAFT_ENTRY_FAILOVER:
@@ -3037,6 +3042,7 @@ static void clusterRaftSendProposal(raftPendingProposal *pp, clusterLink *leader
     if (rs->role == RAFT_ROLE_LEADER) {
         uint64_t idx = raftLogLastIndex() + 1;
         raftLogAppend(raftLogCreate(rs->current_term, idx, pp->type, sdsdup(pp->data)));
+        pp->min_index = idx;
         serverLog(LL_NOTICE, "Leader appended retried %s (index %llu).",
                   raftEntryTypeName(pp->type), (unsigned long long)idx);
         rs->todo_broadcast_ae = 1;

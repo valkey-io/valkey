@@ -166,6 +166,8 @@ typedef struct instanceLink {
     int refcount;              /* Number of sentinelValkeyInstance owners. */
     int disconnected;          /* Non-zero if we need to reconnect cc or pc. */
     int pending_commands;      /* Number of commands sent waiting for a reply. */
+    int pending_info;          /* Number of INFO sent waiting for a reply. */
+    int info_to_discard;       /* Number of next INFO replies to discard. */
     valkeyAsyncContext *cc;    /* Libvalkey context for commands. */
     valkeyAsyncContext *pc;    /* Libvalkey context for Pub / Sub. */
     mstime_t cc_conn_time;     /* cc connection time. */
@@ -1048,6 +1050,8 @@ instanceLink *createInstanceLink(void) {
     link->refcount = 1;
     link->disconnected = 1;
     link->pending_commands = 0;
+    link->pending_info = 0;
+    link->info_to_discard = 0;
     link->cc = NULL;
     link->pc = NULL;
     link->cc_conn_time = 0;
@@ -1072,6 +1076,8 @@ void instanceLinkCloseConnection(instanceLink *link, valkeyAsyncContext *c) {
     if (link->cc == c) {
         link->cc = NULL;
         link->pending_commands = 0;
+        link->pending_info = 0;
+        link->info_to_discard = 0;
     }
     if (link->pc == c) link->pc = NULL;
     c->data = NULL;
@@ -2411,6 +2417,8 @@ void sentinelReconnectInstance(sentinelValkeyInstance *ri) {
             instanceLinkCloseConnection(link, link->cc);
         } else {
             link->pending_commands = 0;
+            link->pending_info = 0;
+            link->info_to_discard = 0;
             link->cc_conn_time = mstime();
             link->cc->data = link;
             valkeyAeAttach(server.el, link->cc);
@@ -2682,6 +2690,7 @@ void sentinelRefreshInstanceInfo(sentinelValkeyInstance *ri, const char *info) {
                     ri->role_reported = SRI_REPLICA;
                     ri->role_reported_time = mstime();
                     ri->replica_conf_change_time = mstime();
+                    ri->link->info_to_discard = ri->link->pending_info;
                 }
             }
         }
@@ -2743,7 +2752,16 @@ void sentinelInfoReplyCallback(valkeyAsyncContext *c, void *reply, void *privdat
 
     if (!reply || !link) return;
     link->pending_commands--;
+    link->pending_info--;
     r = reply;
+
+    /* Replies are received in order, so this INFO was sent before our last
+     * REPLICAOF and reports the state before it. Acting on it would undo the
+     * role assumed when the REPLICAOF was sent. */
+    if (link->info_to_discard) {
+        link->info_to_discard--;
+        return;
+    }
 
     /* INFO reply type is verbatim in resp3. Normally, sentinel will not use
      * resp3 but this is required for testing (see logreqres.c). */
@@ -3097,7 +3115,10 @@ void sentinelSendPeriodicCommands(sentinelValkeyInstance *ri) {
     if ((ri->flags & SRI_SENTINEL) == 0 && (ri->info_refresh == 0 || (now - ri->info_refresh) > info_period)) {
         retval = valkeyAsyncCommand(ri->link->cc, sentinelInfoReplyCallback, ri, "%s",
                                     sentinelInstanceMapCommand(ri, "INFO"));
-        if (retval == C_OK) ri->link->pending_commands++;
+        if (retval == C_OK) {
+            ri->link->pending_commands++;
+            ri->link->pending_info++;
+        }
     }
 
     /* Send PING to all the three kinds of instances. */

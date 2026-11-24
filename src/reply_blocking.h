@@ -44,6 +44,11 @@ typedef struct reply_blocking_t {
     /* Clients waiting for the durably-committed offset to advance */
     struct list *clients_waiting_ack;
 
+    /* True when some held reply waits on the LLONG_MAX placeholder, because
+     * its command was finalized before its execution unit propagated (a
+     * blocked command re-executed by handleClientsBlockedOnKeys()). */
+    bool has_placeholder_responses;
+
     /* Deferred tasks waiting for the durably-committed offset to advance */
     struct list *tasks_waiting_ack[POST_COMMIT_TASK_TYPE_MAX];
 
@@ -219,6 +224,7 @@ void resumeAofReplyBlocking(void);
 int ackPausedAofReplyBlocking(long long offset);
 void replyBlockingBeforeTimeoutReply(client *c);
 void replyBlockingAfterTimeoutReply(client *c);
+void replyBlockingStampPlaceholderResponses(long long offset);
 bool isClientReplyBufferLimited(client *c);
 bool isMonitorOutputHeld(const client *c);
 void replyBlockingBeforeWrittenOutputFreed(client *c, struct listNode *reply_block);

@@ -463,6 +463,27 @@ static inline int isCommandReplicatedToMonitors(void) {
     return listLength(server.monitors) && !server.loading;
 }
 
+/* Set the real offset on replies held at the LLONG_MAX placeholder. Called
+ * once the execution unit has propagated. Placeholders are always the newest
+ * held response of a client, so only the tail of each list is visited. */
+void replyBlockingStampPlaceholderResponses(long long offset) {
+    if (!server.reply_blocking.has_placeholder_responses) return;
+    server.reply_blocking.has_placeholder_responses = false;
+    listIter li;
+    listNode *ln;
+    listRewind(server.reply_blocking.clients_waiting_ack, &li);
+    while ((ln = listNext(&li))) {
+        client *c = listNodeValue(ln);
+        listNode *rn = listLast(c->reply_blocking_state.blocked_responses);
+        while (rn) {
+            blockedResponse *br = listNodeValue(rn);
+            if (br->primary_repl_offset != LLONG_MAX) break;
+            br->primary_repl_offset = offset;
+            rn = rn->prev;
+        }
+    }
+}
+
 /* The timeout reply of a command blocked on keys (BLPOP and friends) is added
  * outside any command, when the client times out or gets CLIENT UNBLOCK. It
  * says the keys are empty, so hold it until the writes that left them so are
@@ -854,6 +875,13 @@ void finalizeCommandReplyBlocking(client *c) {
         blocking_repl_offset = server.primary_repl_offset;
     }
 
+    /* A blocked command re-executed when its key became ready (BLMOVE, BLPOP)
+     * runs in an execution unit of its own, which propagates only after this
+     * returns. Its offset is not known yet, so hold it at the placeholder;
+     * postExecutionUnitOperations() sets the real offset once the unit has
+     * propagated. */
+    const bool placeholder = tracked && c->flag.reexecuting_command && server.also_propagate.numops > 0;
+
     updateFuncStoreBlockingOffsetForWrite(server.primary_repl_offset);
 
     if (c->flag.blocked && isDeferredReplyEnabled(c) && listLength(c->deferred_reply) > 0) {
@@ -862,6 +890,10 @@ void finalizeCommandReplyBlocking(client *c) {
          * reply is committed (commitDeferredReplyBuffer); block monitors now (not deferred). */
         resetPreExecutionOffset(c);
         c->reply_blocking_state.deferred_block_offset = blocking_repl_offset;
+    } else if (placeholder) {
+        server.reply_blocking.has_placeholder_responses = true;
+        blockClientOnReplOffset(c, LLONG_MAX);
+        blocking_repl_offset = LLONG_MAX;
     } else {
         blockClientOnReplOffset(c, blocking_repl_offset);
     }

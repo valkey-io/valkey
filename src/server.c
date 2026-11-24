@@ -4139,6 +4139,7 @@ void postExecutionUnitOperations(void) {
          * skipped by the gate above. */
         if (server.bio_aof_offload_enabled) {
             stampPendingUncommittedData(server.primary_repl_offset);
+            replyBlockingStampPlaceholderResponses(server.primary_repl_offset);
             certifyPendingDeferredTasks();
         }
 

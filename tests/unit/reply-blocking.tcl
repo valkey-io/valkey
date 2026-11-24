@@ -2437,9 +2437,8 @@ start_server {tags {"repl durability external:skip"} overrides {appendonly yes a
         set p [rb_client]
         $p lpush bsrc x
         rb_assert_held $p 1
-        # The BLMOVE runs inside an execution unit of its own and is finalized
-        # before its LMOVE is propagated, so it is held at the offset of the
-        # LPUSH it read, not at its own write.
+        # The BLMOVE runs inside an execution unit of its own and is held at
+        # the offset its LMOVE gets once that unit propagates.
         rb_assert_held $b 2
         set c [rb_client]
         $c lrange bdst 0 -1
@@ -2449,6 +2448,22 @@ start_server {tags {"repl durability external:skip"} overrides {appendonly yes a
         assert_equal ":1\r\n" [rb_raw_reply $p]
         assert_equal "\$1\r\nx\r\n" [rb_raw_reply $b]
         assert_equal "*1\r\n\$1\r\nx\r\n" [rb_raw_reply $c]
+    }
+
+    test "A blocking command woken by a write that propagates nothing is held until its own write is durable" {
+        rb_prepare {}
+        set b [rb_client]
+        $b blmove bsrc2 bdst2 left right 0
+        wait_for_blocked_clients_count 1
+        # The waking LPUSH replicates nothing, so the source key carries no
+        # offset that is not durable yet. The BLMOVE's own LMOVE does.
+        assert_equal 1 [r eval {
+            redis.set_repl(redis.REPL_NONE)
+            return redis.call('lpush', KEYS[1], 'x')
+        } 1 bsrc2]
+        rb_assert_held $b 1
+        rb_resume
+        assert_equal "\$1\r\nx\r\n" [rb_raw_reply $b]
     }
 
     test "A key evicted by maxmemory holds later reads until the eviction is durable" {

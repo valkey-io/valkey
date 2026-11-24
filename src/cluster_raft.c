@@ -1742,6 +1742,7 @@ static void raftLogApply(raftLogEntry *e) {
         if (node && nodeIsReplica(myself) && myself->replicaof == node &&
             !nodeCantFailover(myself)) {
             rs->todo_schedule_failover = 1;
+            rs->failover_time = 0; /* beforeSleep schedules it again with a fresh rank. */
         }
         break;
     }
@@ -1755,6 +1756,7 @@ static void raftLogApply(raftLogEntry *e) {
             /* Cancel deferred failover if the recovered node is my primary. */
             if (nodeIsReplica(myself) && myself->replicaof == node) {
                 rs->todo_schedule_failover = 0;
+                rs->failover_time = 0;
             }
         }
         serverLog(LL_NOTICE, "Applied NODE_RECOVER %.40s (index %llu).",

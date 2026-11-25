@@ -436,6 +436,7 @@ static clusterMsgSendBlock *clusterRaftBuildAllOffsetsMsg(void) {
 
 static void clusterRaftPropose(sds entry, void *ctx, void (*callback)(void *ctx, const char *error));
 static void clusterRaftDeferPendingProposals(void);
+static void clusterRaftFinishPendingProposal(listNode *ln, RaftProposalResult result);
 static void clusterRaftCompletePendingProposal(int type, sds data, RaftProposalResult result, uint64_t index);
 static void clusterRaftCompleteUnchangedProposals(void);
 static bool clusterRaftLeaderStateIsCurrent(void);
@@ -1018,18 +1019,7 @@ static void clusterRaftPropose(sds entry, void *ctx, void (*callback)(void *ctx,
 
     sds data = sp ? sdsnew(sp + 1) : sdsempty();
 
-    RaftProposalResult pre_result = RAFT_RESULT_OK;
-    if (rs->role == RAFT_ROLE_LEADER) {
-        /* Pre-validate on the leader to reject obviously stale/invalid proposals. */
-        pre_result = clusterRaftPreValidate(type, data);
-        if (pre_result != RAFT_RESULT_OK && pre_result != RAFT_RESULT_UNCHANGED) {
-            if (callback) callback(ctx, raftProposalResultMsg(pre_result));
-            sdsfree(data);
-            return;
-        }
-    }
-
-    /* Track pending proposal for retry on leader change. */
+    /* Track pending before pre-validation so a stale epoch can retry. */
     {
         raftPendingProposal *pp = zmalloc(sizeof(*pp));
         pp->type = type;
@@ -1061,6 +1051,17 @@ static void clusterRaftPropose(sds entry, void *ctx, void (*callback)(void *ctx,
             break;
         }
         listAddNodeTail(rs->pending_proposals, pp);
+    }
+
+    RaftProposalResult pre_result = RAFT_RESULT_OK;
+    if (rs->role == RAFT_ROLE_LEADER) {
+        listNode *pending = listLast(rs->pending_proposals);
+        pre_result = clusterRaftPreValidate(type, data);
+        if (pre_result != RAFT_RESULT_OK && pre_result != RAFT_RESULT_UNCHANGED) {
+            clusterRaftFinishPendingProposal(pending, pre_result);
+            sdsfree(data);
+            return;
+        }
     }
 
     if (rs->role == RAFT_ROLE_LEADER && clusterRaftTransferSent()) {

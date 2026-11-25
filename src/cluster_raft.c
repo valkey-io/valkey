@@ -3454,20 +3454,23 @@ static clusterNode *clusterRaftSelectDemotionCandidate(void) {
     return auto_excess;
 }
 
-/* Append one ADD_VOTER or DEL_VOTER, unless a quorum change is already in flight. */
-static void clusterRaftProposeMembershipChange(int type, const char *entry_name, clusterNode *node) {
+/* Append one ADD_VOTER or DEL_VOTER; not retried after a leader change. */
+static void clusterRaftAppendMembershipChange(int type, clusterNode *node) {
+    clusterRaftState *rs = RAFT_STATE();
+    if (rs->role != RAFT_ROLE_LEADER || clusterRaftTransferSent()) return;
+
     sds data = sdsnewlen(node->name, CLUSTER_NAMELEN);
-    if (clusterRaftQuorumChangeStatus(type, data) != RAFT_QC_NONE) {
+    if (clusterRaftQuorumChangeStatus(type, data) != RAFT_QC_NONE ||
+        clusterRaftPreValidate(type, data) != RAFT_RESULT_OK) {
         sdsfree(data);
         return;
     }
 
-    sds entry = sdsnew(entry_name);
-    entry = sdscatlen(entry, " ", 1);
-    entry = sdscatsds(entry, data);
-    clusterRaftPropose(entry, NULL, NULL);
-    sdsfree(data);
-    sdsfree(entry);
+    uint64_t idx = raftLogLastIndex() + 1;
+    raftLogAppend(raftLogCreate(rs->current_term, idx, type, data));
+    serverLog(LL_NOTICE, "Leader appended %s (index %llu).",
+              raftEntryTypeName(type), (unsigned long long)idx);
+    if (clusterRaftHasPeerMembers()) rs->todo_broadcast_ae = 1;
 }
 
 /* Leader-only. Turn each node's cluster-voter wish into one membership
@@ -3479,13 +3482,13 @@ static void clusterRaftReconcileVoters(void) {
 
     clusterNode *demote = clusterRaftSelectDemotionCandidate();
     if (demote) {
-        clusterRaftProposeMembershipChange(RAFT_ENTRY_DEL_VOTER, "DEL_VOTER", demote);
+        clusterRaftAppendMembershipChange(RAFT_ENTRY_DEL_VOTER, demote);
         return;
     }
 
     clusterNode *promote = clusterRaftSelectPromotionCandidate();
     if (!promote) return;
-    clusterRaftProposeMembershipChange(RAFT_ENTRY_ADD_VOTER, "ADD_VOTER", promote);
+    clusterRaftAppendMembershipChange(RAFT_ENTRY_ADD_VOTER, promote);
 }
 
 static void clusterRaftCron(void) {

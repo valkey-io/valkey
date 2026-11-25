@@ -3418,9 +3418,41 @@ static void clusterRaftHandleServerShutdown(void) {
     clusterSaveConfigOrDie(1);
 
     clusterRaftState *rs = RAFT_STATE();
-    /* Free pending proposals. */
+    /* Fail what's still waiting, so that each callback frees its context,
+     * e.g. a blocked client's handle. This runs after the final RDB and AOF
+     * writes, so a callback's side effects aren't persisted. Detach the lists
+     * first, in case a callback proposes again. */
+    const char *error = "server is shutting down";
+    list *proposals = rs->pending_proposals;
+    list *meets = rs->pending_meets;
+    rs->pending_proposals = listCreate();
+    rs->pending_meets = listCreate();
+    if (listLength(proposals) || listLength(meets)) {
+        serverLog(LL_NOTICE, "Failing %lu pending proposals and %lu pending MEETs on shutdown.",
+                  listLength(proposals), listLength(meets));
+    }
     listIter li;
     listNode *ln;
+    listRewind(proposals, &li);
+    while ((ln = listNext(&li)) != NULL) {
+        raftPendingProposal *pp = listNodeValue(ln);
+        if (pp->callback) pp->callback(pp->ctx, error);
+        sdsfree(pp->data);
+        zfree(pp);
+    }
+    listRelease(proposals);
+    listRewind(meets, &li);
+    while ((ln = listNext(&li)) != NULL) {
+        raftPendingMeet *pm = listNodeValue(ln);
+        if (pm->callback) pm->callback(pm->ctx, error);
+        sdsfree(pm->addr);
+        zfree(pm);
+    }
+    listRelease(meets);
+    if (rs->mf_callback) rs->mf_callback(rs->mf_ctx, error);
+    rs->mf_ctx = NULL;
+    rs->mf_callback = NULL;
+    /* Anything proposed by the callbacks above is dropped. */
     listRewind(rs->pending_proposals, &li);
     while ((ln = listNext(&li)) != NULL) {
         raftPendingProposal *pp = listNodeValue(ln);
@@ -3428,13 +3460,6 @@ static void clusterRaftHandleServerShutdown(void) {
         zfree(pp);
     }
     listRelease(rs->pending_proposals);
-    /* Free pending meets. */
-    listRewind(rs->pending_meets, &li);
-    while ((ln = listNext(&li)) != NULL) {
-        raftPendingMeet *pm = listNodeValue(ln);
-        sdsfree(pm->addr);
-        zfree(pm);
-    }
     listRelease(rs->pending_meets);
     listRelease(rs->deferred_meets);
     /* Free raft log. */

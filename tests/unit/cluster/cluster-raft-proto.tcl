@@ -1560,4 +1560,48 @@ test "Raft proto: NODE_FORGET resets tracking from AE_ACK" {
     }
 }
 
+test "Raft proto: shutdown completes commands that are still waiting" {
+    # A proposal and a MEET are still pending when the server shuts down.
+    # Their callbacks run then, which frees the blocked clients' handles,
+    # instead of leaking them. The sanitizer jobs check for the leak.
+    start_server {overrides {cluster-enabled yes cluster-protocol raft cluster-node-timeout 20000}} {
+        set cport [expr {[srv 0 port] + 10000}]
+        set node_id [R 0 CLUSTER MYID]
+        set node_addr "127.0.0.1:[srv 0 port]@$cport,,tls-port=0,shard-id=[string repeat a 40]"
+        set a_id [string repeat "d" 40]
+        set listen_a [raft_listen a_cport]
+        set a_addr "127.0.0.1:[expr {$a_cport - 10000}]@$a_cport,,tls-port=0,shard-id=[string repeat b 40]"
+
+        # A forms a 2-node cluster and leads it, and never answers.
+        set fd_a [raft_connect_fake_node 127.0.0.1 $cport $a_id $a_addr]
+        raft_send $fd_a "MEET cluster"
+        assert_match "ADD_ME*" [raft_recv $fd_a]
+        raft_send $fd_a "AE $a_id 1 0 0 2 2\n1 NODE_JOIN $a_id $a_addr voter\n1 NODE_JOIN $node_id $node_addr voter"
+        assert_match "AE_ACK *" [raft_recv $fd_a]
+        set out_a [raft_accept $listen_a]
+        assert_match "HELLO *" [raft_recv $out_a]
+        raft_send $out_a "HI $a_id $a_addr"
+
+        set rd [valkey_deferring_client]
+        $rd cluster addslots 0
+        raft_recv_until $out_a "PROPOSE SLOT_CHANGE *"
+
+        # A MEET to a node that never answers.
+        set listen_m [raft_listen m_cport]
+        set rd2 [valkey_deferring_client]
+        $rd2 cluster meet 127.0.0.1 [expr {$m_cport - 10000}] $m_cport
+        set fd_m [raft_accept $listen_m]
+        wait_for_blocked_clients_count 2
+
+        catch {R 0 shutdown nosave}
+        wait_for_log_messages 0 {"*ready to exit, bye bye*"} 0 100 100
+        assert_equal 1 [count_log_message 0 "Failing 1 pending proposals and 1 pending MEETs on shutdown"]
+        catch {$rd read}
+        catch {$rd2 read}
+        $rd close
+        $rd2 close
+        foreach fd [list $fd_a $out_a $fd_m] {close $fd}
+    }
+}
+
 } ;# tags

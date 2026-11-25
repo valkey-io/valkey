@@ -37,6 +37,14 @@ proc wait_for_convert_to_slave {lower_bound} {
 # replica role in between. Any later INFO comes at least one info-period
 # (2s or more here) after it.
 proc promote_again_before_next_info {before_convert} {
+    # Replies to requests sent before +convert-to-slave may still be on their
+    # way to Sentinel. Wait until it processed all of them, so any INFO it
+    # processes after the new promotion was sent after the conversion.
+    wait_for_condition 500 10 {
+        [replica_field_from_sentinel_0 $::replica_port link-pending-commands] == 0
+    } else {
+        fail "Sentinel still has pending commands"
+    }
     R $::replica_id replicaof no one
     set info_refresh [replica_field_from_sentinel_0 $::replica_port info-refresh]
     # Reading the clock after the reply can only make the INFO look newer.

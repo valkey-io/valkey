@@ -304,8 +304,6 @@ proc one_slot_on_r2_allocation {masters replicas} {
 
 start_cluster 3 0 {overrides {cluster-protocol raft cluster-node-timeout 3000}} {
 
-    # Nodes join as learners. Make all three voters.
-    raft_promote_start_cluster_voters 3
     test "Raft snapshot: a node learns from a snapshot that its shard lost its last slot" {
         assert_equal "leader" [CI 0 cluster_raft_role]
         set r0_id [R 0 cluster myid]

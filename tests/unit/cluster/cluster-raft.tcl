@@ -8,11 +8,13 @@ source tests/support/cluster_raft.tcl
 # owns them. Extra nodes (num_voters..num_nodes-1) keep cluster-voter no so
 # they stay learners.
 proc raft_form_cluster {num_voters num_nodes} {
-    for {set i 1} {$i < $num_nodes} {incr i} {
-        R 0 CLUSTER MEET [srv -$i host] [srv -$i port]
-    }
+    # Pin extra nodes before MEET so NODE_JOIN carries voter=no and auto-promote
+    # never makes them voters.
     for {set i $num_voters} {$i < $num_nodes} {incr i} {
         raft_set_voter $i no
+    }
+    for {set i 1} {$i < $num_nodes} {incr i} {
+        R 0 CLUSTER MEET [srv -$i host] [srv -$i port]
     }
     wait_for_condition 100 100 {
         [raft_cluster_formed $num_voters $num_nodes]

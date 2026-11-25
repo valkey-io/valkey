@@ -52,7 +52,6 @@ proc raft_assert_write_not_lost {writer dst key} {
 }
 
 start_cluster 3 0 {tags {external:skip cluster} overrides {cluster-protocol raft cluster-node-timeout 60000 cluster-manual-failover-timeout 500}} {
-    raft_promote_start_cluster_voters 3
     assert_equal leader [CI 0 cluster_raft_role]
 
     test "Raft: pre-grant export failure does not stick a write pause" {
@@ -111,7 +110,6 @@ start_cluster 3 0 {tags {external:skip cluster} overrides {cluster-protocol raft
 }
 
 start_cluster 4 0 {tags {external:skip cluster} overrides {cluster-protocol raft cluster-node-timeout 60000 cluster-manual-failover-timeout 500}} {
-    raft_promote_start_cluster_voters 4
     assert_equal leader [CI 0 cluster_raft_role]
 
     test "Raft: partitioned source does not ACK writes lost to SLOT_CHANGE" {

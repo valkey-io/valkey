@@ -155,9 +155,7 @@ typedef union bio_job {
 
     struct {
         int type;
-        char node_name[CLUSTER_NAMELEN]; /* Node whose hostname is being resolved. */
-        sds hostname;                    /* Hostname to resolve, ownership is passed on. */
-        int flags;                       /* ANET_PREFER_* flags for anetResolve(). */
+        struct clusterResolveRequest *req; /* Lookup to perform, ownership is passed on. */
     } cluster_resolve_args;
 } bio_job;
 
@@ -265,11 +263,9 @@ void bioCreateClusterConfigSaveJob(sds content, bool do_fsync) {
     bioSubmitJob(BIO_CLUSTER_SAVE, job);
 }
 
-void bioCreateClusterResolveHostnameJob(const char *node_name, sds hostname, int flags) {
+void bioCreateClusterResolveHostnameJob(struct clusterResolveRequest *req) {
     bio_job *job = allocBioJob(0);
-    memcpy(job->cluster_resolve_args.node_name, node_name, CLUSTER_NAMELEN);
-    job->cluster_resolve_args.hostname = hostname;
-    job->cluster_resolve_args.flags = flags;
+    job->cluster_resolve_args.req = req;
     bioSubmitJob(BIO_CLUSTER_RESOLVE, job);
 }
 
@@ -360,8 +356,7 @@ void *bioProcessBackgroundJobs(void *arg) {
                 last_save_error_log = 0;
             }
         } else if (job_type == BIO_CLUSTER_RESOLVE) {
-            clusterResolveHostnameFromBio(job->cluster_resolve_args.node_name, job->cluster_resolve_args.hostname,
-                                          job->cluster_resolve_args.flags);
+            clusterResolveHostnameFromBio(job->cluster_resolve_args.req);
         } else {
             serverPanic("Wrong job type in bioProcessBackgroundJobs().");
         }

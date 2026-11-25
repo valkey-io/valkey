@@ -500,7 +500,8 @@ struct _clusterNode {
     sds announce_client_ipv6;                /* IPv6 for clients only. */
     sds hostname;                            /* The known hostname for this node */
     mstime_t hostname_resolve_time;          /* Last time a DNS lookup of hostname was requested */
-    int hostname_resolve_inflight;           /* A DNS lookup of hostname is pending in bio */
+    uint64_t hostname_resolve_id;            /* Id of the DNS lookup pending in bio, 0 if none */
+    uint64_t addr_version;                   /* Bumped when the cluster bus learns a new address */
     int hostname_resolve_failed;             /* The last DNS lookup of hostname failed */
     char noaddr_ip[NET_IP_STR_LEN];          /* IP that answered with another node ID (NOADDR) */
     sds human_nodename;                      /* The known human readable nodename for this node */

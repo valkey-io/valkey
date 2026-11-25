@@ -44,7 +44,8 @@ void bioCreateLazyFreeJob(lazy_free_fn free_fn, int arg_count, ...);
 void bioCreateSaveRDBToDiskJob(connection *conn, int is_dual_channel, compressionAlgo target_algo);
 void bioCreateTlsReloadJob(void);
 void bioCreateClusterConfigSaveJob(sds content, bool do_fsync);
-void bioCreateClusterResolveHostnameJob(const char *node_name, sds hostname, int flags);
+struct clusterResolveRequest;
+void bioCreateClusterResolveHostnameJob(struct clusterResolveRequest *req);
 int inBioThread(void);
 
 /* Background job opcodes */

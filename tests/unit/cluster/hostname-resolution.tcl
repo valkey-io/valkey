@@ -104,4 +104,25 @@ start_cluster 3 0 {tags {external:skip cluster} overrides {cluster-resolve-hostn
         resume_process [srv -1 pid]
         wait_for_cluster_state ok
     }
+
+    test "Own hostname is resolved again after the address config changes" {
+        set R2_id [R 2 cluster myid]
+
+        # Let R2 resolve its own hostname once.
+        R 2 config set cluster-announce-hostname localhost
+        after 2000
+
+        # A new hostname must be looked up again.
+        set loglines [count_log_lines -2]
+        R 2 config set cluster-announce-hostname "unresolvable.invalid"
+        wait_for_log_messages -2 [list "*Unable to resolve hostname unresolvable.invalid of node $R2_id*"] $loglines 300 100
+
+        # So must the hostname after cluster-announce-ip is removed.
+        R 2 config set cluster-announce-ip 127.0.0.1
+        set loglines [count_log_lines -2]
+        R 2 config set cluster-announce-ip ""
+        wait_for_log_messages -2 [list "*Unable to resolve hostname unresolvable.invalid of node $R2_id*"] $loglines 300 100
+
+        R 2 config set cluster-announce-hostname ""
+    }
 }

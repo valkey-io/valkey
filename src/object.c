@@ -1300,6 +1300,7 @@ int getPositiveLongFromObjectOrReply(client *c, robj *o, long *target, const cha
     }
 }
 
+
 int getIntFromObjectOrReply(client *c, robj *o, int *target, const char *msg) {
     long value;
 

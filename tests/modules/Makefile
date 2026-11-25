@@ -42,6 +42,7 @@ TEST_MODULES = \
     keyspace_events.so \
     pathhash_notifications.so \
     block_keyspace_notification.so \
+    reply_blocking_writes.so \
     blockedclient.so \
     getkeys.so \
     getchannels.so \

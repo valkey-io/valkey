@@ -1144,6 +1144,20 @@ void debugCommand(client *c) {
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "client-enforce-reply-list") && c->argc == 3) {
         server.debug_client_enforce_reply_list = atoi(objectGetVal(c->argv[2]));
         addReply(c, shared.ok);
+    } else if (!strcasecmp(objectGetVal(c->argv[1]), "reply-blocking-pause") && c->argc == 3) {
+        if (!strcasecmp(objectGetVal(c->argv[2]), "aof")) {
+            pauseAofReplyBlocking();
+            addReply(c, shared.ok);
+        } else {
+            addReplyError(c, "No such reply-blocking provider");
+        }
+    } else if (!strcasecmp(objectGetVal(c->argv[1]), "reply-blocking-resume") && c->argc == 3) {
+        if (!strcasecmp(objectGetVal(c->argv[2]), "aof")) {
+            resumeAofReplyBlocking();
+            addReply(c, shared.ok);
+        } else {
+            addReplyError(c, "No such reply-blocking provider");
+        }
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "force-free-primary-async") && c->argc == 3) {
         server.debug_force_free_primary_async = atoi(objectGetVal(c->argv[2]));
         addReply(c, shared.ok);

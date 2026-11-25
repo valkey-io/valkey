@@ -6,6 +6,9 @@
 
 #include "generated_wrappers.hpp"
 
+#undef min
+#undef max
+
 #include <algorithm>
 #include <cstdio>
 #include <cstring>

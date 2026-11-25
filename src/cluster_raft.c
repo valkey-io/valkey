@@ -1522,6 +1522,9 @@ static int clusterRaftProcessUnchanged(clusterLink *link, int argc, sds *argv) {
     listRewind(rs->pending_proposals, &li);
     while ((ln = listNext(&li)) != NULL) {
         raftPendingProposal *pp = listNodeValue(ln);
+        /* A late reply to an earlier identical proposal describes a state
+         * before this one was made, like an older entry on apply. */
+        if (index + 1 < pp->min_index) continue;
         if (!pp->wait_index && pp->type == type && !sdscmp(pp->data, data)) {
             pp->wait_index = index;
             break;

@@ -1328,6 +1328,59 @@ test "Raft proto: one applied entry completes identical proposals" {
     }
 }
 
+test "Raft proto: a late UNCHANGED doesn't complete a later identical proposal" {
+    # P1 completes when its entry is applied. The slot moves away and back,
+    # and P2 asks for the same change. A late UNCHANGED for P1 describes the
+    # state before P2 was made, so it doesn't complete P2.
+    start_server {overrides {cluster-enabled yes cluster-protocol raft cluster-node-timeout 1000}} {
+        set cport [expr {[srv 0 port] + 10000}]
+        set node_id [R 0 CLUSTER MYID]
+        set node_addr "127.0.0.1:[srv 0 port]@$cport,,tls-port=0,shard-id=[string repeat a 40]"
+        set a_id [string repeat "d" 40]
+        set listen_a [raft_listen a_cport]
+        set a_addr "127.0.0.1:[expr {$a_cport - 10000}]@$a_cport,,tls-port=0,shard-id=[string repeat b 40]"
+
+        # A forms a 2-node cluster and leads it.
+        set fd_a [raft_connect_fake_node 127.0.0.1 $cport $a_id $a_addr]
+        raft_send $fd_a "MEET cluster"
+        assert_match "ADD_ME*" [raft_recv $fd_a]
+        raft_send $fd_a "AE $a_id 1 0 0 2 0 2\n1 NODE_JOIN $a_id $a_addr voter\n1 NODE_JOIN $node_id $node_addr voter"
+        assert_match "AE_ACK *" [raft_recv $fd_a]
+        set out_a [raft_accept $listen_a]
+        assert_match "HELLO *" [raft_recv $out_a]
+        raft_send $out_a "HI $a_id $a_addr"
+
+        # P1 is committed at index 3. Then the slot moves to A and back.
+        set rd [valkey_deferring_client]
+        $rd cluster addslots 0
+        set propose [raft_recv_until $out_a "PROPOSE SLOT_CHANGE *"]
+        set entry [string range $propose [string length "PROPOSE "] end]
+        raft_send $fd_a "AE $a_id 1 2 1 3 0 1\n1 $entry"
+        assert_equal {OK} [$rd read]
+        set epoch [lindex [split $entry " "] 4]
+        raft_send $fd_a "AE $a_id 1 3 1 5 0 2\n1 SLOT_CHANGE $node_id $epoch $a_id 0 0\n1 SLOT_CHANGE $a_id 0 - 0 0"
+        wait_for_condition 50 100 {
+            [CI 0 cluster_raft_last_applied] == 5
+        } else {
+            fail "entries 4 and 5 not applied"
+        }
+
+        # P2 asks for the same change, then the late UNCHANGED for P1 arrives.
+        $rd cluster addslots 0
+        assert_equal $propose [raft_recv_until $out_a "PROPOSE SLOT_CHANGE *"]
+        raft_send $out_a "UNCHANGED 3 $entry"
+        after 200
+        wait_for_blocked_client
+        assert_equal {} [lindex [R 0 cluster slots] 0]
+
+        # Its own entry completes it.
+        raft_send $fd_a "AE $a_id 1 5 1 6 0 1\n1 $entry"
+        assert_equal {OK} [$rd read]
+        $rd close
+        foreach fd [list $fd_a $out_a] {close $fd}
+    }
+}
+
 test "Raft proto: a proposal the leader says is unchanged completes once applied up to its index" {
     # The node proposes a slot change that the leader has already committed
     # but the node hasn't applied yet. The leader replies UNCHANGED with its

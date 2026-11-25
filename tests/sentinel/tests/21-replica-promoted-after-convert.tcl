@@ -27,11 +27,18 @@ proc promote_again_before_next_info {since} {
     }
 }
 
+# Return 1 if Sentinel 0 processed an INFO after $since (in ms). The clock is
+# read before the request, so the reply latency cannot make an older INFO pass.
+proc info_refreshed_since {since} {
+    set now [clock milliseconds]
+    expr {[replica_field_from_sentinel_0 $::replica_port info-refresh] < $now - $since}
+}
+
 # Wait for Sentinel 0 to process an INFO sent after $since (in ms), then check
 # that it did not demote the replica.
 proc assert_not_demoted_after_next_info {since} {
     wait_for_condition 1500 10 {
-        [replica_field_from_sentinel_0 $::replica_port info-refresh] < [clock milliseconds] - $since
+        [info_refreshed_since $since]
     } else {
         fail "Sentinel did not refresh INFO"
     }

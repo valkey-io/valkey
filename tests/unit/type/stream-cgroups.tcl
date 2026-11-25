@@ -1161,7 +1161,14 @@ start_server {
         set with_consumer [r MEMORY USAGE mystream]
         assert_morethan $with_consumer [expr {$with_groups + 200}]
         r XGROUP DELCONSUMER mystream g0 $name
-        assert_equal $with_groups [r MEMORY USAGE mystream]
+        # Other allocators (for example libc) can give the rax nodes that are
+        # reallocated here a bigger block, so check the exact value only with
+        # jemalloc.
+        if {[string match {*jemalloc*} [s mem_allocator]]} {
+            assert_equal $with_groups [r MEMORY USAGE mystream]
+        } else {
+            assert_range [r MEMORY USAGE mystream] $with_groups [expr {$with_groups + 64}]
+        }
 
         # Its pending entries add NACK bytes, and deleting the consumer drops
         # them. An emptied rax can keep a few bytes more than before.

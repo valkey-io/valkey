@@ -1519,6 +1519,47 @@ test "Raft proto: the leader answers UNCHANGED only after a quorum acks a later 
     }
 }
 
+test "Raft proto: a read confirmed by the ACK that commits a change isn't unchanged" {
+    # The ACK that confirms the read also commits a change appended after
+    # it. The leader decides again before applying that change, and since it
+    # hasn't applied its whole log, it appends the proposal.
+    start_server {overrides {cluster-enabled yes cluster-protocol raft cluster-node-timeout 20000}} {
+        set node_id [R 0 CLUSTER MYID]
+        set f_id [string repeat "f" 40]
+        set fd [raft_join_fake_follower $f_id [string repeat "9" 40]]
+        R 0 cluster addslots 0
+        raft_ack_until_idle $fd
+
+        # Make F a voter, so the quorum is both of us.
+        set rd [valkey_deferring_client]
+        $rd cluster addvoter $f_id
+        assert_equal OK [$rd read]
+        $rd close
+        set last [raft_ack_until_idle $fd]
+        set term [CI 0 cluster_raft_current_term]
+
+        # F forwards a SETSLOT NODE for the current owner, then a change of
+        # slot 0 to F, which is appended.
+        set entry "SLOT_CHANGE $node_id 1 $node_id 1 0"
+        raft_send $fd "PROPOSE $entry"
+        raft_recv_until $fd "AE *"
+        raft_send $fd "PROPOSE SLOT_CHANGE $node_id 1 $f_id 0 0"
+        while {![string match "*SLOT_CHANGE $node_id 1 $f_id 0 0*" [set ae [raft_recv_until $fd "AE *"]]]} {}
+        set round [lindex [raft_ae_header $ae] 6]
+
+        # One ACK confirms the read and commits the change. The proposal is
+        # appended instead of answered with UNCHANGED.
+        raft_send $fd "AE_ACK $term 1 [expr {$last + 1}] $round 0"
+        while {![string match "*\n* $entry*" [set msg [raft_recv $fd]]]} {
+            assert_no_match "UNCHANGED *" $msg
+        }
+        assert_equal [expr {$last + 1}] [CI 0 cluster_raft_commit_index]
+        assert_equal $f_id [dict get [cluster_get_node_by_id 0 $f_id] id]
+        assert_equal 0 [dict get [cluster_get_node_by_id 0 $f_id] slots]
+        close $fd
+    }
+}
+
 test "Raft proto: the leader completes its proposal only with its own entry" {
     # A follower forwards the same slot change that a client later sends to
     # the leader, and an entry that changes it comes in between. Committing

@@ -682,6 +682,18 @@ int aofDelHistoryFiles(void) {
         return C_OK;
     }
 
+    /* Sync directory to ensure published manifest is durable before removing history files. */
+    sds am_name = getAofManifestFileName();
+    sds am_filepath = makePath(server.aof_dirname, am_name);
+    sdsfree(am_name);
+    if (fsyncFileDir(am_filepath) == -1) {
+        serverLog(LL_WARNING, "Fail to fsync AOF directory %s before deleting history files: %s.",
+                  am_filepath, strerror(errno));
+        sdsfree(am_filepath);
+        return C_ERR;
+    }
+    sdsfree(am_filepath);
+
     listNode *ln;
     listIter li;
 

@@ -467,6 +467,7 @@ static raftLogEntry *raftLogGet(uint64_t index);
 static uint64_t raftLogLastIndex(void);
 static uint64_t raftLogTermAt(uint64_t index);
 static void raftLogTruncateFrom(uint64_t index);
+static void clusterRaftClampMinIndex(uint64_t index);
 static int clusterRaftPersistNewLogEntries(uint64_t from);
 static uint64_t raftLogLastTerm(void);
 static int clusterRaftCanGrantVote(clusterRaftState *rs, uint64_t candidate_last_index, uint64_t candidate_last_term);
@@ -615,10 +616,6 @@ static void clusterRaftSingletonStepDown(void) {
     raftSetVerifiedIndex(rs->current_term, rs->last_applied, true);
     /* Indexes in our old log say nothing about the new cluster's log. */
     rs->max_unchanged_index = 0;
-    listIter li;
-    listNode *ln;
-    listRewind(rs->pending_proposals, &li);
-    while ((ln = listNext(&li)) != NULL) ((raftPendingProposal *)listNodeValue(ln))->min_index = 0;
 }
 
 /* Propose NODE_JOIN + SLOT_CHANGE for ourselves. Called once, before the
@@ -1710,12 +1707,27 @@ static raftLogEntry *raftLogGet(uint64_t index) {
     return e->index == index ? e : NULL;
 }
 
+/* The log has no entries from index on, so a pending proposal's own entry
+ * can be appended there, even if its min_index counted entries we had. */
+static void clusterRaftClampMinIndex(uint64_t index) {
+    clusterRaftState *rs = RAFT_STATE();
+    if (!rs->pending_proposals) return;
+    listIter li;
+    listNode *ln;
+    listRewind(rs->pending_proposals, &li);
+    while ((ln = listNext(&li)) != NULL) {
+        raftPendingProposal *pp = listNodeValue(ln);
+        if (pp->min_index > index) pp->min_index = index;
+    }
+}
+
 /* Truncate the log from the given index onwards (inclusive). */
 static void raftLogTruncateFrom(uint64_t index) {
     clusterRaftState *rs = RAFT_STATE();
     while (rs->log_count > 0 && rs->log[rs->log_count - 1]->index >= index) {
         raftLogFree(rs->log[--rs->log_count]);
     }
+    clusterRaftClampMinIndex(index);
     /* Truncated entries may already be on disk; a full rewrite is needed
      * to remove them. */
     rs->todo_save_config = 1;
@@ -2583,6 +2595,7 @@ static int clusterRaftProcessInstallSnapshot(clusterLink *link, int argc, sds *a
     rs->log_count = 0;
     rs->log_trim_index = 0;
     rs->log_trim_term = 0;
+    clusterRaftClampMinIndex(snap_index + 1);
 
     /* clusterLoadNodeLine() only adds flags and replica links to a node that
      * already exists. Reset them first so that the snapshot fully defines the

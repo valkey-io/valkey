@@ -1514,6 +1514,43 @@ test "Raft proto: the leader completes its proposal only with its own entry" {
     }
 }
 
+test "Raft proto: a proposal completes after its leader's log tail is replaced" {
+    # The leader's proposal counts its uncommitted log tail in min_index. A
+    # new leader replaces that tail and commits the same change at a lower
+    # index, which completes the proposal.
+    start_server {overrides {cluster-enabled yes cluster-protocol raft cluster-node-timeout 20000}} {
+        set node_id [R 0 CLUSTER MYID]
+        set f_id [string repeat "f" 40]
+        set fd [raft_join_fake_follower $f_id [string repeat "9" 40]]
+        R 0 cluster addslots 0
+        raft_ack_until_idle $fd
+
+        # Make F a voter, so nothing commits without its ACK.
+        set rd [valkey_deferring_client]
+        $rd cluster addvoter $f_id
+        assert_equal OK [$rd read]
+        $rd close
+        set last [raft_ack_until_idle $fd]
+        set term [CI 0 cluster_raft_current_term]
+
+        # Slots 1 and 2 are appended, but not committed.
+        set rd1 [valkey_deferring_client]
+        $rd1 cluster addslots 1
+        set rd2 [valkey_deferring_client]
+        $rd2 cluster addslots 2
+        while {![regexp {\n([0-9]+ (SLOT_CHANGE [^\n]* 2))(\n|$)} [raft_recv_until $fd "AE *"] -> line entry]} {}
+
+        # F wins a later term and commits slot 2 in place of slot 1.
+        set new_term [expr {$term + 1}]
+        raft_send $fd "AE $f_id $new_term $last $term [expr {$last + 1}] 0 1\n$new_term $entry"
+        assert_equal OK [$rd2 read]
+        assert_equal 1 [s blocked_clients]
+        $rd1 close
+        $rd2 close
+        close $fd
+    }
+}
+
 test "Raft proto: the leader doesn't append a slot change that changes nothing" {
     start_server {overrides {cluster-enabled yes cluster-protocol raft cluster-node-timeout 1000}} {
         set node_id [R 0 CLUSTER MYID]

@@ -245,11 +245,11 @@ proc wait_replica_acked_ofs {primary replica replica_host replica_port} {
     $replica config set hz 10
 }
 
-proc wait_for_ofs_sync {r1 r2} {
-    wait_for_condition 50 100 {
+proc wait_for_ofs_sync {r1 r2 {maxtries 50} {delay 100}} {
+    wait_for_condition $maxtries $delay {
         [status $r1 master_repl_offset] eq [status $r2 master_repl_offset]
     } else {
-        fail "replica offset didn't match in time"
+        fail "replica offset didn't match in time ([status $r1 master_repl_offset] vs [status $r2 master_repl_offset])"
     }
 }
 

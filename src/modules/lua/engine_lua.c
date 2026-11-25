@@ -423,10 +423,10 @@ static void luaEngineFreeFunction(ValkeyModuleCtx *module_ctx,
     ValkeyModule_Free(script);
 
     if (compiled_function->name) {
-        ValkeyModule_Free(compiled_function->name);
+        ValkeyModule_FreeString(NULL, compiled_function->name);
     }
     if (compiled_function->desc) {
-        ValkeyModule_Free(compiled_function->desc);
+        ValkeyModule_FreeString(NULL, compiled_function->desc);
     }
     ValkeyModule_Free(compiled_function);
 }

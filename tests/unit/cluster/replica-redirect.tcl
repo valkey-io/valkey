@@ -178,6 +178,20 @@ start_cluster 1 1 {tags {external:skip cluster}} {
         $rd RANDOMKEY
         assert_equal QUEUED [$rd read]
 
+        # The previous failover may not have propagated to the primary yet. The
+        # primary ignores MFSTART from a node it does not see as its replica,
+        # and the manual failover then times out. Also make sure the replica
+        # has a live link to its primary, or CLUSTER FAILOVER is rejected.
+        set primary_srv [expr {-$pidx}]
+        set primary_id [R $primary_srv CLUSTER MYID]
+        set replica_id [R $replica_srv CLUSTER MYID]
+        wait_for_condition 1000 50 {
+            [cluster_node_is_replica_of $primary_srv $replica_id $primary_id] &&
+            [dict get [cluster_get_myself_primary $replica_srv] linkstate] eq {connected}
+        } else {
+            fail "Primary and replica do not agree on their roles"
+        }
+
         # Failover: the replica takes over, primary becomes a replica
         R $replica_srv CLUSTER FAILOVER
         wait_for_condition 1000 50 {

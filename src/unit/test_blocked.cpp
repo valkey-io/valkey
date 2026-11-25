@@ -324,6 +324,20 @@ TEST_F(BlockedInuseTest, unblockAllKeys) {
     freeFakeClient(c2);
 }
 
+TEST_F(BlockedInuseTest, blockingOnKeysPrimaryClient) {
+    client *c = createFakeClient(1);
+    robj *key = createObject(OBJ_STRING, sdsnew("foo"));
+    robj *keys[] = {key};
+
+    c->flag.primary = 1;
+    blockClientInUseOnKeys(c, 1, keys);
+    EXPECT_TRUE(c->flag.blocked);
+    unblockClientsInUseOnKey(key);
+    listEmpty(server.unblocked_clients);
+    decrRefCount(key);
+    freeFakeClient(c);
+}
+
 TEST_F(BlockedInuseDeathTest, blockingOnKeysReplicaClient) {
     client *c = createFakeClient(1);
     robj *key = createObject(OBJ_STRING, sdsnew("foo"));

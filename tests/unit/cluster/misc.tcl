@@ -177,6 +177,92 @@ start_cluster 2 0 {tags {external:skip cluster}} {
         assert_error {MOVED *} {R 0 exec ifeq $other_key val}
         assert_equal {PONG} [R 0 ping]
     }
+
+    # MSETEX key positions are counted pairs, so cluster routing needs msetexGetKeys.
+    # Without it the command looks keyless and a non-owner executes the write.
+    test {MSETEX cluster key routing} {
+        set remote remotekey
+        while {![catch {R 0 exists $remote}]} {
+            append remote x
+        }
+        if {[catch {R 1 exists $remote} err]} {
+            fail "node 1 should own $remote ($err)"
+        }
+
+        set remote_slot [R 0 cluster keyslot $remote]
+        set remote_before [R 0 cluster countkeysinslot $remote_slot]
+        assert_error {MOVED *} {R 0 msetex 1 $remote hello}
+        assert_equal $remote_before [R 0 cluster countkeysinslot $remote_slot]
+        assert_equal 1 [R 1 msetex 1 $remote hello]
+        assert_equal hello [R 1 get $remote]
+        assert_equal $remote_before [R 0 cluster countkeysinslot $remote_slot]
+        R 1 del $remote
+
+        set cross_a "{slotA}a"
+        set cross_b "{slotB}b"
+        assert {[R 0 cluster keyslot $cross_a] != [R 0 cluster keyslot $cross_b]}
+        set slot_a [R 0 cluster keyslot $cross_a]
+        set slot_b [R 0 cluster keyslot $cross_b]
+        set before_a0 [R 0 cluster countkeysinslot $slot_a]
+        set before_b0 [R 0 cluster countkeysinslot $slot_b]
+        set before_a1 [R 1 cluster countkeysinslot $slot_a]
+        set before_b1 [R 1 cluster countkeysinslot $slot_b]
+        assert_error {CROSSSLOT Keys*} {R 0 msetex 2 $cross_a hello $cross_b world}
+        assert_equal $before_a0 [R 0 cluster countkeysinslot $slot_a]
+        assert_equal $before_b0 [R 0 cluster countkeysinslot $slot_b]
+        assert_equal $before_a1 [R 1 cluster countkeysinslot $slot_a]
+        assert_equal $before_b1 [R 1 cluster countkeysinslot $slot_b]
+
+        set k1 "{msetex}a"
+        set k2 "{msetex}b"
+        assert {[R 0 cluster keyslot $k1] == [R 0 cluster keyslot $k2]}
+        set owner 0
+        if {[catch {R 0 exists $k1}]} {set owner 1}
+        set other [expr {$owner ? 0 : 1}]
+        set same_slot [R 0 cluster keyslot $k1]
+        assert_equal 1 [R $owner msetex 2 $k1 hello $k2 world]
+        assert_equal hello [R $owner get $k1]
+        assert_equal world [R $owner get $k2]
+        assert_equal 0 [R $other cluster countkeysinslot $same_slot]
+
+        assert_equal [list $k1 $k2] [R $owner command getkeys msetex 2 $k1 v1 $k2 v2 ex 10]
+        assert_error {MOVED *} {R $other msetex 1 $k1 hello EX 60}
+        assert_equal hello [R $owner get $k1]
+        assert_equal 1 [R $owner msetex 1 $k1 hello2 EX 60]
+        assert_morethan [R $owner pttl $k1] 0
+
+        # 257 keys is past the inline getKeys buffer (MAX_KEYS_BUFFER 256).
+        set args [list 257]
+        for {set i 0} {$i < 257} {incr i} {
+            lappend args "{msetex}k$i" "v$i"
+        }
+        assert_equal 1 [R $owner msetex {*}$args]
+        assert_equal v0 [R $owner get "{msetex}k0"]
+        assert_equal v256 [R $owner get "{msetex}k256"]
+        assert_equal 0 [R $other cluster countkeysinslot $same_slot]
+
+        R 0 multi
+        assert_error {MOVED *} {R 0 msetex 1 $remote gone}
+        assert_error {EXECABORT*} {R 0 exec}
+        assert_equal 0 [R 0 cluster countkeysinslot $remote_slot]
+        assert_equal 0 [R 1 exists $remote]
+
+        R 0 multi
+        assert_error {CROSSSLOT Keys*} {R 0 msetex 2 $cross_a hello $cross_b world}
+        assert_error {EXECABORT*} {R 0 exec}
+
+        R $owner multi
+        assert_equal QUEUED [R $owner msetex 2 $k1 q1 $k2 q2]
+        assert_equal {1} [R $owner exec]
+        assert_equal q1 [R $owner get $k1]
+        assert_equal q2 [R $owner get $k2]
+
+        set delargs [list $k1 $k2]
+        for {set i 0} {$i < 257} {incr i} {
+            lappend delargs "{msetex}k$i"
+        }
+        R $owner del {*}$delargs
+    }
 }
 
 # Get the path to the cluster config file.
@@ -191,8 +277,12 @@ proc get_nodes_conf_path {srv_idx} {
 # failure and it will cause cluster config file save to fail at the rename.
 proc create_nodes_conf_folder {srv_idx} {
     set cluster_conf_path [get_nodes_conf_path $srv_idx]
-    if {[file exists $cluster_conf_path]} { exec rm -rf $cluster_conf_path }
-    exec mkdir -p $cluster_conf_path
+    # Retry: a background config save can recreate nodes.conf between the rm and the mkdir.
+    wait_for_condition 50 100 {
+        ![catch {exec rm -rf $cluster_conf_path; exec mkdir -p $cluster_conf_path}]
+    } else {
+        fail "Could not create folder $cluster_conf_path"
+    }
 }
 
 # Remove the folder (or nodes.conf) that we created from create_nodes_conf_folder.
@@ -210,6 +300,19 @@ proc file_inode {path} {
 # over the cluster config file, so none should survive a completed save.
 proc leftover_nodes_conf_tmp_files {srv_idx} {
     return [glob -nocomplain "[get_nodes_conf_path $srv_idx].tmp-*"]
+}
+
+# Wait until node srv_idx has no temp files left. A drain does not stop new
+# saves: cluster bus messages can start one right after it, and that save's
+# temp file exists until its rename fails and it deletes the file. So drain
+# and check again a few times. A temp file that is never deleted still fails.
+proc wait_for_no_nodes_conf_tmp_files {srv_idx} {
+    wait_for_condition 10 100 {
+        [R $srv_idx debug bio-drain BIO_CLUSTER_SAVE] eq {OK} &&
+        [leftover_nodes_conf_tmp_files $srv_idx] eq {}
+    } else {
+        fail "Node $srv_idx left temp files: [leftover_nodes_conf_tmp_files $srv_idx]"
+    }
 }
 
 start_cluster 1 1 {tags {external:skip cluster} overrides {cluster-config-save-behavior sync}} {
@@ -289,10 +392,9 @@ start_cluster 1 1 {tags {external:skip cluster} overrides {cluster-config-save-b
 
         # A node whose renames keep failing must not accumulate temp files. This
         # holds before this commit too; it is here to keep the invariant from
-        # regressing as the save path is reordered. The bio jobs were drained
-        # above, so no save is still in flight.
-        assert_equal {} [leftover_nodes_conf_tmp_files 0]
-        assert_equal {} [leftover_nodes_conf_tmp_files 1]
+        # regressing as the save path is reordered.
+        wait_for_no_nodes_conf_tmp_files 0
+        wait_for_no_nodes_conf_tmp_files 1
 
         # Check the info field is err.
         assert_equal "err" [getInfoProperty [R 0 cluster info] cluster_config_save_status]

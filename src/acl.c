@@ -2232,7 +2232,12 @@ static void cleanupACLKeyResultCache(aclKeyResultCache *cache) {
 }
 
 /* Inline func to check if command should be restricted */
-static inline int shouldRestrictCmd(struct serverCommand *cmd) {
+static inline int shouldRestrictCmd(struct serverCommand *cmd, int argc) {
+    /* EXEC only reads the active database through its condition keys. The
+     * queued commands are checked against their own database when they
+     * run, so a bare EXEC does not need access to the active database. */
+    if (cmd->proc == execCommand && argc == 1) return 0;
+
     return (cmd->acl_categories & ACL_CATEGORY_KEYSPACE) ||
            (cmd->acl_categories & ACL_CATEGORY_READ) ||
            (cmd->acl_categories & ACL_CATEGORY_WRITE) ||
@@ -2293,7 +2298,7 @@ static int ACLSelectorCheckCmd(aclSelector *selector,
                 return ACL_DENIED_DB;
             }
         }
-    } else if (shouldRestrictCmd(cmd) && !ACLSelectorCanAccessDb(selector, dbid)) {
+    } else if (shouldRestrictCmd(cmd, argc) && !ACLSelectorCanAccessDb(selector, dbid)) {
         if (keyidxptr) *keyidxptr = 0;
         return ACL_DENIED_DB;
     }
@@ -3293,6 +3298,8 @@ static sds ACLLoadFromFile(const char *filename) {
             new_default = ACLCreateDefaultUser();
         }
 
+        /* The default user is special since after the copy its old and new rules are the same object. */
+        ACLKillPubsubClientsIfNeeded(new_default, DefaultUser);
         ACLCopyUser(DefaultUser, new_default);
         ACLFreeUser(new_default);
         raxInsert(Users, (unsigned char *)"default", 7, DefaultUser, NULL);
@@ -3587,6 +3594,7 @@ void addACLLogEntry(client *c, int reason, int context, int argpos, sds username
 
     if (server.acllog_max_len == 0) {
         trimACLLogEntriesToMaxLen();
+        sdsfree(object);
         return;
     }
 
@@ -4297,13 +4305,15 @@ void addReplyCommandCategories(client *c, struct serverCommand *cmd) {
  * When the user is omitted it means that we are trying to authenticate
  * against the default user. */
 void authCommand(client *c) {
+    /* Redact every argument before the syntax check, since a rejected command
+     * is still shown in MONITOR and the commandlog. */
+    for (int j = 1; j < c->argc; j++) redactClientCommandArgument(c, j);
+
     /* Only two or three argument forms are allowed. */
     if (c->argc > 3) {
         addReplyErrorObject(c, shared.syntaxerr);
         return;
     }
-    /* Always redact the second argument */
-    redactClientCommandArgument(c, 1);
 
     /* Handle the two different forms here. The form with two arguments
      * will just use "default" as username. */
@@ -4323,7 +4333,6 @@ void authCommand(client *c) {
     } else {
         username = c->argv[1];
         password = c->argv[2];
-        redactClientCommandArgument(c, 2);
     }
 
     robj *err = NULL;

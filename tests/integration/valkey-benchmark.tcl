@@ -34,7 +34,8 @@ tags {"benchmark network external:skip logreqres:skip"} {
 
         test {benchmark: set,get} {
             set cmd [valkeybenchmark $master_host $master_port "-c 5 -n 10 -t set,get"]
-            common_bench_setup $cmd
+            set output [common_bench_setup $cmd]
+            assert_match {*avg*min*p50*p95*p99*p99.9*max*} $output
             default_set_get_checks
         }
 
@@ -54,6 +55,12 @@ tags {"benchmark network external:skip logreqres:skip"} {
             common_bench_setup $cmd
             assert_equal 10 [r get counter]
             assert_match {*calls=10,*} [cmdstat incr]
+        }
+
+        test {benchmark: rps summary includes p99.9} {
+            set cmd [valkeybenchmark $master_host $master_port "-c 1 -n 10 --rps 10 INCR counter"]
+            set output [common_bench_setup $cmd]
+            assert_match {*RPS Summary:*avg*min*p50*p95*p99*p99.9*max*Latency by percentile*} $output
         }
 
         test {benchmark: connecting using URI set,get} {
@@ -261,6 +268,27 @@ tags {"benchmark network external:skip logreqres:skip"} {
             assert {[llength $keys] > 0}
             foreach key $keys {
                 assert_equal "Book, Part 1" [r get $key]
+            }
+            file delete $csv_file
+        }
+
+        test {benchmark: dataset CSV with a lone quote as the last field} {
+            # The opening and closing quote checks both match the same byte,
+            # which must not be stripped as a quoted empty value.
+            set csv_data "id,content\n1,\"\n"
+            set csv_file [tmpfile "lone_quote.csv"]
+            set fd [open $csv_file w]
+            puts $fd $csv_data
+            close $fd
+
+            set cmd [valkeybenchmark $master_host $master_port \
+                "--dataset $csv_file -n 2 -r 10 -- SET doc:__rand_int__ \"__field:content__\""]
+            common_bench_setup $cmd
+
+            set keys [r keys "doc:*"]
+            assert {[llength $keys] > 0}
+            foreach key $keys {
+                assert_equal "\"" [r get $key]
             }
             file delete $csv_file
         }
@@ -519,6 +547,14 @@ tags {"benchmark network external:skip logreqres:skip"} {
             assert_match "*is not a valid number*" $error
         }
 
+        test {benchmark: function_load with more functions than fit in the script buffer} {
+            set cmd [valkeybenchmark $master_host $master_port "-n 1 -c 1 -t function_load --num-functions 20000"]
+            catch { exec {*}$cmd 2>@1 } output
+            # The server rejects the script for exceeding Lua's 200 local variable limit.
+            # Getting that reply means the benchmark generated and sent it without crashing.
+            assert_match "*Error from server*" $output
+        }
+
         test {benchmark: -r with large keyspace generates keys above 2^31} {
             set cmd [valkeybenchmark $master_host $master_port "-r 999999999999 -n 100 -t set"]
             common_bench_setup $cmd
@@ -587,6 +623,9 @@ tags {"benchmark network external:skip logreqres:skip"} {
             set output [common_bench_setup $cmd]
             # CSV output should contain comma-separated values
             assert_match "*,*,*,*" $output
+            # Header and each row carry p999_latency_ms between p99 and max
+            assert_match {*"p99_latency_ms","p999_latency_ms","max_latency_ms"*} $output
+            assert {[regexp {(?n)^"SET"(,"[^"]*"){8}$} $output]}
             # Should not contain the usual formatted output
             assert_no_match "*requests per second*" $output
             # Should not contain carriage returns or progress indicators

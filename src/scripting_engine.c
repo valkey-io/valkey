@@ -798,6 +798,10 @@ static robj **readReadCommandInternal(size_t *argc, robj **err) {
 protoerr:
     *err = createStringObject(protocol_error, strlen(protocol_error));
 keep_reading:
+    /* Reset *argc so the caller can retry: if we parsed the bulk count
+     * header before hitting a keep_reading exit, *argc is non-zero and
+     * the precondition assert on the next call would fire. */
+    *argc = 0;
     for (size_t i = 0; i < largc; i++) {
         decrRefCount(argv[i]);
     }
@@ -1072,7 +1076,7 @@ void scriptingEngineDebuggerProcessCommands(int *client_disconnected, robj **err
              */
             if (sdslen(ds.cbuf) > 1 << 20) {
                 *err = createStringObject(max_buffer_error, strlen(max_buffer_error));
-                return;
+                break;
             }
         }
 

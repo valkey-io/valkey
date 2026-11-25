@@ -88,8 +88,8 @@ sds keyspaceEventsFlagsToString(int flags) {
         if (flags & NOTIFY_STREAM) res = sdscatlen(res, "t", 1);
         if (flags & NOTIFY_MODULE) res = sdscatlen(res, "d", 1);
         if (flags & NOTIFY_PATH_HASH) res = sdscatlen(res, "p", 1);
-        if (flags & NOTIFY_NEW) res = sdscatlen(res, "n", 1);
     }
+    if (flags & NOTIFY_NEW) res = sdscatlen(res, "n", 1);
     if (flags & NOTIFY_KEYSPACE) res = sdscatlen(res, "K", 1);
     if (flags & NOTIFY_KEYEVENT) res = sdscatlen(res, "E", 1);
     if (flags & NOTIFY_KEY_MISS) res = sdscatlen(res, "m", 1);

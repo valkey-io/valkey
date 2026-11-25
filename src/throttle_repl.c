@@ -86,6 +86,7 @@ static void adjustThrottleRate(bool reduce_traffic_rate) {
 static int64_t getReplicaSteadyStateCobTargetSize(void) {
     int64_t limit = server.client_obuf_limits[CLIENT_TYPE_REPLICA].soft_limit_bytes;
     if (limit == 0) limit = server.client_obuf_limits[CLIENT_TYPE_REPLICA].hard_limit_bytes;
+    if (limit != 0 && limit < server.repl_backlog_size) limit = server.repl_backlog_size;
 
     int64_t cob_target = limit / 2; /* Target is half the limit. */
 

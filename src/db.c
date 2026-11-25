@@ -766,10 +766,9 @@ int selectDb(client *c, int id) {
 
 long long dbTotalServerKeyCount(void) {
     long long total = 0;
-    int j;
-    for (j = 0; j < server.dbnum; j++) {
-        if (dbHasNoKeys(j)) continue;
-        total += kvstoreSize(server.db[j]->keys);
+    serverDb *db;
+    forEachCreatedDb(db) {
+        total += kvstoreSize(db->keys);
     }
     return total;
 }
@@ -1431,8 +1430,8 @@ void scanGenericCommandWithOptions(client *c, robj *o, unsigned long long cursor
             orderedIndexItemGetElement(item, &element, &len);
             addReplyBulkCBuffer(c, element, len);
             if (opts->only_keys) continue;
-            char buf[MAX_LONG_DOUBLE_CHARS];
-            int score_len = ld2string(buf, sizeof(buf), orderedIndexItemGetScore(item), LD_STR_AUTO);
+            char buf[MAX_D2STRING_CHARS];
+            int score_len = d2string(buf, sizeof(buf), orderedIndexItemGetScore(item));
             addReplyBulkCBuffer(c, buf, score_len);
         }
     } else {
@@ -1828,6 +1827,7 @@ static void copyDbExpiry(serverDb *target, const serverDb *source) {
 int dbSwapDatabases(int id1, int id2) {
     if (id1 < 0 || id1 >= server.dbnum || id2 < 0 || id2 >= server.dbnum) return C_ERR;
     if (id1 == id2) return C_OK;
+    bgIteration_swapdb(id1, id2);
     serverDb *db1 = createDatabaseIfNeeded(id1);
     serverDb *db2 = createDatabaseIfNeeded(id2);
     serverDb aux = *db1;
@@ -1873,10 +1873,15 @@ int dbSwapDatabases(int id1, int id2) {
  * database (temp) as the main (active) database, the actual freeing of old database
  * (which will now be placed in the temp one) is done later. */
 void swapMainDbWithTempDb(serverDb **tempDb) {
+    /* The old main DB stops being the active keyspace here. Synchronously tear
+     * down any background iterators (e.g. a forkless save) borrowing live
+     * references into it, before the old keyspace is handed off to be freed. */
+    bgIteration_flushall();
+
     for (int i = 0; i < server.dbnum; i++) {
         if (tempDb[i] == NULL && server.db[i] == NULL) continue;
         if (tempDb[i] == NULL) tempDb[i] = createDatabase(i);
-        if (server.db[i] == NULL) server.db[i] = createDatabase(i);
+        if (server.db[i] == NULL) createDatabaseIfNeeded(i);
         serverDb aux = *server.db[i];
         serverDb *activedb = server.db[i], *newdb = tempDb[i];
 
@@ -2422,6 +2427,15 @@ int getKeysUsingKeySpecs(struct serverCommand *cmd, robj **argv, int argc, int s
         first = 0;
         if (spec->begin_search_type == KSPEC_BS_INDEX) {
             first = spec->bs.index.pos;
+            /* The optional arguments holding this spec's keys were omitted, e.g.
+             * PFMERGE with no source keys. Like a missing keyword, the spec matches
+             * nothing, instead of invalidating the keys found by the other specs.
+             * An incomplete spec still defers to the getkeys callback, which may
+             * find keys elsewhere. */
+            if (first >= argc) {
+                if (spec->flags & CMD_KEY_INCOMPLETE) goto invalid_spec;
+                continue;
+            }
         } else if (spec->begin_search_type == KSPEC_BS_KEYWORD) {
             int start_index =
                 spec->bs.keyword.startfrom > 0 ? spec->bs.keyword.startfrom : argc + spec->bs.keyword.startfrom;
@@ -2457,7 +2471,7 @@ int getKeysUsingKeySpecs(struct serverCommand *cmd, robj **argv, int argc, int s
         } else if (spec->find_keys_type == KSPEC_FK_KEYNUM) {
             step = spec->fk.keynum.keystep;
             long long numkeys;
-            if (spec->fk.keynum.keynumidx >= argc) goto invalid_spec;
+            if (spec->fk.keynum.keynumidx >= argc - first) goto invalid_spec;
 
             sds keynum_str = objectGetVal(argv[first + spec->fk.keynum.keynumidx]);
             if (!string2ll(keynum_str, sdslen(keynum_str), &numkeys) || numkeys < 0) {
@@ -2787,6 +2801,11 @@ int genericGetKeys(int storeKeyOfs,
 int sintercardGetKeys(struct serverCommand *cmd, robj **argv, int argc, getKeysResult *result) {
     UNUSED(cmd);
     return genericGetKeys(0, 1, 2, 1, argv, argc, result);
+}
+
+int msetexGetKeys(struct serverCommand *cmd, robj **argv, int argc, getKeysResult *result) {
+    UNUSED(cmd);
+    return genericGetKeys(0, 1, 2, 2, argv, argc, result);
 }
 
 int zunionInterDiffStoreGetKeys(struct serverCommand *cmd, robj **argv, int argc, getKeysResult *result) {

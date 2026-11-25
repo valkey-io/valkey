@@ -115,6 +115,13 @@ proc spawn_instance {type base_port count {conf {}} {base_conf_file ""}} {
             puts $cfg "port $port"
         }
 
+        if {$::valgrind} {
+            # The crash report's fast memory test scribbles over every anonymous
+            # mapping, including Valgrind's own, which buries a real crash under
+            # bogus memcheck errors and can abort Valgrind itself.
+            puts $cfg "crash-memcheck-enabled no"
+        }
+
         if {$::io_threads} {
             puts $cfg "io-threads 2"
             puts $cfg "io-threads-always-active yes"

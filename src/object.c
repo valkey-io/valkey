@@ -1408,7 +1408,13 @@ size_t objectComputeSize(robj *key, robj *o, size_t sample_size, int dbid) {
             hashtable *ht = objectGetVal(o);
             hashtableIterator iter;
             vset *volatile_fields = hashtableMetadata(ht);
-            hashtableInitIterator(&iter, ht, 0);
+            /* Skip entry validation: fields that have logically expired but
+             * have not been reaped yet still occupy memory, so they must be
+             * sampled like any other entry. hashtableSize() counts them, so
+             * sampling only live fields would also skew the extrapolation.
+             * This also keeps the measurement independent of expiry
+             * evaluation, which consults server state. */
+            hashtableInitIterator(&iter, ht, HASHTABLE_ITER_SKIP_VALIDATION);
             void *next;
 
             asize += hashtableMemUsage(ht);
@@ -1513,7 +1519,6 @@ void freeMemoryOverheadData(struct serverMemOverhead *mh) {
  * information used for the MEMORY OVERHEAD and INFO command. The returned
  * structure pointer should be freed calling freeMemoryOverheadData(). */
 struct serverMemOverhead *getMemoryOverheadData(void) {
-    int j;
     size_t mem_total = 0;
     size_t mem = 0;
     size_t zmalloc_used = zmalloc_used_memory();
@@ -1584,15 +1589,13 @@ struct serverMemOverhead *getMemoryOverheadData(void) {
     mh->functions_caches = functionsMemoryOverhead();
     mem_total += mh->functions_caches;
 
-    for (j = 0; j < server.dbnum; j++) {
-        serverDb *db = server.db[j];
-        if (db == NULL) continue;
-
+    serverDb *db;
+    forEachCreatedDb(db) {
         unsigned long long keyscount = kvstoreSize(db->keys);
 
         mh->total_keys += keyscount;
         mh->db = zrealloc(mh->db, sizeof(mh->db[0]) * (mh->num_dbs + 1));
-        mh->db[mh->num_dbs].dbid = j;
+        mh->db[mh->num_dbs].dbid = db->id;
 
         mem = kvstoreMemUsage(db->keys) + keyscount * sizeof(robj);
         mh->db[mh->num_dbs].overhead_ht_main = mem;
@@ -1796,6 +1799,18 @@ uint8_t objectGetLFUFrequency(robj *o) {
     objectSetLRU(o, lfu_getFrequency(objectGetLRU(o), &freq));
     return freq;
 }
+
+/* Return the LFU frequency WITHOUT maintaining the value.
+ * In most cases, every time the LFU is read, the value should be maintained
+ * with the decay applied (objectGetLFUFrequency).  However in special cases
+ * where we want to avoid changing the memory (like a background thread or a
+ * forked save) use this instead. */
+uint8_t objectGetLFUFrequencyReadOnly(const robj *o) {
+    uint8_t freq;
+    lfu_getFrequency(objectGetLRU(o), &freq);
+    return freq;
+}
+
 
 /* Return the LRU idle time for an object. */
 uint32_t objectGetLRUIdleSecs(robj *o) {

@@ -23,8 +23,6 @@ int hotkeysWindowCallback(const char **err);
 
 /* Is hot-key detection currently enabled (hotkeys-top-k > 0)? */
 bool hotkeysEnabled(void);
-/* Append the INFO "hotkeys" section fields (the caller emits the header). */
-sds genHotkeysInfoString(sds info);
 /* Create the manager at server startup if detection is enabled. */
 void hotkeysInit(void);
 /* Periodic maintenance (call from serverCron): freeze elapsed windows on time. */

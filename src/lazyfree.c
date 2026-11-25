@@ -261,9 +261,15 @@ void freeEvalScriptsAsync(dict *scripts, list *scripts_lru_list, list *engine_ca
     }
 }
 
-/* Free functions ctx, if the functions ctx contains enough functions, free it in async way. */
+/* Free functions ctx, if the functions ctx contains enough functions, free it in async way.
+ *
+ * Without engine_callbacks, the functions still live in the engines' current
+ * environment, e.g. the ctx replaced by FUNCTION RESTORE FLUSH. The main thread
+ * may reset and recreate that environment before a background job runs, and
+ * the Lua engine can get the new state at the old address, so the job would
+ * unref functions that now belong to someone else. Free those synchronously. */
 void freeFunctionsAsync(functionsLibCtx *functions_lib_ctx, list *engine_callbacks) {
-    if (functionsLibCtxFunctionsLen(functions_lib_ctx) > LAZYFREE_THRESHOLD) {
+    if (engine_callbacks && functionsLibCtxFunctionsLen(functions_lib_ctx) > LAZYFREE_THRESHOLD) {
         atomic_fetch_add_explicit(&lazyfree_objects, functionsLibCtxFunctionsLen(functions_lib_ctx),
                                   memory_order_relaxed);
         bioCreateLazyFreeJob(lazyFreeFunctionsCtx, 2, functions_lib_ctx, engine_callbacks);

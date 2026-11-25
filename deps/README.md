@@ -104,6 +104,7 @@ and our version:
 5. Support for readonly tables (`lua_enablereadonlytable` API) is added across `lapi.c`, `lvm.c`, `lobject.h`, and `ltable.c`.
 6. Protection of tables reachable from globals, with a globals whitelist.
 7. Multiple CVE security patches (CVE-2022-24834, CVE-2024-31449, CVE-2024-31227, CVE-2024-31228) in cjson, cmsgpack, and the parser.
+8. In `lbaselib.c`, `coroutine.resume` and `coroutine.wrap` hand the debug hook and its remaining instruction count between the resumer and the coroutine, so script timeouts and SCRIPT KILL apply across coroutines.
 
 Hdr_Histogram
 ---

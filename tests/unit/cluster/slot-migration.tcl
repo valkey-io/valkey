@@ -477,6 +477,14 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
         assert_error {ERR Target node is myself} {R 0 CLUSTER SETSLOT 609 MIGRATING [R 0 CLUSTER MYID]}
         assert_error {ERR Target node is myself} {R 1 CLUSTER SETSLOT 609 IMPORTING [R 1 CLUSTER MYID]}
     }
+
+    test "CLUSTER SETSLOT inside MULTI does not block on replicas" {
+        R 0 MULTI
+        R 0 CLUSTER SETSLOT 609 MIGRATING $R1_id
+        assert_equal {OK} [R 0 EXEC]
+        wait_for_slot_state 3 "\[609->-$R1_id\]"
+        R 0 CLUSTER SETSLOT 609 STABLE
+    }
 }
 
 start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica-migration no cluster-node-timeout 1000} } {

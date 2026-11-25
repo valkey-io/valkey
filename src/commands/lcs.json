@@ -101,16 +101,21 @@
                 "key_spec_index": 0
             },
             {
-                "name": "len",
-                "token": "LEN",
-                "type": "pure-token",
-                "optional": true
-            },
-            {
-                "name": "idx",
-                "token": "IDX",
-                "type": "pure-token",
-                "optional": true
+                "name": "output",
+                "type": "oneof",
+                "optional": true,
+                "arguments": [
+                    {
+                        "name": "len",
+                        "token": "LEN",
+                        "type": "pure-token"
+                    },
+                    {
+                        "name": "idx",
+                        "token": "IDX",
+                        "type": "pure-token"
+                    }
+                ]
             },
             {
                 "token": "MINMATCHLEN",

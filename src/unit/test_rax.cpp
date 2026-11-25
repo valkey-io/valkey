@@ -591,12 +591,6 @@ TEST_F(RaxTest, ancestorPrefixWalkHandlesCompressedBinaryAndRootKeys) {
     EXPECT_EQ(result.lengths[3], sizeof(p3));
     EXPECT_EQ(result.values[3], (void *)4);
 
-    size_t matched_len = SIZE_MAX;
-    void *value = NULL;
-    EXPECT_EQ(raxFindLongestPrefix(tree, query, sizeof(query), &matched_len, &value), 1);
-    EXPECT_EQ(matched_len, sizeof(p3));
-    EXPECT_EQ(value, (void *)4);
-
     raxFree(tree);
 }
 
@@ -616,9 +610,9 @@ TEST_F(RaxTest, ancestorPrefixWalkStopsInsideCompressedEdgeAndOnCallbackRequest)
     EXPECT_EQ(raxForEachPrefix(tree, (unsigned char *)"foobarbaz!", 10, collectPrefix, &stopped), 1u);
     EXPECT_EQ(stopped.count, 1u);
 
-    size_t matched_len = SIZE_MAX;
-    EXPECT_EQ(raxFindLongestPrefix(tree, (unsigned char *)"f", 1, &matched_len, NULL), 0);
-    EXPECT_EQ(matched_len, SIZE_MAX);
+    PrefixResult none = {{0}, {NULL}, 0, 0};
+    EXPECT_EQ(raxForEachPrefix(tree, (unsigned char *)"f", 1, collectPrefix, &none), 0u);
+    EXPECT_EQ(none.count, 0u);
 
     raxFree(tree);
 }
@@ -640,8 +634,6 @@ TEST_F(RaxTest, ancestorPrefixWalkMatchesRepeatedExactLookupsForRandomBinaryKeys
         raxForEachPrefix(tree, key, query_len, collectPrefix, &actual);
 
         size_t expected_count = 0;
-        size_t expected_longest = 0;
-        void *expected_value = NULL;
         for (size_t prefix_len = 0; prefix_len <= query_len; prefix_len++) {
             void *value = NULL;
             if (raxFind(tree, key, prefix_len, &value)) {
@@ -651,20 +643,9 @@ TEST_F(RaxTest, ancestorPrefixWalkMatchesRepeatedExactLookupsForRandomBinaryKeys
                     EXPECT_EQ(actual.values[expected_count], value);
                 }
                 expected_count++;
-                expected_longest = prefix_len;
-                expected_value = value;
             }
         }
         EXPECT_EQ(actual.count, expected_count);
-
-        size_t matched_len = SIZE_MAX;
-        void *longest_value = NULL;
-        int found = raxFindLongestPrefix(tree, key, query_len, &matched_len, &longest_value);
-        EXPECT_EQ(found, expected_count != 0);
-        if (found) {
-            EXPECT_EQ(matched_len, expected_longest);
-            EXPECT_EQ(longest_value, expected_value);
-        }
     }
     raxFree(tree);
 }

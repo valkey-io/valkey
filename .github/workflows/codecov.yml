@@ -44,7 +44,7 @@ jobs:
       - name: Install lcov and run test
         run: |
           sudo apt-get install lcov tclx
-          make lcov USE_LIBBACKTRACE=yes
+          make lcov USE_LIBBACKTRACE=yes TEST_OPTIONS="--dump-logs"
 
       - name: Upload code coverage
         uses: codecov/codecov-action@671740ac38dd9b0130fbe1cec585b89eea48d3de # v5.5.2

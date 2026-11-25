@@ -645,7 +645,8 @@ static void *rdbGenericLoadStringObjectWithError(rio *rdb,
         case RDB_ENC_INT32:
             if (skip_integer_encoding) {
                 unsigned char encoded[4];
-                size_t encoded_len = len == RDB_ENC_INT8 ? 1 : len == RDB_ENC_INT16 ? 2 : 4;
+                size_t encoded_len = len == RDB_ENC_INT8 ? 1 : len == RDB_ENC_INT16 ? 2
+                                                                                    : 4;
                 if (rioRead(rdb, encoded, encoded_len) == 0) return NULL;
                 if (integer_encoding_skipped) *integer_encoding_skipped = true;
                 return NULL;

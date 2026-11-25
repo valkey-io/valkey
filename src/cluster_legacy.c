@@ -2257,6 +2257,9 @@ clusterNode *createClusterNode(char *nodename, int flags) {
     node->addr_version = 0;
     node->hostname_resolve_failed = 0;
     memset(node->noaddr_ip, 0, sizeof(node->noaddr_ip));
+    node->noaddr_tcp_port = 0;
+    node->noaddr_tls_port = 0;
+    node->noaddr_cport = 0;
     node->human_nodename = sdsempty();
     node->availability_zone = sdsempty();
     node->tcp_port = 0;
@@ -4578,16 +4581,17 @@ int clusterProcessPacket(clusterLink *link) {
                           link->node->name, humanNodename(link->node), link->node->shard_id,
                           (int)(now - (link->node->ctime)), link->node->flags);
                 link->node->flags |= CLUSTER_NODE_NOADDR;
-                memcpy(link->node->noaddr_ip, link->node->ip, NET_IP_STR_LEN);
-                link->node->ip[0] = '\0';
                 /* The IP may just be stale (e.g. reused by another node after a
-                 * restart). Keep the ports so the address can be restored once
-                 * the hostname of the node resolves to its new IP. */
-                if (!server.cluster_resolve_hostnames || sdslen(link->node->hostname) == 0) {
-                    link->node->tcp_port = 0;
-                    link->node->tls_port = 0;
-                    link->node->cport = 0;
-                }
+                 * restart). Remember the address so it can be restored if the
+                 * hostname of the node resolves to a new IP. */
+                memcpy(link->node->noaddr_ip, link->node->ip, NET_IP_STR_LEN);
+                link->node->noaddr_tcp_port = link->node->tcp_port;
+                link->node->noaddr_tls_port = link->node->tls_port;
+                link->node->noaddr_cport = link->node->cport;
+                link->node->ip[0] = '\0';
+                link->node->tcp_port = 0;
+                link->node->tls_port = 0;
+                link->node->cport = 0;
                 freeClusterLink(link);
                 /* We will also mark the node as fail because we have disconnected from it,
                  * and will not reconnect, and obviously we will not gossip NOADDR nodes.
@@ -6947,7 +6951,7 @@ static int clusterNodeLinkConnected(clusterNode *node) {
 static int clusterNodeNeedsHostnameResolve(clusterNode *node) {
     if (node == myself) return !myself_hostname_resolved && server.cluster_announce_ip == NULL;
     if (nodeInHandshake(node)) return 0;
-    if (node->flags & CLUSTER_NODE_NOADDR) return node->cport != 0;
+    if (node->flags & CLUSTER_NODE_NOADDR) return node->noaddr_cport != 0;
     if (node->flags & (CLUSTER_NODE_PFAIL | CLUSTER_NODE_FAIL)) return 1;
     /* A connect towards a stale IP may hang instead of failing, so a link
      * that is not connected yet counts as unreachable too. */
@@ -7013,19 +7017,29 @@ static void clusterApplyHostnameResolveResult(clusterResolveRequest *r) {
         return;
     }
 
-    if (node->cport == 0) return;
+    int noaddr = node->flags & CLUSTER_NODE_NOADDR;
+    if ((noaddr ? node->noaddr_cport : node->cport) == 0) return;
     /* Keep an address learned from the cluster bus after the lookup was
      * requested once it has a working link: the result may be older. */
     if (bus_addr_changed && clusterNodeLinkConnected(node)) return;
-    if (!(node->flags & CLUSTER_NODE_NOADDR) && strcasecmp(node->ip, r->ip) == 0) return;
+    if (!noaddr && strcasecmp(node->ip, r->ip) == 0) return;
     /* The hostname still points at the address that answered with a different
      * node ID, e.g. the node did CLUSTER RESET HARD or lost its nodes.conf.
      * Reconnecting would only hit the same mismatch again. */
-    if (node->flags & CLUSTER_NODE_NOADDR && strcasecmp(node->noaddr_ip, r->ip) == 0) return;
+    if (noaddr && strcasecmp(node->noaddr_ip, r->ip) == 0) {
+        serverLog(LL_DEBUG, "Hostname %s of node %.40s (%s) still resolves to %s, which answered with another node ID",
+                  r->hostname, node->name, humanNodename(node), r->ip);
+        return;
+    }
 
     memcpy(node->ip, r->ip, NET_IP_STR_LEN);
+    if (noaddr) {
+        node->tcp_port = node->noaddr_tcp_port;
+        node->tls_port = node->noaddr_tls_port;
+        node->cport = node->noaddr_cport;
+        node->flags &= ~CLUSTER_NODE_NOADDR;
+    }
     node->noaddr_ip[0] = '\0';
-    node->flags &= ~CLUSTER_NODE_NOADDR;
     if (node->link) freeClusterLink(node->link);
     serverLog(LL_NOTICE, "Address updated for node %.40s (%s), now %s:%d (resolved from hostname %s)", node->name,
               humanNodename(node), node->ip, getNodeDefaultClientPort(node), r->hostname);

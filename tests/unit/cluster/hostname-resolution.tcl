@@ -69,11 +69,20 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-replica-no-fa
         }
 
         # The hostname still resolves to the address that answered with the new
-        # ID, so it must not be used to restore the old entry. Give it several
-        # resolve intervals and check the mismatch does not repeat.
+        # ID, so it must not be used to restore the old entry. Wait until a
+        # lookup has completed and been ignored, then check the mismatch did
+        # not repeat.
         set mismatches1 [count_message_lines [srv -1 stdout] "PONG contains mismatching sender ID"]
         set mismatches2 [count_message_lines [srv -2 stdout] "PONG contains mismatching sender ID"]
-        after 3500
+        set loglines1 [count_log_lines -1]
+        set loglines2 [count_log_lines -2]
+        R 1 config set loglevel debug
+        R 2 config set loglevel debug
+        set ignored [list "*Hostname localhost of node $primary0_id * which answered with another node ID*"]
+        wait_for_log_messages -1 $ignored $loglines1 100 100
+        wait_for_log_messages -2 $ignored $loglines2 100 100
+        R 1 config set loglevel verbose
+        R 2 config set loglevel verbose
         assert_equal $mismatches1 [count_message_lines [srv -1 stdout] "PONG contains mismatching sender ID"]
         assert_equal $mismatches2 [count_message_lines [srv -2 stdout] "PONG contains mismatching sender ID"]
         assert_equal 1 [cluster_has_flag [cluster_get_node_by_id 1 $primary0_id] noaddr]

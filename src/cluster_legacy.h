@@ -504,6 +504,9 @@ struct _clusterNode {
     uint64_t addr_version;                   /* Bumped when the cluster bus learns a new address */
     int hostname_resolve_failed;             /* The last DNS lookup of hostname failed */
     char noaddr_ip[NET_IP_STR_LEN];          /* IP that answered with another node ID (NOADDR) */
+    int noaddr_tcp_port;                     /* Ports known before the node became NOADDR, */
+    int noaddr_tls_port;                     /* restored if its hostname resolves to */
+    int noaddr_cport;                        /* a new IP. */
     sds human_nodename;                      /* The known human readable nodename for this node */
     sds availability_zone;                   /* The known availability zone for this node */
     int tcp_port;                            /* Latest known clients TCP port. */

@@ -7009,6 +7009,7 @@ static void clusterApplyHostnameResolveResult(clusterResolveRequest *r) {
 
     if (node == myself) {
         myself_hostname_resolved = 1;
+        serverLog(LL_DEBUG, "Hostname %s of this node resolves to %s", r->hostname, r->ip);
         if (bus_addr_changed || server.cluster_announce_ip != NULL || strcmp(myself->ip, r->ip) == 0) return;
         memcpy(myself->ip, r->ip, NET_IP_STR_LEN);
         serverLog(LL_NOTICE, "IP address for this node updated to %s (resolved from hostname %s)", myself->ip,

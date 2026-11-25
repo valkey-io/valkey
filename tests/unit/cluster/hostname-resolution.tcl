@@ -118,8 +118,11 @@ start_cluster 3 0 {tags {external:skip cluster} overrides {cluster-resolve-hostn
         set R2_id [R 2 cluster myid]
 
         # Let R2 resolve its own hostname once.
+        set loglines [count_log_lines -2]
+        R 2 config set loglevel debug
         R 2 config set cluster-announce-hostname localhost
-        after 2000
+        wait_for_log_messages -2 {"*Hostname localhost of this node resolves to*"} $loglines 300 100
+        R 2 config set loglevel verbose
 
         # A new hostname must be looked up again.
         set loglines [count_log_lines -2]

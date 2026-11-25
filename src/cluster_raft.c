@@ -1436,7 +1436,7 @@ static void clusterRaftResolvePendingRead(raftPendingRead *r) {
     clusterRaftState *rs = RAFT_STATE();
     bool local = r->proposer[0] == '\0';
     RaftProposalResult result = clusterRaftPreValidate(r->type, r->data);
-    if (result == RAFT_RESULT_OK || (result == RAFT_RESULT_LEADER_TRANSFER && !local)) {
+    if (result == RAFT_RESULT_OK) {
         /* Changed since, so append it after all. */
         uint64_t idx = raftLogLastIndex() + 1;
         raftLogAppend(raftLogCreate(rs->current_term, idx, r->type, sdsdup(r->data)));
@@ -1458,10 +1458,12 @@ static void clusterRaftResolvePendingRead(raftPendingRead *r) {
 }
 
 /* Resolve the reads that a quorum has confirmed. If we're no longer the
- * leader, drop them: the proposers retry with the new leader. */
+ * leader, drop them: the proposers retry with the new leader. During a
+ * leadership transfer, wait, since resolving a read may append. */
 static void clusterRaftProcessPendingReads(void) {
     clusterRaftState *rs = RAFT_STATE();
     if (listLength(rs->pending_reads) == 0) return;
+    if (clusterRaftTransferSent()) return;
     listIter li;
     listNode *ln;
     listRewind(rs->pending_reads, &li);

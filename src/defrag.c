@@ -1225,12 +1225,12 @@ static void beginDefragCycle(void) {
     serverAssert(defrag.remaining_stages == NULL);
     defrag.remaining_stages = listCreate();
 
-    for (int dbid = 0; dbid < server.dbnum; dbid++) {
-        /* Skip the non-existent dbs but not empty dbs since hashtableDefragTables
-         * still defrags the internal allocations of the hashtables structs if they
-         * exist. */
-        if (server.db[dbid] == NULL) continue;
-
+    /* Visit every existing db, including empty ones, since hashtableDefragTables
+     * still defrags the internal allocations of the hashtables structs if they
+     * exist. */
+    serverDb *db;
+    forEachCreatedDb(db) {
+        int dbid = db->id;
         addDefragStage(defragStageDbKeys, (void *)(uintptr_t)dbid, NULL);
         addDefragStage(defragStageExpiresKvstore, (void *)(uintptr_t)dbid, NULL);
         addDefragStage(defragStageKeysWithvolaItemsKvstore, (void *)(uintptr_t)dbid, NULL);

@@ -28,6 +28,11 @@ int async_loading = 0;
 
 int n_aux_load_called = 0;
 
+/* Database id that the next testrdb_type_save() call selects through
+ * detached_ctx, which creates the database. -1 when disarmed. */
+int create_db_on_save = -1;
+ValkeyModuleCtx *detached_ctx = NULL;
+
 void replAsyncLoadCallback(ValkeyModuleCtx *ctx, ValkeyModuleEvent e, uint64_t sub, void *data)
 {
     VALKEYMODULE_NOT_USED(e);
@@ -91,6 +96,11 @@ void *testrdb_type_load(ValkeyModuleIO *rdb, int encver) {
 
 void testrdb_type_save(ValkeyModuleIO *rdb, void *value) {
     ValkeyModuleString *str = (ValkeyModuleString*)value;
+    if (create_db_on_save >= 0) {
+        int ret = ValkeyModule_SelectDb(detached_ctx, create_db_on_save);
+        assert(ret == VALKEYMODULE_OK);
+        create_db_on_save = -1;
+    }
     ValkeyModule_SaveSigned(rdb, 1);
     ValkeyModule_SaveString(rdb, str);
     ValkeyModule_SaveFloat(rdb, 1.5);
@@ -308,6 +318,23 @@ void test2rdb_aux_save(ValkeyModuleIO *rdb, int when) {
     VALKEYMODULE_NOT_USED(when);
 }
 
+/* testrdb.create_db_on_save <dbid>: the next save of a test__rdb value creates
+ * database <dbid>, as a module callback can during an RDB save. */
+int testrdb_create_db_on_save(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    if (argc != 2) {
+        ValkeyModule_WrongArity(ctx);
+        return VALKEYMODULE_OK;
+    }
+    long long dbid;
+    if (ValkeyModule_StringToLongLong(argv[1], &dbid) != VALKEYMODULE_OK || dbid < 0) {
+        ValkeyModule_ReplyWithError(ctx, "ERR invalid db id");
+        return VALKEYMODULE_OK;
+    }
+    create_db_on_save = (int)dbid;
+    ValkeyModule_ReplyWithSimpleString(ctx, "OK");
+    return VALKEYMODULE_OK;
+}
+
 int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     VALKEYMODULE_NOT_USED(argv);
     VALKEYMODULE_NOT_USED(argc);
@@ -394,6 +421,11 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
     if (ValkeyModule_CreateCommand(ctx,"testrdb.get.n_aux_load_called", testrdb_get_n_aux_load_called,"",1,1,1) == VALKEYMODULE_ERR)
             return VALKEYMODULE_ERR;
 
+    if (ValkeyModule_CreateCommand(ctx,"testrdb.create_db_on_save", testrdb_create_db_on_save,"",0,0,0) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
+
+    detached_ctx = ValkeyModule_GetDetachedThreadSafeContext(ctx);
+
     ValkeyModule_SubscribeToServerEvent(ctx,
         ValkeyModuleEvent_ReplAsyncLoad, replAsyncLoadCallback);
 
@@ -401,6 +433,8 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
 }
 
 int ValkeyModule_OnUnload(ValkeyModuleCtx *ctx) {
+    if (detached_ctx)
+        ValkeyModule_FreeThreadSafeContext(detached_ctx);
     if (before_str)
         ValkeyModule_FreeString(ctx, before_str);
     if (after_str)

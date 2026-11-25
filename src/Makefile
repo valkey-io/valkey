@@ -376,6 +376,14 @@ ifeq ($(MALLOC),jemalloc)
 	FINAL_LIBS := ../deps/jemalloc/lib/libjemalloc.a $(FINAL_LIBS)
 endif
 
+# The jemalloc installed on the system, built without the je_ prefix.
+# JEMALLOC_NO_DEMANGLE keeps the je_* names that jemalloc.h maps to the
+# unprefixed functions, so the call sites stay unchanged.
+ifeq ($(MALLOC),system-jemalloc)
+	FINAL_CFLAGS+= -DUSE_JEMALLOC -DJEMALLOC_NO_DEMANGLE
+	FINAL_LIBS := -ljemalloc $(FINAL_LIBS)
+endif
+
 ifeq ($(USE_LTTNG),yes)
 	FINAL_CFLAGS+=-DUSE_LTTNG
 	FINAL_LIBS += -llttng-ust

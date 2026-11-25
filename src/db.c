@@ -766,10 +766,9 @@ int selectDb(client *c, int id) {
 
 long long dbTotalServerKeyCount(void) {
     long long total = 0;
-    int j;
-    for (j = 0; j < server.dbnum; j++) {
-        if (dbHasNoKeys(j)) continue;
-        total += kvstoreSize(server.db[j]->keys);
+    serverDb *db;
+    forEachCreatedDb(db) {
+        total += kvstoreSize(db->keys);
     }
     return total;
 }
@@ -1431,8 +1430,8 @@ void scanGenericCommandWithOptions(client *c, robj *o, unsigned long long cursor
             orderedIndexItemGetElement(item, &element, &len);
             addReplyBulkCBuffer(c, element, len);
             if (opts->only_keys) continue;
-            char buf[MAX_LONG_DOUBLE_CHARS];
-            int score_len = ld2string(buf, sizeof(buf), orderedIndexItemGetScore(item), LD_STR_AUTO);
+            char buf[MAX_D2STRING_CHARS];
+            int score_len = d2string(buf, sizeof(buf), orderedIndexItemGetScore(item));
             addReplyBulkCBuffer(c, buf, score_len);
         }
     } else {
@@ -1882,7 +1881,7 @@ void swapMainDbWithTempDb(serverDb **tempDb) {
     for (int i = 0; i < server.dbnum; i++) {
         if (tempDb[i] == NULL && server.db[i] == NULL) continue;
         if (tempDb[i] == NULL) tempDb[i] = createDatabase(i);
-        if (server.db[i] == NULL) server.db[i] = createDatabase(i);
+        if (server.db[i] == NULL) createDatabaseIfNeeded(i);
         serverDb aux = *server.db[i];
         serverDb *activedb = server.db[i], *newdb = tempDb[i];
 
@@ -2802,6 +2801,11 @@ int genericGetKeys(int storeKeyOfs,
 int sintercardGetKeys(struct serverCommand *cmd, robj **argv, int argc, getKeysResult *result) {
     UNUSED(cmd);
     return genericGetKeys(0, 1, 2, 1, argv, argc, result);
+}
+
+int msetexGetKeys(struct serverCommand *cmd, robj **argv, int argc, getKeysResult *result) {
+    UNUSED(cmd);
+    return genericGetKeys(0, 1, 2, 2, argv, argc, result);
 }
 
 int zunionInterDiffStoreGetKeys(struct serverCommand *cmd, robj **argv, int argc, getKeysResult *result) {

@@ -880,6 +880,7 @@ if {!$::tls} { ;# fake_redis_node doesn't support TLS
 
     test "valkey-cli make sure selected db survives connection drops" {    
         set fd [open_cli]
+        test_defer [list close_cli $fd]
                 
         # Select the database        
         assert_equal "OK" [run_command $fd "select $::dbnum"]

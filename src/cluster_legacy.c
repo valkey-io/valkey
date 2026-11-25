@@ -84,6 +84,7 @@ int clusterDelNodeSlots(clusterNode *node);
 void clusterMoveNodeSlots(clusterNode *from_node, clusterNode *to_node, int *slots, int *importing_slots, int *migrating_slots);
 void clusterNodeSetSlotBit(clusterNode *n, int slot);
 static void clusterSetPrimary(clusterNode *n, int closeSlots, int full_sync_required);
+static int clusterReplicaChainReaches(clusterNode *node, clusterNode *target);
 void clusterHandleReplicaFailover(void);
 void clusterHandleReplicaMigration(int max_replicas);
 int bitmapTestBit(unsigned char *bitmap, int pos);
@@ -693,6 +694,23 @@ static clusterMsg *getMessageFromSendBlock(clusterMsgSendBlock *msgblock) {
  * Initialization
  * -------------------------------------------------------------------------- */
 
+/* Returns a node whose replicaof chain leads back to itself, or NULL if the
+ * loaded config has no replicaof cycle (for example A -> B -> A). */
+static clusterNode *clusterFindReplicaofCycle(void) {
+    clusterNode *found = NULL;
+    dictIterator *di = dictGetIterator(server.cluster->nodes);
+    dictEntry *de;
+    while ((de = dictNext(di)) != NULL) {
+        clusterNode *n = dictGetVal(de);
+        if (n->replicaof && clusterReplicaChainReaches(n->replicaof, n)) {
+            found = n;
+            break;
+        }
+    }
+    dictReleaseIterator(di);
+    return found;
+}
+
 /* Load the cluster config from 'filename'.
  *
  * If the file does not exist or is zero-length (this may happen because
@@ -1065,6 +1083,17 @@ int clusterLoadConfig(char *filename) {
     }
     /* Config sanity check */
     if (server.cluster->myself == NULL) goto fmterr;
+
+    /* A replicaof cycle cannot be resolved from the file alone, since there is
+     * no way to tell which link is stale, and it can make
+     * clusterNodeGetPrimary() loop forever. Refuse to load it. */
+    clusterNode *cycle_node = clusterFindReplicaofCycle();
+    if (cycle_node) {
+        serverLog(LL_WARNING,
+                  "Replicaof cycle detected: node %.40s replicates node %.40s, whose replicaof chain leads back to it",
+                  cycle_node->name, cycle_node->replicaof->name);
+        goto fmterr;
+    }
 
     zfree(line);
     fclose(fp);
@@ -3829,6 +3858,13 @@ int clusterProcessPingExtensions(clusterMsg *hdr, clusterLink *link) {
         } else if (type == CLUSTERMSG_EXT_TYPE_FORGOTTEN_NODE) {
             clusterMsgPingExtForgottenNode *forgotten_node_ext = &(ext->ext[0].forgotten_node);
             clusterNode *n = clusterLookupNode(forgotten_node_ext->name, CLUSTER_NAMELEN);
+            if (n == sender) {
+                serverLog(LL_WARNING,
+                          "Received invalid FORGOTTEN_NODE extension from node %.40s naming itself; closing link",
+                          sender->name);
+                freeClusterLink(link);
+                return 0;
+            }
             if (n && n != myself && !(nodeIsReplica(myself) && myself->replicaof == n)) {
                 sds id = sdsnewlen(forgotten_node_ext->name, CLUSTER_NAMELEN);
                 dictEntry *de = dictAddOrFind(server.cluster->nodes_black_list, id);
@@ -4160,6 +4196,20 @@ static inline int clusterExtractSlotFromWord(uint64_t *slot_word, size_t slot_wo
     const int slot = (int)((slot_word_index << 6) | bit);
     *slot_word &= *slot_word - 1; /* clear that bit */
     return slot;
+}
+
+/* Returns 1 if `target` is on the replicaof chain starting at `node`. Making
+ * `target` the replica of `node` would then close a cycle in our view. The
+ * walk is bounded by the node count because the chain may already contain a
+ * cycle that does not include `target`. */
+static int clusterReplicaChainReaches(clusterNode *node, clusterNode *target) {
+    unsigned long hops = dictSize(server.cluster->nodes);
+    clusterNode *n = node;
+    while (n != NULL && hops-- > 0) {
+        if (n == target) return 1;
+        n = n->replicaof;
+    }
+    return 0;
 }
 
 /* When this function is called, there is a packet to process starting
@@ -4649,8 +4699,22 @@ int clusterProcessPacket(clusterLink *link) {
                     clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_UPDATE_STATE);
                 }
 
-                /* Primary node changed for this replica? */
-                if (sender_claimed_primary && sender->replicaof != sender_claimed_primary) {
+                /* Primary node changed for this replica?
+                 *
+                 * Skip the update if the claimed primary is still a replica of
+                 * `sender` in our view. That view is stale, because `sender` now
+                 * claims it as its primary. Adopting the claim would close a
+                 * replicaof cycle and trip the assertion in clusterNodeGetPrimary().
+                 * We keep the current link and let the claimed primary's own
+                 * packet, which announces its primary role, correct our view. */
+                int primary_changed = sender_claimed_primary && sender->replicaof != sender_claimed_primary;
+                if (primary_changed && clusterReplicaChainReaches(sender_claimed_primary, sender)) {
+                    serverLog(LL_NOTICE,
+                              "Ignoring claim of node %.40s (%s) that it replicates node %.40s (%s): in our view the claimed "
+                              "primary replicates it, directly or through a chain, so adopting the claim would close a replicaof cycle",
+                              sender->name, humanNodename(sender), sender_claimed_primary->name,
+                              humanNodename(sender_claimed_primary));
+                } else if (primary_changed) {
                     if (sender->replicaof) clusterNodeRemoveReplica(sender->replicaof, sender);
                     serverLog(LL_NOTICE, "Node %.40s (%s) is now a replica of node %.40s (%s) in shard %.40s",
                               sender->name, humanNodename(sender), sender_claimed_primary->name,
@@ -8268,11 +8332,10 @@ unsigned int delKeysInSlot(unsigned int hashslot, int lazy, bool propagate_del, 
     unsigned int j = 0;
     int before_execution_nesting = server.execution_nesting;
 
-    for (int i = 0; i < server.dbnum; i++) {
+    serverDb *db;
+    forEachCreatedDb(db) {
         kvstoreHashtableIterator *kvs_di = NULL;
         void *next;
-        serverDb *db = server.db[i];
-        if (db == NULL) continue;
         kvs_di = kvstoreGetHashtableIterator(db->keys, hashslot, HASHTABLE_ITER_SAFE);
         while (kvstoreHashtableIteratorNext(kvs_di, &next)) {
             robj *valkey = next;

@@ -1258,6 +1258,7 @@ typedef struct ClientFlags {
     uint64_t module_prevent_aof_prop : 1;  /* Module client do not want to propagate to AOF */
     uint64_t module_prevent_repl_prop : 1; /* Module client do not want to propagate to replica */
     uint64_t reexecuting_command : 1;      /* The client is re-executing the command. */
+    uint64_t processing_command : 1;       /* The client is inside processCommandAndResetClient(). */
     uint64_t replication_done : 1;         /* Indicate that replication has been done on the client */
     uint64_t authenticated : 1;            /* Indicate a client has successfully authenticated */
     uint64_t ever_authenticated : 1;       /* Indicate a client was ever successfully authenticated during it's lifetime */
@@ -1289,6 +1290,7 @@ typedef struct ClientFlags {
     uint64_t throttled : 1;                /* Currently queued in a throttler */
     uint64_t throttle_checked : 1;         /* Already passed throttle check for this command */
     uint64_t throttle_multi : 1;           /* Matches multiple throttlers */
+    uint64_t priority_source : 1;          /* Client connection originated from priority-subnets */
     uint64_t forkless_managed : 1;         /* Client is owned by forkless save. Written only on the
                                             * main thread. The save thread only reads it */
 } ClientFlags;
@@ -2034,7 +2036,6 @@ struct valkeyServer {
     long long stat_forkless_fallbacks_exclude_data;        /* Forkless fallbacks caused by data-excluding RDB requests. */
     long long stat_forkless_fallbacks_missing_inband_repl; /* Forkless fallbacks caused by missing inline replication support. */
     long long stat_forkless_fallbacks_compression;         /* Forkless fallbacks caused by stream compression. */
-    long long stat_forkless_fallbacks_old_rdb_version;     /* Forkless fallbacks caused by an old RDB version. */
     long long stat_rejected_conn;                          /* Clients rejected because of maxclients */
     long long stat_rejected_priority_conn;                 /* Prioritized clients rejected because of maxclients */
     long long stat_num_active_priority_clients;            /* Number of active prioritized clients */
@@ -2134,6 +2135,9 @@ struct valkeyServer {
     int config_databases;                        /* Total number of configured DBs in standalone */
     int config_databases_cluster;                /* Total number of configured DBs in cluster mode */
     int dbnum;                                   /* Total number of initialized DBs */
+    int *created_db_ids;                         /* Ids of non-NULL server.db[] entries, ascending */
+    int created_db_count;                        /* Number of entries in created_db_ids */
+    int created_db_capacity;                     /* Allocated length of created_db_ids */
     int supervised;                              /* 1 if supervised, 0 otherwise. */
     int supervised_mode;                         /* See SUPERVISED_* */
     int daemonize;                               /* True if running as a daemon */
@@ -3427,6 +3431,7 @@ void *objectGetVal(const robj *o);
 sds objectGetKey(const robj *o);
 mstime_t objectGetExpire(const robj *o);
 uint8_t objectGetLFUFrequency(robj *o);
+uint8_t objectGetLFUFrequencyReadOnly(const robj *o);
 uint32_t objectGetLRUIdleSecs(robj *o);
 uint32_t objectGetIdleness(robj *o);
 
@@ -3882,6 +3887,8 @@ void freePathHashObject(robj *o);
 robj *pathHashTypeDup(robj *o);
 size_t pathHashTypeMemUsage(robj *o, size_t sample_size);
 void pathHashTypeDigest(unsigned char *digest, robj *o);
+void pathHashTypePauseRehashing(pathHashObject *path_hash);
+void pathHashTypeResumeRehashing(pathHashObject *path_hash);
 size_t pathHashTypeCount(robj *o, const unsigned char *prefix, size_t prefix_len);
 int rewritePathHashObject(rio *r, robj *key, robj *o);
 void phsetCommand(client *c);
@@ -4113,6 +4120,7 @@ int getChannelsFromCommand(struct serverCommand *cmd, robj **argv, int argc, get
 int doesCommandHaveChannelsWithFlags(struct serverCommand *cmd, int flags);
 void getKeysFreeResult(getKeysResult *result);
 int sintercardGetKeys(struct serverCommand *cmd, robj **argv, int argc, getKeysResult *result);
+int msetexGetKeys(struct serverCommand *cmd, robj **argv, int argc, getKeysResult *result);
 int zunionInterDiffGetKeys(struct serverCommand *cmd, robj **argv, int argc, getKeysResult *result);
 int zunionInterDiffStoreGetKeys(struct serverCommand *cmd, robj **argv, int argc, getKeysResult *result);
 int evalGetKeys(struct serverCommand *cmd, robj **argv, int argc, getKeysResult *result);
@@ -4594,6 +4602,30 @@ serverDb *createDatabase(int id);
 int dbHasNoKeys(int dbid);
 bool dbsHaveNoKeys(void);
 serverDb *createDatabaseIfNeeded(int id);
+serverDb *createDatabaseInArrayIfNeeded(serverDb **dbarray, int id);
+void trackCreatedDatabase(int id);
+
+/* Returns the first position at or after pos in server.created_db_ids that
+ * holds an id greater than last_id, or created_db_count when there is none. */
+static inline int createdDbIndexAfter(int pos, int last_id) {
+    while (pos < server.created_db_count && server.created_db_ids[pos] <= last_id) pos++;
+    return pos;
+}
+
+/* Iterates over the databases that exist in server.db[], in ascending id order.
+ * Databases are created lazily, and the NULL entries of server.db[] are not
+ * visited. 'db' is a serverDb * declared by the caller.
+ *
+ * The loop body may create databases, for example through a module callback.
+ * The loop remembers the id of the last visited database and moves to the
+ * first id greater than it, so every database that existed when the loop
+ * started is visited exactly once. A database created with an id greater than
+ * the current one is visited too; one created with a smaller id is not. */
+#define forEachCreatedDb(db)                                                                \
+    for (int _cdb_idx = 0, _cdb_last = -1;                                                  \
+         (_cdb_idx = createdDbIndexAfter(_cdb_idx, _cdb_last)) < server.created_db_count && \
+         ((db) = server.db[_cdb_last = server.created_db_ids[_cdb_idx]], 1);                \
+         _cdb_idx++)
 void swapMainDbWithTempDb(serverDb **tempDb);
 sds getVersion(void);
 void debugPauseProcess(void);

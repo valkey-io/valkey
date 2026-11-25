@@ -2158,7 +2158,11 @@ start_server {overrides {forkless-infrastructure-enabled yes} tags {"introspecti
 
             r config set rdb-key-save-delay 0
             r flushall
-            wait_for_condition 1000 10 {
+            # The forkless save is only cleaned up after the 10s key delay
+            # (started at bgsave) ends, and then the close job and the 200ms
+            # cleanup tick run. The budget must cover that, not just the
+            # cleanup, so it is larger than the key delay.
+            wait_for_condition 3000 10 {
                 [s rdb_bgsave_in_progress] eq 0
             } else {
                 fail "bgsave did not stop in time"

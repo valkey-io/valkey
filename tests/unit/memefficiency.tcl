@@ -746,7 +746,11 @@ run_solo {defrag} {
 
     set have_defrag 0
     start_server [list tags $standalone_tags overrides $std_overrides] {
-        if {[string match {*jemalloc*} [s mem_allocator]] && [r debug mallctl arenas.page] <= 8192} {
+        # A jemalloc that was not built for defrag (such as a system jemalloc)
+        # refuses to enable it, so ask the server instead of guessing.
+        if {[string match {*jemalloc*} [s mem_allocator]] && [r debug mallctl arenas.page] <= 8192 &&
+            ![catch {r config set activedefrag yes}]} {
+            r config set activedefrag no
             set have_defrag 1
         }
     }
@@ -768,6 +772,6 @@ run_solo {defrag} {
             }
         }
     } else {
-        puts "Jemalloc not available.  Defrag tests skipped."
+        puts "Active defrag not supported by this build (e.g. non-jemalloc or system jemalloc).  Defrag tests skipped."
     }
 } ;# run_solo

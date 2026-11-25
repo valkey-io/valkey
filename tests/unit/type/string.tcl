@@ -990,6 +990,19 @@ if {[string match {*jemalloc*} [s mem_allocator]]} {
         assert_error {ERR syntax error} {r set foo "new_value" ifeq "initial_value" nx}
     }
 
+    test {SET IFEQ with GET propagates a comparison value spelled GET} {
+        r del foo
+        set repl [attach_to_replication_stream]
+        r set foo GET
+        r set foo bar ifeq GET get
+        assert_replication_stream $repl {
+            {select *}
+            {set foo GET}
+            {set foo bar ifeq GET}
+        }
+        close_replication_stream $repl
+    } {} {needs:repl}
+
     test {Extended SET EX option} {
         r del foo
         r set foo bar ex 10

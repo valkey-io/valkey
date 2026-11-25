@@ -44,17 +44,19 @@ void bioCreateLazyFreeJob(lazy_free_fn free_fn, int arg_count, ...);
 void bioCreateSaveRDBToDiskJob(connection *conn, int is_dual_channel, compressionAlgo target_algo);
 void bioCreateTlsReloadJob(void);
 void bioCreateClusterConfigSaveJob(sds content, bool do_fsync);
+void bioCreateClusterResolveHostnameJob(const char *node_name, sds hostname, int flags);
 int inBioThread(void);
 
 /* Background job opcodes */
 enum {
-    BIO_CLOSE_FILE = 0, /* Deferred close(2) syscall. */
-    BIO_AOF_FSYNC,      /* Deferred AOF fsync. */
-    BIO_LAZY_FREE,      /* Deferred objects freeing. */
-    BIO_CLOSE_AOF,      /* Deferred close for AOF files. */
-    BIO_RDB_SAVE,       /* Deferred save RDB to disk on replica */
-    BIO_TLS_RELOAD,     /* Deferred TLS reload. */
-    BIO_CLUSTER_SAVE,   /* Deferred cluster config file save and fsync. */
+    BIO_CLOSE_FILE = 0,  /* Deferred close(2) syscall. */
+    BIO_AOF_FSYNC,       /* Deferred AOF fsync. */
+    BIO_LAZY_FREE,       /* Deferred objects freeing. */
+    BIO_CLOSE_AOF,       /* Deferred close for AOF files. */
+    BIO_RDB_SAVE,        /* Deferred save RDB to disk on replica */
+    BIO_TLS_RELOAD,      /* Deferred TLS reload. */
+    BIO_CLUSTER_SAVE,    /* Deferred cluster config file save and fsync. */
+    BIO_CLUSTER_RESOLVE, /* Deferred DNS resolution of cluster node hostnames. */
     BIO_NUM_OPS
 };
 

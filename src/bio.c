@@ -82,6 +82,7 @@ static unsigned int bio_job_to_worker[] = {
     [BIO_RDB_SAVE] = 3,
     [BIO_TLS_RELOAD] = 4, /* only used when BUILD_TLS=yes */
     [BIO_CLUSTER_SAVE] = 5,
+    [BIO_CLUSTER_RESOLVE] = 6,
 };
 
 typedef struct {
@@ -97,6 +98,7 @@ static bio_worker_data bio_workers[] = {
     {"bio_rdb_save"},
     {"bio_tls_reload"}, /* only used when BUILD_TLS=yes */
     {"bio_cluster_config_save"},
+    {"bio_cluster_resolve"},
 };
 static const bio_worker_data *const bio_worker_end = bio_workers + (sizeof bio_workers / sizeof *bio_workers);
 
@@ -150,6 +152,13 @@ typedef union bio_job {
         sds content;   /* Cluster config file content. */
         bool do_fsync; /* A flag to indicate that a fsync is required. */
     } cluster_save_args;
+
+    struct {
+        int type;
+        char node_name[CLUSTER_NAMELEN]; /* Node whose hostname is being resolved. */
+        sds hostname;                    /* Hostname to resolve, ownership is passed on. */
+        int flags;                       /* ANET_PREFER_* flags for anetResolve(). */
+    } cluster_resolve_args;
 } bio_job;
 
 void *bioProcessBackgroundJobs(void *arg);
@@ -256,6 +265,14 @@ void bioCreateClusterConfigSaveJob(sds content, bool do_fsync) {
     bioSubmitJob(BIO_CLUSTER_SAVE, job);
 }
 
+void bioCreateClusterResolveHostnameJob(const char *node_name, sds hostname, int flags) {
+    bio_job *job = allocBioJob(0);
+    memcpy(job->cluster_resolve_args.node_name, node_name, CLUSTER_NAMELEN);
+    job->cluster_resolve_args.hostname = hostname;
+    job->cluster_resolve_args.flags = flags;
+    bioSubmitJob(BIO_CLUSTER_RESOLVE, job);
+}
+
 #define CONFIG_SAVE_LOG_ERROR_RATE 30 /* Seconds between errors logging. */
 void *bioProcessBackgroundJobs(void *arg) {
     bio_worker_data *const bwd = arg;
@@ -342,6 +359,9 @@ void *bioProcessBackgroundJobs(void *arg) {
                 atomic_store_explicit(&server.cluster_config_last_save_time, time(NULL), memory_order_relaxed);
                 last_save_error_log = 0;
             }
+        } else if (job_type == BIO_CLUSTER_RESOLVE) {
+            clusterResolveHostnameFromBio(job->cluster_resolve_args.node_name, job->cluster_resolve_args.hostname,
+                                          job->cluster_resolve_args.flags);
         } else {
             serverPanic("Wrong job type in bioProcessBackgroundJobs().");
         }

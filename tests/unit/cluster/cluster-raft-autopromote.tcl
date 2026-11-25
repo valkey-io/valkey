@@ -179,6 +179,12 @@ start_cluster 3 0 {overrides {cluster-protocol raft cluster-node-timeout 15000} 
         set reply [raft_recv $fd2 2000]
         assert_match "REJECT voter-change-pending *" $reply
 
+        # Same node, different payload is CONFLICT, not SAME.
+        raft_send $fd1 "PROPOSE NODE_JOIN $f1 $a2 voter"
+        set reply [raft_recv $fd1 2000]
+        assert_match "REJECT voter-change-pending *" $reply
+        assert_equal 1 [raft_inflight_count [srv 0 client] NODE_JOIN]
+
         # Re-proposing the in-flight NODE_JOIN is SAME, not a second entry.
         raft_send $fd1 "PROPOSE NODE_JOIN $f1 $a1 voter"
         set got [catch {raft_recv $fd1 400} reply]

@@ -440,9 +440,8 @@ static clusterMsgSendBlock *clusterRaftBuildAllOffsetsMsg(void) {
  * Helpers
  * -------------------------------------------------------------------------- */
 
-/* Identity of a quorum-changing transition is (entry type, target node-id =
- * the first CLUSTER_NAMELEN bytes of the entry data). Used to enforce
- * "at most one membership transition in flight". */
+/* Identity of a quorum-changing transition is (entry type, full payload).
+ * SAME uses sdscmp so it matches clusterRaftCompletePendingProposal. */
 typedef enum {
     RAFT_QC_NONE = 0, /* No quorum-changing entry in flight. */
     RAFT_QC_SAME,     /* The same transition is already in flight. */
@@ -1876,7 +1875,7 @@ static bool raftEntryAffectsQuorum(int type, sds data) {
  * entries relative to a candidate transition. Scans (last_applied,
  * raftLogLastIndex()] once. Returns:
  *   RAFT_QC_NONE     — no quorum-changing entry in flight.
- *   RAFT_QC_SAME     — the identical (type, target) transition is in flight.
+ *   RAFT_QC_SAME     — the identical type and payload are in flight.
  *   RAFT_QC_CONFLICT — a different transition is in flight. */
 static raftQuorumChangeStatus clusterRaftQuorumChangeStatus(int type, sds data) {
     if (!raftEntryAffectsQuorum(type, data)) return RAFT_QC_NONE;
@@ -1887,7 +1886,7 @@ static raftQuorumChangeStatus clusterRaftQuorumChangeStatus(int type, sds data) 
     for (uint64_t idx = rs->last_applied + 1; idx <= raftLogLastIndex(); idx++) {
         raftLogEntry *e = raftLogGet(idx);
         if (!e || !raftEntryAffectsQuorum(e->type, e->data)) continue;
-        if (e->type == type && memcmp(e->data, data, CLUSTER_NAMELEN) == 0) {
+        if (e->type == type && sdscmp(e->data, data) == 0) {
             found_same = 1;
         } else {
             found_conflict = 1;

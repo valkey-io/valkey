@@ -50,9 +50,9 @@
 /* Result codes for proposal pre-validation and apply-time validation.
  * Used for control flow instead of comparing human-readable error strings. */
 typedef enum {
-    RAFT_RESULT_OK = 0,          /* Proposal is valid / applied successfully. */
-    RAFT_RESULT_STALE_EPOCH,     /* Rejected due to stale shard epoch (retryable). */
-    RAFT_RESULT_REJECTED,        /* Rejected for other reasons (terminal). */
+    RAFT_RESULT_OK = 0,               /* Proposal is valid / applied successfully. */
+    RAFT_RESULT_STALE_EPOCH,          /* Rejected due to stale shard epoch (retryable). */
+    RAFT_RESULT_REJECTED,             /* Rejected for other reasons (terminal). */
     RAFT_RESULT_LEADER_TRANSFER,      /* Retry after the leader has changed. */
     RAFT_RESULT_UNCHANGED,            /* Valid, but applying it wouldn't change anything. */
     RAFT_RESULT_VOTER_CHANGE_PENDING, /* Another voter change is in flight. */
@@ -63,9 +63,9 @@ typedef enum {
 #define STALE_SHARD_EPOCH_REJECTION_MSG "proposal rejected due to stale shard epoch"
 
 /* Wire-protocol tokens used in REJECT proposal between leader -> follower. */
-#define REJECT_WIRE_CONFLICT "conflict" /* for stale shard epoch validation fail. */
-#define REJECT_WIRE_REJECTED "rejected" /* for any other validation fail. */
-#define REJECT_WIRE_TRANSFER "transfer" /* the leader is handing off leadership first. */
+#define REJECT_WIRE_CONFLICT "conflict"                         /* for stale shard epoch validation fail. */
+#define REJECT_WIRE_REJECTED "rejected"                         /* for any other validation fail. */
+#define REJECT_WIRE_TRANSFER "transfer"                         /* the leader is handing off leadership first. */
 #define REJECT_WIRE_VOTER_CHANGE_PENDING "voter-change-pending" /* another voter change is in flight. */
 
 /* Map a RaftProposalResult to a human-readable error string for client replies.

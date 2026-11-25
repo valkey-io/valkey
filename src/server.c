@@ -7506,19 +7506,22 @@ __attribute__((weak)) int main(int argc, char **argv) {
  * HSET specific command extended options - FXX/FNX
  * Common command extended options - EX/EXAT/PX/PXAT/KEEPTTL
  *
- * Function takes pointers to client, flags, unit, expire_idx, pointer to pointer of expire obj if needed
- * to be determined and command_type which can be COMMAND_GET or COMMAND_SET.
+ * Function takes pointers to client, flags, unit, expire_idx, pointer to pointer of expire obj, compare_idx,
+ * pointer to pointer of compare obj if needed to be determined and command_type which can be COMMAND_GET
+ * or COMMAND_SET.
  *
  * If there are any syntax violations C_ERR is returned else C_OK is returned.
  *
  * Input flags are updated upon parsing the arguments. Unit, expire_idx and expire are updated if there are any
- * EX/EXAT/PX/PXAT arguments. Unit is updated to millisecond if PX/PXAT is set.
+ * EX/EXAT/PX/PXAT arguments. Unit is updated to millisecond if PX/PXAT is set. compare_idx and compare_val are
+ * updated if there is an IFEQ argument.
  *
  * max_args provides a way to limit the scan to a specific range of arguments.
  */
-int parseExtendedCommandArgumentsOrReply(client *c, int *flags, int *unit, int *expire_idx, robj **expire, robj **compare_val, int command_type, int max_args) {
+int parseExtendedCommandArgumentsOrReply(client *c, int *flags, int *unit, int *expire_idx, robj **expire, int *compare_idx, robj **compare_val, int command_type, int max_args) {
     int j = command_type == COMMAND_SET ? 3 : 2;
     if (expire_idx) *expire_idx = -1;
+    if (compare_idx) *compare_idx = -1;
     for (; j < max_args; j++) {
         char *opt = c->argv[j]->ptr;
         robj *next = (j == max_args - 1) ? NULL : c->argv[j + 1];
@@ -7555,6 +7558,7 @@ int parseExtendedCommandArgumentsOrReply(client *c, int *flags, int *unit, int *
         {
             *flags |= ARGS_SET_IFEQ;
             *compare_val = next;
+            if (compare_idx) *compare_idx = j + 1;
             j++;
         } else if ((opt[0] == 'g' || opt[0] == 'G') &&
                    (opt[1] == 'e' || opt[1] == 'E') &&

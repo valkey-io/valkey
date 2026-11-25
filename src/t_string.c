@@ -81,7 +81,8 @@ void setGenericCommand(client *c,
                        int unit,
                        robj *ok_reply,
                        robj *abort_reply,
-                       robj *comparison) {
+                       robj *comparison,
+                       int comparison_idx) {
     long long milliseconds = 0; /* initialized to avoid any harmness warning */
     int found = 0;
     int setkey_flags = 0;
@@ -172,8 +173,9 @@ void setGenericCommand(client *c,
         robj **argv = zmalloc((c->argc - 1) * sizeof(robj *));
         for (j = 0; j < c->argc; j++) {
             char *a = c->argv[j]->ptr;
-            /* Skip GET which may be repeated multiple times. */
-            if (j >= 3 && (a[0] == 'g' || a[0] == 'G') && (a[1] == 'e' || a[1] == 'E') &&
+            /* Skip GET which may be repeated multiple times. The IFEQ
+             * comparison value is free-form and may itself spell GET. */
+            if (j >= 3 && j != comparison_idx && (a[0] == 'g' || a[0] == 'G') && (a[1] == 'e' || a[1] == 'E') &&
                 (a[2] == 't' || a[2] == 'T') && a[3] == '\0')
                 continue;
             argv[argc++] = c->argv[j];
@@ -233,30 +235,31 @@ static int getExpireMillisecondsOrReply(client *c, robj *expire, int flags, int 
 void setCommand(client *c) {
     robj *expire = NULL;
     robj *comparison = NULL;
+    int comparison_idx;
     int unit = UNIT_SECONDS;
     int flags = ARGS_NO_FLAGS;
 
-    if (parseExtendedCommandArgumentsOrReply(c, &flags, &unit, NULL, &expire, &comparison, COMMAND_SET, c->argc) != C_OK) {
+    if (parseExtendedCommandArgumentsOrReply(c, &flags, &unit, NULL, &expire, &comparison_idx, &comparison, COMMAND_SET, c->argc) != C_OK) {
         return;
     }
 
     c->argv[2] = tryObjectEncoding(c->argv[2]);
-    setGenericCommand(c, flags, c->argv[1], c->argv[2], expire, unit, NULL, NULL, comparison);
+    setGenericCommand(c, flags, c->argv[1], c->argv[2], expire, unit, NULL, NULL, comparison, comparison_idx);
 }
 
 void setnxCommand(client *c) {
     c->argv[2] = tryObjectEncoding(c->argv[2]);
-    setGenericCommand(c, ARGS_SET_NX, c->argv[1], c->argv[2], NULL, 0, shared.cone, shared.czero, NULL);
+    setGenericCommand(c, ARGS_SET_NX, c->argv[1], c->argv[2], NULL, 0, shared.cone, shared.czero, NULL, -1);
 }
 
 void setexCommand(client *c) {
     c->argv[3] = tryObjectEncoding(c->argv[3]);
-    setGenericCommand(c, ARGS_EX | ARGS_ARGV3, c->argv[1], c->argv[3], c->argv[2], UNIT_SECONDS, NULL, NULL, NULL);
+    setGenericCommand(c, ARGS_EX | ARGS_ARGV3, c->argv[1], c->argv[3], c->argv[2], UNIT_SECONDS, NULL, NULL, NULL, -1);
 }
 
 void psetexCommand(client *c) {
     c->argv[3] = tryObjectEncoding(c->argv[3]);
-    setGenericCommand(c, ARGS_PX | ARGS_ARGV3, c->argv[1], c->argv[3], c->argv[2], UNIT_MILLISECONDS, NULL, NULL, NULL);
+    setGenericCommand(c, ARGS_PX | ARGS_ARGV3, c->argv[1], c->argv[3], c->argv[2], UNIT_MILLISECONDS, NULL, NULL, NULL, -1);
 }
 
 /* DELIFEQ key value */
@@ -322,7 +325,7 @@ void getexCommand(client *c) {
     int unit = UNIT_SECONDS;
     int flags = ARGS_NO_FLAGS;
 
-    if (parseExtendedCommandArgumentsOrReply(c, &flags, &unit, NULL, &expire, NULL, COMMAND_GET, c->argc) != C_OK) {
+    if (parseExtendedCommandArgumentsOrReply(c, &flags, &unit, NULL, &expire, NULL, NULL, COMMAND_GET, c->argc) != C_OK) {
         return;
     }
 

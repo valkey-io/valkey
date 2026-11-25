@@ -7674,6 +7674,12 @@ void sendChildInfo(childInfoType info_type, size_t keys, char *pname) {
 
 /* Dismiss big chunks of memory inside a client structure, see zmadvise_dontneed() */
 void dismissClientMemory(client *c) {
+    /* The fork may have happened while an I/O thread was reading and parsing this
+     * client's query. That thread does not exist in the child, so the query buffer
+     * and argv may be half updated. Dismissing is only an optimization, so skip the
+     * client. A pending write is fine: it changes nothing that is used below. */
+    if (c->io_read_state != CLIENT_IDLE) return;
+
     /* Dismiss client query buffer and static reply buffer. */
     dismissMemory(c->buf, c->buf_usable_size);
     if (c->querybuf) dismissSds(c->querybuf);

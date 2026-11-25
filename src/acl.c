@@ -2232,7 +2232,12 @@ static void cleanupACLKeyResultCache(aclKeyResultCache *cache) {
 }
 
 /* Inline func to check if command should be restricted */
-static inline int shouldRestrictCmd(struct serverCommand *cmd) {
+static inline int shouldRestrictCmd(struct serverCommand *cmd, int argc) {
+    /* EXEC only reads the active database through its condition keys. The
+     * queued commands are checked against their own database when they
+     * run, so a bare EXEC does not need access to the active database. */
+    if (cmd->proc == execCommand && argc == 1) return 0;
+
     return (cmd->acl_categories & ACL_CATEGORY_KEYSPACE) ||
            (cmd->acl_categories & ACL_CATEGORY_READ) ||
            (cmd->acl_categories & ACL_CATEGORY_WRITE) ||
@@ -2293,7 +2298,7 @@ static int ACLSelectorCheckCmd(aclSelector *selector,
                 return ACL_DENIED_DB;
             }
         }
-    } else if (shouldRestrictCmd(cmd) && !ACLSelectorCanAccessDb(selector, dbid)) {
+    } else if (shouldRestrictCmd(cmd, argc) && !ACLSelectorCanAccessDb(selector, dbid)) {
         if (keyidxptr) *keyidxptr = 0;
         return ACL_DENIED_DB;
     }

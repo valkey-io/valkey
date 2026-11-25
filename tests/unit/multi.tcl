@@ -541,6 +541,28 @@ start_server {tags {"multi"}} {
         $rd1 close
     } {0} {singledb:skip}
 
+    test {One client can WATCH the same key in multiple databases} {
+        set rd [valkey_client]
+        foreach db {0 1 0} {
+            $rd select $db
+            $rd watch key
+        }
+        assert_equal 2 [get_field_in_client_info [$rd client info] watch]
+        r select 1
+        r set key changed
+        $rd multi
+        $rd ping
+        assert_equal {} [$rd exec]
+
+        # After EXEC, watching only DB 0 must not keep DB 1 watched.
+        $rd watch key
+        r set key changed-again
+        $rd multi
+        $rd ping
+        assert_equal {PONG} [$rd exec]
+        $rd close
+    } {0} {singledb:skip}
+
     test {WATCH with large number of keys} {
         set elements {}
         for {set i 0} {$i < 50000} {incr i} {
@@ -1232,5 +1254,16 @@ start_server {tags {"multi repl external:skip"}} {
             $rd1 close
             $rd2 close
         }
+    }
+}
+
+start_server {tags {multi external:skip singledb:skip cluster:skip} overrides {databases 16384}} {
+    test {Watching one key does not allocate an index entry per configured DB} {
+        r select 16383
+        set before [get_field_in_client_info [r client info] tot-mem]
+        r watch key
+        set after [get_field_in_client_info [r client info] tot-mem]
+        # Even one byte per configured DB would exceed this budget.
+        assert_lessthan [expr {$after - $before}] 16384
     }
 }

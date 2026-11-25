@@ -1983,6 +1983,23 @@ start_server {tags {"introspection"}} {
         }
     } {} {external:skip}
 
+    test {config file - forkless-policy after an include is checked against a later forkless-infrastructure-enabled} {
+        set base [file normalize [tmpfile base.conf]]
+        write_file $base "hz 10\n"
+        start_server [list config_lines [list include $base forkless-policy prefer-forkless forkless-infrastructure-enabled yes]] {
+            assert_equal {forkless-policy prefer-forkless} [r config get forkless-policy]
+        }
+    } {} {external:skip}
+
+    test {config file - forkless-policy after an include still fails without forkless-infrastructure-enabled} {
+        set base [file normalize [tmpfile base.conf]]
+        write_file $base "hz 10\n"
+        set conf [file normalize [tmpfile forkless.conf]]
+        write_file $conf "include $base\nforkless-policy prefer-forkless\nport 0\n"
+        catch {exec $::VALKEY_SERVER_BIN $conf} err
+        assert_match "*can only be selected when the server was started with 'forkless-infrastructure-enabled yes'*" $err
+    } {} {external:skip}
+
     # Config file at this point is at a weird state, and includes all
     # known keywords. Might be a good idea to avoid adding tests here.
 }

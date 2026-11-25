@@ -2523,8 +2523,9 @@ static void numericConfigRewrite(standardConfig *config, const char *name, struc
 static int isValidForklessPolicy(int val, const char **err) {
     /* During startup config parsing the directives are applied one by one, so
      * forkless-infrastructure-enabled may not have been read yet when this
-     * value is set. We will check it when loading the config string */
-    if (reading_config_file) return 1;
+     * value is set. The check runs once the outermost config file is loaded.
+     * Uses the depth, since an include clears reading_config_file. */
+    if (config_load_depth > 0) return 1;
     if (val != FORKLESS_POLICY_REQUIRE_FORK && !server.forkless_infrastructure_enabled) {
         *err = "'prefer-forkless' can only be selected when the server was started with "
                "'forkless-infrastructure-enabled yes'";

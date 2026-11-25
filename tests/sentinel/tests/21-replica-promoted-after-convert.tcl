@@ -16,13 +16,32 @@ proc replica_field_from_sentinel_0 {port field} {
     return {}
 }
 
+# Wait for Sentinel 0 to convert the replica back to replica. Return a time
+# (in ms) the INFO that triggered +convert-to-slave is not older than: the last
+# time the replica was still seen as primary, or $lower_bound.
+proc wait_for_convert_to_slave {lower_bound} {
+    set before_convert $lower_bound
+    for {set j 0} {$j < 3000} {incr j} {
+        set now [clock milliseconds]
+        if {[RI $::replica_id role] eq {slave}} {
+            return $before_convert
+        }
+        set before_convert $now
+        after 10
+    }
+    fail "Sentinel did not convert the replica back"
+}
+
 # Promote the replica again and check that Sentinel 0 did not process any INFO
-# since $since (in ms), so it did not observe the replica role in between.
-proc promote_again_before_next_info {since} {
+# after the one that triggered +convert-to-slave, so it did not observe the
+# replica role in between. Any later INFO comes at least one info-period
+# (2s or more here) after it.
+proc promote_again_before_next_info {before_convert} {
     R $::replica_id replicaof no one
-    set elapsed [expr {[clock milliseconds] - $since}]
     set info_refresh [replica_field_from_sentinel_0 $::replica_port info-refresh]
-    if {$info_refresh < $elapsed} {
+    # Reading the clock after the reply can only make the INFO look newer.
+    set last_info [expr {[clock milliseconds] - $info_refresh}]
+    if {$last_info > $before_convert + 1000} {
         fail "Sentinel processed an INFO before the replica was promoted again"
     }
 }
@@ -60,18 +79,14 @@ test "Replica promoted again right after +convert-to-slave is not demoted at onc
     # With the default period, the next INFO comes 10s after the one that
     # triggers +convert-to-slave, leaving time to promote the replica again.
     S 0 SENTINEL DEBUG info-period 10000
+    set start [clock milliseconds]
     R $::replica_id replicaof no one
 
     # Sentinel 0 sees the replica as a primary and, after the wait,
     # converts it back to replica.
-    wait_for_condition 3000 10 {
-        [RI $::replica_id role] eq {slave}
-    } else {
-        fail "Sentinel did not convert the replica back"
-    }
-    set converted [clock milliseconds]
+    set before_convert [wait_for_convert_to_slave $start]
 
-    promote_again_before_next_info $converted
+    promote_again_before_next_info $before_convert
     set promoted [clock milliseconds]
 
     # The next INFO must be seen as a role change: the replica must not be
@@ -97,17 +112,14 @@ test "INFO replies sent before +convert-to-slave are ignored" {
     # While the instance sleeps, Sentinel keeps sending INFO. When it wakes up,
     # the first reply triggers +convert-to-slave and the other ones, sent
     # before the REPLICAOF, report the instance as primary.
+    set before_sleep [clock milliseconds]
     R $::replica_id debug sleep 9
     S 0 SENTINEL DEBUG info-period 10000
 
-    wait_for_condition 1000 10 {
-        [RI $::replica_id role] eq {slave}
-    } else {
-        fail "Sentinel did not convert the replica back"
-    }
-    set converted [clock milliseconds]
+    # The INFO that triggers +convert-to-slave is processed after the sleep.
+    set before_convert [wait_for_convert_to_slave [expr {$before_sleep + 9000}]]
 
-    promote_again_before_next_info $converted
+    promote_again_before_next_info $before_convert
     set promoted [clock milliseconds]
 
     assert_not_demoted_after_next_info $promoted

@@ -67,14 +67,23 @@ start_server {config "minimal.conf" tags {"external:skip" "valgrind:skip"} overr
         activate_io_threads_and_wait
         set info [r info]
         set io_threads_count [dict get [r config get io-threads] io-threads]
+        # All read and write jobs go to a shared queue that any awake IO
+        # thread can take from. On a busy host, the threads that wake first
+        # can take all the jobs, so one thread may get no work and report 0.
+        # Check only that the IO threads together did some work.
+        array set initial_active_times {}
+        set total_active_time 0
         for {set i 1} {$i <= $io_threads_count} {incr i} {
             set used_active_time [getInfoProperty $info used_active_time_io_thread_$i]
             if {$i < $io_threads_count} {
-                assert_morethan $used_active_time 0
+                assert_not_equal $used_active_time {}
+                set initial_active_times($i) $used_active_time
+                set total_active_time [expr {$total_active_time + $used_active_time}]
             } else {
                 assert_equal $used_active_time {}
             }
         }
+        assert_morethan $total_active_time 0
 
         # Adjust io-threads to a lower value and assert that active io_threads fields are >= values found initially
         assert_equal {OK} [r config set io-threads 1]
@@ -90,8 +99,8 @@ start_server {config "minimal.conf" tags {"external:skip" "valgrind:skip"} overr
         for {set i 1} {$i <= $io_threads_count} {incr i} {
             set used_active_time [getInfoProperty $info used_active_time_io_thread_$i]
             if {$i < $io_threads_count} {
-                # Assert active thread usage isn't reset to 0.
-                assert_morethan $used_active_time 0
+                # Assert active thread usage isn't reset.
+                assert_morethan_equal $used_active_time $initial_active_times($i)
             } else {
                 assert_equal $used_active_time {}
             }

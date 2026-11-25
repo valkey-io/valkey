@@ -961,10 +961,13 @@ Epoch validation happens at two points:
 1. **Pre-validation on the leader** — before appending to the log.
    This is a best-effort optimization that rejects obviously stale
    proposals early, saving log space and replication bandwidth. It
-   performs a read-only check without bumping the epoch.
+   performs a read-only check without bumping the applied epoch.
+   Epochs are compared against the applied value plus uncommitted
+   bumping entries (`FAILOVER`, `SET_REPLICA_OF`, `NODE_FORGET`).
+   `SLOT_CHANGE` only checks, so concurrent slot moves still pass.
 
 2. **Apply-time validation** — the authoritative check. Each apply
-   function validates the entry's epoch against the current shard
+   function validates the entry's epoch against the applied shard
    epoch. On match (or epoch 0 for a new shard), the epoch is bumped
    and the entry is applied. On mismatch, the entry is a no-op and
    the error is propagated to the caller's callback.

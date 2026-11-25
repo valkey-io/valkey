@@ -1131,12 +1131,68 @@ static void clusterSetShardEpoch(const char *shard_id, uint64_t epoch) {
     rs->todo_retry_deferred = 1;
 }
 
-/* Validate a shard epoch.
- * Returns 1 if it's current, 0 if it's stale.
- * Shard_id may be NULL (skipped). Does not bump. */
-static int clusterValidateShardEpoch(const char *shard_id, uint64_t epoch) {
+/* Carried epoch + 1 if e bumps shard_id, else 0. */
+static uint64_t raftEntryBumpEpochForShard(raftLogEntry *e, const char *shard_id) {
+    int argc;
+    sds *argv = sdssplitlen(e->data, sdslen(e->data), " ", 1, &argc);
+    uint64_t next = 0;
+    if (!argv) return 0;
+
+    switch (e->type) {
+    case RAFT_ENTRY_FAILOVER:
+        /* <replica-id> <primary-id> <shard-id> <shard-epoch> */
+        if (argc == 4 && sdslen(argv[2]) == CLUSTER_NAMELEN &&
+            memcmp(argv[2], shard_id, CLUSTER_NAMELEN) == 0) {
+            next = strtoull(argv[3], NULL, 10) + 1;
+        }
+        break;
+    case RAFT_ENTRY_SET_REPLICA_OF:
+        /* <replica-id> <source-shard> <source-epoch> <primary> <target-shard> <target-epoch> */
+        if (argc == 6) {
+            if (sdslen(argv[1]) == CLUSTER_NAMELEN && memcmp(argv[1], shard_id, CLUSTER_NAMELEN) == 0)
+                next = strtoull(argv[2], NULL, 10) + 1;
+            if (sdslen(argv[4]) == CLUSTER_NAMELEN && memcmp(argv[4], shard_id, CLUSTER_NAMELEN) == 0)
+                next = strtoull(argv[5], NULL, 10) + 1;
+        }
+        break;
+    case RAFT_ENTRY_NODE_FORGET: {
+        /* <node-id> <epoch> */
+        if (argc >= 2) {
+            clusterNode *node = clusterLookupNode(argv[0], sdslen(argv[0]));
+            if (node && memcmp(node->shard_id, shard_id, CLUSTER_NAMELEN) == 0)
+                next = strtoull(argv[1], NULL, 10) + 1;
+        }
+        break;
+    }
+    default:
+        break;
+    }
+    sdsfreesplitres(argv, argc);
+    return next;
+}
+
+/* Applied epoch plus uncommitted bumps for this shard. */
+static uint64_t clusterGetAppendTimeShardEpoch(const char *shard_id) {
+    clusterRaftState *rs = RAFT_STATE();
+    uint64_t epoch = clusterGetShardEpoch(shard_id);
+    uint64_t last = raftLogLastIndex();
+    for (uint64_t idx = rs->last_applied + 1; idx <= last; idx++) {
+        raftLogEntry *e = raftLogGet(idx);
+        if (!e) continue;
+        uint64_t bumped = raftEntryBumpEpochForShard(e, shard_id);
+        if (bumped == 0) continue;
+        uint64_t carried = bumped - 1;
+        if (epoch == 0 || carried == epoch) epoch = bumped;
+    }
+    return epoch;
+}
+
+/* Validate a shard epoch. Returns 1 if it's current, 0 if it's stale.
+ * Shard_id may be NULL (skipped). Does not bump.
+ * append_time includes uncommitted bumps. */
+static int clusterValidateShardEpoch(const char *shard_id, uint64_t epoch, int append_time) {
     if (!shard_id) return 1;
-    uint64_t current = clusterGetShardEpoch(shard_id);
+    uint64_t current = append_time ? clusterGetAppendTimeShardEpoch(shard_id) : clusterGetShardEpoch(shard_id);
     if (current > 0 && epoch != current) return 0;
     return 1;
 }
@@ -1793,6 +1849,30 @@ static void clusterRaftClearOptionalNodeInfo(clusterNode *node) {
     node->replica_priority = 0;
 }
 
+/* Handle a result for one known pending proposal. */
+static void clusterRaftFinishPendingProposal(listNode *ln, RaftProposalResult result) {
+    clusterRaftState *rs = RAFT_STATE();
+    raftPendingProposal *pp = listNodeValue(ln);
+    /* Resent to the new leader by the retry on leader change. */
+    if (result == RAFT_RESULT_LEADER_TRANSFER) return;
+    /* On stale epoch with retries remaining: mark deferred.
+     * The epoch update happens at retry time when the epoch has
+     * actually advanced (checked by raftRefreshEpochInData). */
+    if (result == RAFT_RESULT_STALE_EPOCH && pp->retries > 0) {
+        pp->retries--;
+        pp->deferred = 1;
+        /* The epoch may already have advanced before this rejection
+         * arrived. Retry in case it did; raftRefreshEpochInData()
+         * skips it otherwise. */
+        rs->todo_retry_deferred = 1;
+    } else {
+        if (pp->callback) pp->callback(pp->ctx, raftProposalResultMsg(result));
+        sdsfree(pp->data);
+        zfree(pp);
+        listDelNode(rs->pending_proposals, ln);
+    }
+}
+
 /* Complete pending proposals matching type+data. For an applied entry, the
  * result comes from applying it, and it completes every one whose min_index
  * it isn't below, so that the entry isn't older than the proposal. An older
@@ -1813,24 +1893,7 @@ static void clusterRaftCompletePendingProposal(int type, sds data, RaftProposalR
         if (pp->wait_index) continue;
         if (index && index < pp->min_index) continue;
         if (pp->type != type || sdscmp(pp->data, data)) continue;
-        /* Resent to the new leader by the retry on leader change. */
-        if (result == RAFT_RESULT_LEADER_TRANSFER) return;
-        /* On stale epoch with retries remaining: mark deferred.
-         * The epoch update happens at retry time when the epoch has
-         * actually advanced (checked by raftRefreshEpochInData). */
-        if (result == RAFT_RESULT_STALE_EPOCH && pp->retries > 0) {
-            pp->retries--;
-            pp->deferred = 1;
-            /* The epoch may already have advanced before this rejection
-             * arrived. Retry in case it did; raftRefreshEpochInData()
-             * skips it otherwise. */
-            rs->todo_retry_deferred = 1;
-        } else {
-            if (pp->callback) pp->callback(pp->ctx, raftProposalResultMsg(result));
-            sdsfree(pp->data);
-            zfree(pp);
-            listDelNode(rs->pending_proposals, ln);
-        }
+        clusterRaftFinishPendingProposal(ln, result);
         if (!index) break;
     }
 }
@@ -3166,12 +3229,23 @@ static void clusterRaftDetectFailures(mstime_t now) {
 
 /* Forward a pending proposal to the leader or append locally if we are
  * the leader. Caller must ensure leader link is available for followers. */
-static void clusterRaftSendProposal(raftPendingProposal *pp, clusterLink *leader_link) {
+static void clusterRaftSendProposal(listNode *ln, clusterLink *leader_link) {
+    raftPendingProposal *pp = listNodeValue(ln);
     clusterRaftState *rs = RAFT_STATE();
 
     if (clusterRaftTransferSent()) return;
     pp->propose_time = monotonicMs();
     if (rs->role == RAFT_ROLE_LEADER) {
+        /* Same pre-validation as the first append. */
+        RaftProposalResult pre_result = clusterRaftPreValidate(pp->type, pp->data);
+        if (pre_result == RAFT_RESULT_UNCHANGED) {
+            clusterRaftAddPendingRead(pp->type, pp->data, NULL);
+            return;
+        }
+        if (pre_result != RAFT_RESULT_OK) {
+            clusterRaftFinishPendingProposal(ln, pre_result);
+            return;
+        }
         uint64_t idx = raftLogLastIndex() + 1;
         raftLogAppend(raftLogCreate(rs->current_term, idx, pp->type, sdsdup(pp->data)));
         pp->min_index = idx;
@@ -3223,26 +3297,11 @@ static void clusterRaftRetryProposals(int include_pending) {
             if (!raftRefreshEpochInData(pp->type, &pp->data)) continue;
 
             pp->deferred = 0;
-
-            if (rs->role == RAFT_ROLE_LEADER) {
-                RaftProposalResult pre_result = clusterRaftPreValidate(pp->type, pp->data);
-                if (pre_result == RAFT_RESULT_UNCHANGED) {
-                    clusterRaftAddPendingRead(pp->type, pp->data, NULL);
-                    continue;
-                }
-                if (pre_result != RAFT_RESULT_OK) {
-                    if (pp->callback) pp->callback(pp->ctx, raftProposalResultMsg(pre_result));
-                    sdsfree(pp->data);
-                    zfree(pp);
-                    listDelNode(rs->pending_proposals, ln);
-                    continue;
-                }
-            }
         } else {
             if (!include_pending) continue;
         }
 
-        clusterRaftSendProposal(pp, leader_link);
+        clusterRaftSendProposal(ln, leader_link);
     }
 }
 
@@ -4540,8 +4599,8 @@ static RaftProposalResult clusterRaftApplySlotChange(sds data, int validate_only
     if (!parseSlotChangeEpochs(argv, argc, &info)) goto reject;
 
     /* Epoch validation: validate both source and target epochs. */
-    if (!clusterValidateShardEpoch(info.source_shard_id, info.source_epoch) ||
-        !clusterValidateShardEpoch(info.target_shard_id, info.target_epoch)) {
+    if (!clusterValidateShardEpoch(info.source_shard_id, info.source_epoch, validate_only) ||
+        !clusterValidateShardEpoch(info.target_shard_id, info.target_epoch, validate_only)) {
         result = RAFT_RESULT_STALE_EPOCH;
         goto reject;
     }
@@ -4646,8 +4705,8 @@ static RaftProposalResult clusterRaftApplySetReplica(sds data, int validate_only
     uint64_t target_epoch = strtoull(argv[5], NULL, 10);
 
     /* Validate both shard epochs without bumping. */
-    if (!clusterValidateShardEpoch(source_shard, source_epoch) ||
-        !clusterValidateShardEpoch(target_shard, target_epoch)) {
+    if (!clusterValidateShardEpoch(source_shard, source_epoch, validate_only) ||
+        !clusterValidateShardEpoch(target_shard, target_epoch, validate_only)) {
         result = RAFT_RESULT_STALE_EPOCH;
         goto reject;
     }
@@ -4749,7 +4808,7 @@ static RaftProposalResult clusterRaftApplyFailover(sds data, int validate_only) 
 
     /* Epoch validation: validate against the shard-id from the entry (no bump yet). */
     uint64_t shard_epoch = strtoull(argv[3], NULL, 10);
-    if (!clusterValidateShardEpoch(argv[2], shard_epoch)) {
+    if (!clusterValidateShardEpoch(argv[2], shard_epoch, validate_only)) {
         result = RAFT_RESULT_STALE_EPOCH;
         goto reject;
     }
@@ -4956,7 +5015,7 @@ static RaftProposalResult clusterRaftApplyNodeForget(sds data, int validate_only
     }
 
     uint64_t epoch = strtoull(argv[1], NULL, 10);
-    if (!clusterValidateShardEpoch(node->shard_id, epoch)) {
+    if (!clusterValidateShardEpoch(node->shard_id, epoch, validate_only)) {
         result = RAFT_RESULT_STALE_EPOCH;
         goto reject;
     }

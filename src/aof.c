@@ -617,7 +617,7 @@ int persistAofManifest(aofManifest *am) {
     sds amstr = getAofManifestAsString(am);
     int ret = writeAofManifestFile(amstr);
     sdsfree(amstr);
-    if (ret == C_OK || ret == AOF_MANIFEST_DIRSYNC_ERR) am->dirty = 0;
+    if (ret == C_OK) am->dirty = 0;
     return ret;
 }
 
@@ -677,6 +677,7 @@ void aofUpgradePrepare(aofManifest *am) {
  */
 int aofDelHistoryFiles(void) {
     if (server.aof_manifest == NULL || server.aof_disable_auto_gc == 1 ||
+        server.aof_manifest->dirty ||
         !listLength(server.aof_manifest->history_aof_list)) {
         return C_OK;
     }

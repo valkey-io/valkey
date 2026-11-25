@@ -1829,6 +1829,48 @@ start_server {tags {"scripting external:skip tls:skip"}} {
     }
 }
 
+start_server {tags {"scripting external:skip tls:skip"}} {
+    test {SCRIPT DEBUG on one client does not debug scripts of other clients} {
+        set rd [valkey_deferring_client]
+        $rd script debug yes
+        assert_equal OK [$rd read]
+
+        assert_equal ok [r eval {local a = 'ok' return a} 0]
+
+        # The debugging client got no debugger output from that script.
+        $rd ping
+        assert_equal PONG [$rd read]
+        $rd close
+    }
+
+    test {A debugging session talks to the client that runs the script} {
+        set rd1 [valkey_deferring_client]
+        set rd2 [valkey_deferring_client]
+        $rd1 script debug yes
+        assert_equal OK [$rd1 read]
+        $rd2 script debug yes
+        assert_equal OK [$rd2 read]
+
+        # Read without blocking, so the test fails instead of hanging if the
+        # session talks to the other client.
+        $rd1 eval {return 'hello'} 0
+        set ch [$rd1 channel]
+        fconfigure $ch -blocking 0
+        set buf ""
+        wait_for_condition 50 100 {
+            [string match {*Stopped at*} [append buf [read $ch]]]
+        } else {
+            fail "The debugging session did not talk to the client that ran EVAL"
+        }
+        fconfigure $ch -blocking 1
+        $rd1 close
+
+        $rd2 ping
+        assert_equal PONG [$rd2 read]
+        $rd2 close
+    }
+}
+
 start_server {tags {"scripting needs:debug external:skip"}} {
     test {Test scripting debug protocol parsing} {
         r script debug sync

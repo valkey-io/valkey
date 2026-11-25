@@ -49,7 +49,6 @@ int ldbIsEnabled(void) {
 
 /* Enable debug mode of Lua scripts for this client. */
 void ldbEnable(void) {
-    ldb.active = 1;
     ldb.step = 1;
     ldb.bpcount = 0;
     ldb.luabp = 0;

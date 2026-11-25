@@ -640,6 +640,7 @@ void scriptingEngineDebuggerFlushLogs(void) {
  * The caller should call scriptingEngineDebuggerEndSession() only if
  * scriptDebugStartSession() returned 1. */
 int scriptingEngineDebuggerStartSession(client *c) {
+    ds.conn = c->conn;
     ds.forked = !c->flag.lua_debug_sync;
     if (ds.forked) {
         pid_t cp = serverFork(CHILD_TYPE_LDB);

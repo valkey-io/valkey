@@ -22,6 +22,13 @@ if {![string match "*redis_version:8.6.0\r\n*" [$r info server]]} {
 if {[$r dbsize] != 0} {
     error "Fixture generation requires an empty database"
 }
+set rdb_file [file normalize [file join [lindex [$r config get dir] 1] \
+                                   [lindex [$r config get dbfilename] 1]]]
+set streams_file [file normalize [file join $output redis-8.6-streams.rdb]]
+set idmp_file [file normalize [file join $output redis-8.6-idmp.rdb]]
+if {$rdb_file eq $streams_file || $rdb_file eq $idmp_file} {
+    error "Redis working RDB path conflicts with a generated fixture; use a separate working directory"
+}
 $r config set stream-node-max-entries 2
 
 for {set i 1} {$i <= 6} {incr i} {
@@ -63,9 +70,6 @@ foreach key {plain emptied no-entries idmp idmp-custom} {
     dict set dumps $key $dump
 }
 $r save
-set dir [lindex [$r config get dir] 1]
-set filename [lindex [$r config get dbfilename] 1]
-set rdb_file [file join $dir $filename]
 if {![file isfile $rdb_file]} {
     error "Redis SAVE did not create an RDB at '$rdb_file'; ensure the server's local configured directory is accessible"
 }
@@ -73,7 +77,6 @@ file copy -force $rdb_file [file join $output redis-8.6-streams.rdb]
 $r flushall
 $r xadd interrupted idmp producer iid-1 * f v
 $r save
-set rdb_file [file join [lindex [$r config get dir] 1] [lindex [$r config get dbfilename] 1]]
 if {![file isfile $rdb_file]} {
     error "Redis SAVE did not create an RDB at '$rdb_file'; ensure the server's local configured directory is accessible"
 }

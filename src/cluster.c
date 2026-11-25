@@ -273,7 +273,15 @@ void restoreCommand(client *c) {
         return;
     }
 
-    obj = rdbLoadObject(type, &payload, objectGetVal(key), c->db->id, NULL, RDBFLAGS_NONE, 0);
+    bool discarded_idmp = false;
+    obj = rdbLoadObject(type,
+                        &payload,
+                        objectGetVal(key),
+                        c->db->id,
+                        NULL,
+                        RDBFLAGS_NONE,
+                        0,
+                        &discarded_idmp);
     /* A truncated foreign trailer must not consume the DUMP version/checksum
      * as metadata, nor leave unparsed IDMP state behind. */
     if (obj && type == RDB_TYPE_REDIS_STREAM_LISTPACKS_4 &&
@@ -285,6 +293,7 @@ void restoreCommand(client *c) {
         addReplyError(c, "Bad data format");
         return;
     }
+    if (discarded_idmp) rdbLogDiscardedRedisStreamIdmp(objectGetVal(key));
 
     /* Remove the old key if needed. */
     int deleted = 0;

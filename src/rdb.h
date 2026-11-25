@@ -249,7 +249,15 @@ compressionAlgo rdbCompressionAlgorithm(rdb_compression_mode mode);
 int rdbSave(int req, char *filename, rdbSaveInfo *rsi, int rdbflags);
 ssize_t rdbSaveObject(rio *rdb, robj *o, robj *key, int dbid, unsigned char type);
 size_t rdbSavedObjectLen(robj *o, robj *key, int dbid);
-robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rdbflags, mstime_t now);
+robj *rdbLoadObject(int rdbtype,
+                    rio *rdb,
+                    sds key,
+                    int dbid,
+                    int *error,
+                    int rdbflags,
+                    mstime_t now,
+                    bool *idmp_discarded);
+void rdbLogDiscardedRedisStreamIdmp(sds key);
 void backgroundSaveDoneHandler(int exitcode, int bysignal);
 int rdbSaveKeyValuePair(rio *rdb, robj *key, robj *val, long long expiretime, int dbid, int rdbver);
 ssize_t rdbSaveSingleModuleAux(rio *rdb, int when, moduleType *mt);

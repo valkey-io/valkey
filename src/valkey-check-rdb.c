@@ -872,7 +872,8 @@ int redis_check_rdb(char *rdbfilename, FILE *fp) {
         /* Read value */
         rdbstate.doing = RDB_CHECK_DOING_READ_OBJECT_VALUE;
         int error = 0;
-        val = rdbLoadObject(type, rdb, objectGetVal(key), selected_dbid, &error, RDBFLAGS_NONE, 0);
+        val = rdbLoadObject(
+            type, rdb, objectGetVal(key), selected_dbid, &error, RDBFLAGS_NONE, 0, NULL);
         /* Match the server when loading legacy empty containers. */
         if (val == NULL && error != RDB_LOAD_ERR_EMPTY_KEY) goto eoferr;
         if (val && rdbCheckStats) computeDatasetProfile(selected_dbid, key, val, expiretime);

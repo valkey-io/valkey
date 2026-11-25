@@ -625,13 +625,16 @@ ssize_t rdbSaveStringObject(rio *rdb, robj *obj) {
 static void *rdbGenericLoadStringObjectWithError(rio *rdb,
                                                  int flags,
                                                  size_t *lenptr,
-                                                 bool *allocation_error) {
+                                                 bool *allocation_error,
+                                                 bool skip_integer_encoding,
+                                                 bool *integer_encoding_skipped) {
     int plain = flags & RDB_LOAD_PLAIN;
     int sds = flags & RDB_LOAD_SDS;
     int isencoded;
     unsigned long long len;
 
     if (allocation_error) *allocation_error = false;
+    if (integer_encoding_skipped) *integer_encoding_skipped = false;
     len = rdbLoadLen(rdb, &isencoded);
     if (len == RDB_LENERR) return NULL;
 
@@ -639,7 +642,15 @@ static void *rdbGenericLoadStringObjectWithError(rio *rdb,
         switch (len) {
         case RDB_ENC_INT8:
         case RDB_ENC_INT16:
-        case RDB_ENC_INT32: return rdbLoadIntegerObject(rdb, len, flags, lenptr);
+        case RDB_ENC_INT32:
+            if (skip_integer_encoding) {
+                unsigned char encoded[4];
+                size_t encoded_len = len == RDB_ENC_INT8 ? 1 : len == RDB_ENC_INT16 ? 2 : 4;
+                if (rioRead(rdb, encoded, encoded_len) == 0) return NULL;
+                if (integer_encoding_skipped) *integer_encoding_skipped = true;
+                return NULL;
+            }
+            return rdbLoadIntegerObject(rdb, len, flags, lenptr);
         case RDB_ENC_LZF: return rdbLoadLzfStringObject(rdb, flags, lenptr, allocation_error);
         default: rdbReportCorruptRDB("Unknown RDB string encoding type %llu", len); return NULL;
         }
@@ -679,7 +690,7 @@ static void *rdbGenericLoadStringObjectWithError(rio *rdb,
 }
 
 void *rdbGenericLoadStringObject(rio *rdb, int flags, size_t *lenptr) {
-    return rdbGenericLoadStringObjectWithError(rdb, flags, lenptr, NULL);
+    return rdbGenericLoadStringObjectWithError(rdb, flags, lenptr, NULL, false, NULL);
 }
 
 robj *rdbLoadStringObject(rio *rdb) {
@@ -1983,7 +1994,7 @@ static int rdbLoadRedisStreamIdmpLen(rio *rdb, uint64_t *value) {
  * two counters to the type 21 payload. Valkey has no IDMP implementation.
  * Consume the trailer and report whether any state is discarded. No allocation
  * is based on the untrusted producer or entry counts. */
-static void rdbLogDiscardedRedisStreamIdmp(sds key) {
+void rdbLogDiscardedRedisStreamIdmp(sds key) {
     if (server.hide_user_data_from_log) {
         serverLog(LL_WARNING,
                   "Discarding Redis stream IDMP state: Valkey does not support "
@@ -1994,6 +2005,20 @@ static void rdbLogDiscardedRedisStreamIdmp(sds key) {
                   "support idempotent message producers",
                   key);
     }
+}
+
+static int rdbLoadRedisStreamIdmpString(rio *rdb, bool *allocation_error) {
+    bool integer_encoding_skipped;
+    sds value = rdbGenericLoadStringObjectWithError(rdb,
+                                                    RDB_LOAD_SDS,
+                                                    NULL,
+                                                    allocation_error,
+                                                    true,
+                                                    &integer_encoding_skipped);
+    if (integer_encoding_skipped) return C_OK;
+    if (value == NULL) return C_ERR;
+    sdsfree(value);
+    return C_OK;
 }
 
 static int rdbLoadRedisStreamIdmp(rio *rdb, bool *discarded, bool *allocation_error) {
@@ -2011,24 +2036,18 @@ static int rdbLoadRedisStreamIdmp(rio *rdb, bool *discarded, bool *allocation_er
     bool has_discarded_state = producers != 0 || duration != 100 || max_entries != 100;
     while (producers--) {
         bool string_allocation_error;
-        sds producer =
-            rdbGenericLoadStringObjectWithError(rdb, RDB_LOAD_SDS, NULL, &string_allocation_error);
-        if (producer == NULL) {
+        if (rdbLoadRedisStreamIdmpString(rdb, &string_allocation_error) != C_OK) {
             *allocation_error = string_allocation_error;
             return C_ERR;
         }
-        sdsfree(producer);
 
         uint64_t entries;
         if (rdbLoadRedisStreamIdmpLen(rdb, &entries) != C_OK) return C_ERR;
         while (entries--) {
-            sds iid =
-                rdbGenericLoadStringObjectWithError(rdb, RDB_LOAD_SDS, NULL, &string_allocation_error);
-            if (iid == NULL) {
+            if (rdbLoadRedisStreamIdmpString(rdb, &string_allocation_error) != C_OK) {
                 *allocation_error = string_allocation_error;
                 return C_ERR;
             }
-            sdsfree(iid);
 
             uint64_t ms, seq;
             if (rdbLoadRedisStreamIdmpLen(rdb, &ms) != C_OK ||
@@ -2267,13 +2286,21 @@ int lpValidateIntegrityAndDups(unsigned char *lp, size_t size, int pairs, int al
  * On success a newly allocated object is returned; otherwise, NULL.
  * When the function returns NULL and if 'error' is not NULL, the
  * integer pointed by 'error' is set to the type of error that occurred */
-robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rdbflags, mstime_t now) {
+robj *rdbLoadObject(int rdbtype,
+                    rio *rdb,
+                    sds key,
+                    int dbid,
+                    int *error,
+                    int rdbflags,
+                    mstime_t now,
+                    bool *idmp_discarded) {
     robj *o = NULL, *ele, *dec;
     uint64_t len;
     unsigned int i;
 
     /* Set default error of load object, it will be set to 0 on success. */
     if (error) *error = RDB_LOAD_ERR_OTHER;
+    if (idmp_discarded) *idmp_discarded = false;
 
     if (rdbtype == RDB_TYPE_STRING) {
         /* Read string value */
@@ -3412,10 +3439,14 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
                 return NULL;
             }
             if (discarded) {
-                if (isRestoreContext() || rdbCheckMode || rdb_stream_idmp_discarded_count < 10) {
-                    rdbLogDiscardedRedisStreamIdmp(key);
+                if (idmp_discarded) {
+                    *idmp_discarded = true;
+                } else {
+                    if (rdbCheckMode || rdb_stream_idmp_discarded_count < 10) {
+                        rdbLogDiscardedRedisStreamIdmp(key);
+                    }
+                    if (!rdbCheckMode) rdb_stream_idmp_discarded_count++;
                 }
-                if (!isRestoreContext() && !rdbCheckMode) rdb_stream_idmp_discarded_count++;
             }
         }
     } else if (rdbtype == RDB_TYPE_MODULE_PRE_GA) {
@@ -4222,7 +4253,7 @@ static int rdbLoadRioInternal(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadi
         /* Read key */
         if ((key = rdbGenericLoadStringObject(rdb, RDB_LOAD_SDS, NULL)) == NULL) goto eoferr;
         /* Read value */
-        val = rdbLoadObject(type, rdb, key, db->id, &error, rdbflags, now);
+        val = rdbLoadObject(type, rdb, key, db->id, &error, rdbflags, now, NULL);
 
         /* Check if the key already expired. This function is used when loading
          * an RDB file from disk, either at startup, or when an RDB was

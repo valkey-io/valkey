@@ -79,17 +79,29 @@ tags {"rdb stream external:skip"} {
             assert_equal [expr {$warnings + 1}] [count_log_message 0 "Discarding Redis stream IDMP state"]
         }
 
+        test {RESTORE does not warn when rejecting trailing data after an IDMP trailer} {
+            set warnings [count_log_message 0 "Discarding Redis stream IDMP state"]
+            test_defer [list r debug set-skip-checksum-validation 0]
+            r debug set-skip-checksum-validation 1
+            set dump [binary format H* [dict get $dumps idmp-custom]]
+            set body [string range $dump 0 end-10]
+            set footer [string range $dump end-9 end]
+            assert_error "*Bad data format*" {r restore invalid 0 "$body\x00$footer"}
+            assert_equal 0 [r exists invalid]
+            assert_equal $warnings [count_log_message 0 "Discarding Redis stream IDMP state"]
+        }
+
         test {Strict mode still rejects Redis RDB 13 DUMP payloads} {
-            r config set rdb-version-check strict
+            test_config_set r rdb-version-check strict
             assert_error "*DUMP payload version or checksum are wrong*" {
                 r restore rejected 0 [binary format H* [dict get $dumps plain]]
             }
-            r config set rdb-version-check relaxed
         }
 
         test {IDMP string allocation failures are read errors, not corruption} {
+            test_config_set r loglevel verbose
+            test_defer [list r debug set-skip-checksum-validation 0]
             r debug set-skip-checksum-validation 1
-            r config set loglevel verbose
             set dump [binary format H* [dict get $dumps no-entries]]
             set prefix [string range $dump 0 end-17]
             set footer [string range $dump end-9 end]
@@ -98,12 +110,11 @@ tags {"rdb stream external:skip"} {
             assert_error "*Bad data format*" {r restore oom 0 "$prefix$trailer$footer"}
             assert_equal [expr {$read_errors + 1}] \
                 [count_log_message 0 "Redis stream IDMP metadata loading failed"]
-            r debug set-skip-checksum-validation 0
-            r config set loglevel notice
-        } {OK} {needs:debug}
+        } {} {needs:debug}
 
         test {Truncated Redis stream IDMP trailers fail without replacing an existing key} {
             r set protected value
+            test_defer [list r debug set-skip-checksum-validation 0]
             r debug set-skip-checksum-validation 1
             # Retain the Redis version/footer but truncate at every position
             # in the type-26 object, including both final counters.
@@ -115,10 +126,10 @@ tags {"rdb stream external:skip"} {
                 assert_error "*Bad data format*" {r restore protected 0 $truncated replace}
                 assert_equal value [r get protected]
             }
-            r debug set-skip-checksum-validation 0
-        } {OK} {needs:debug}
+        } {} {needs:debug}
 
         test {Redis IDMP metadata validates integer encodings, counts and payload boundaries} {
+            test_defer [list r debug set-skip-checksum-validation 0]
             r debug set-skip-checksum-validation 1
             set dump [binary format H* [dict get $dumps no-entries]]
             # The fixture ends with duration=100, maxsize=100, zero producers,
@@ -148,6 +159,12 @@ tags {"rdb stream external:skip"} {
             assert_redis_stream_metadata history [dict get $expected no-entries]
             assert_equal [expr {$warnings + 1}] [count_log_message 0 "Discarding Redis stream IDMP state"]
 
+            # Producer and IID strings may use RDB integer encoding.
+            set warnings [count_log_message 0 "Discarding Redis stream IDMP state"]
+            set trailer [binary format H* 4064406401c02a01c00701020000]
+            assert_equal OK [r restore integer-ids 0 "$prefix$trailer$footer"]
+            assert_equal [expr {$warnings + 1}] [count_log_message 0 "Discarding Redis stream IDMP state"]
+
             # Type 26 must never acquire a meaning in Valkey's own namespace.
             set native_footer "[binary format cc 81 0][string repeat \x00 8]"
             assert_error "*Bad data format*" {r restore protected 0 "$prefix$trailer$native_footer" replace}
@@ -160,18 +177,17 @@ tags {"rdb stream external:skip"} {
                 assert_error "*Unsupported foreign data type*" {r restore protected 0 $foreign replace}
                 assert_equal value [r get protected]
             }
-            r debug set-skip-checksum-validation 0
-        } {OK} {needs:debug}
+        } {} {needs:debug}
 
         test {RESTORE rejects Redis type 26 in RDB version 12} {
+            test_defer [list r debug set-skip-checksum-validation 0]
             r debug set-skip-checksum-validation 1
             set dump [binary format H* [dict get $dumps idmp]]
             set body [string range $dump 0 end-10]
             set footer "[binary format cc 12 0][string repeat \x00 8]"
             assert_error "*Bad data format*" {r restore version12 0 "$body$footer"}
             assert_equal 0 [r exists version12]
-            r debug set-skip-checksum-validation 0
-        } {OK} {needs:debug}
+        } {} {needs:debug}
     }
 
     test {valkey-check-rdb understands Redis RDB 13 streams} {
@@ -246,6 +262,7 @@ tags {"repl external:skip tls:skip"} {
             set port [find_available_port $::baseport $::portcount]
             set pid [exec [info nameofexecutable] tests/helpers/fake_primary.tcl \
                          $port $malformed_file [string length $allocation_failure] &]
+            test_defer [list catch [list exec kill $pid]]
             wait_for_condition 50 50 {
                 [ping_server 127.0.0.1 $port]
             } else {
@@ -260,7 +277,6 @@ tags {"repl external:skip tls:skip"} {
                 fail "IDMP allocation failure did not report a recoverable read error: [exec cat [srv 0 stdout]]"
             }
             assert_equal PONG [$replica ping]
-            catch {exec kill $pid}
             $replica replicaof no one
         }
 
@@ -276,6 +292,7 @@ tags {"repl external:skip tls:skip"} {
             set port [find_available_port $::baseport $::portcount]
             set pid [exec [info nameofexecutable] tests/helpers/fake_primary.tcl \
                          $port $partial_file [string length $complete] &]
+            test_defer [list catch [list exec kill $pid]]
             wait_for_condition 50 50 {
                 [ping_server 127.0.0.1 $port]
             } else {
@@ -284,13 +301,9 @@ tags {"repl external:skip tls:skip"} {
 
             set replica [srv 0 client]
             $replica select 0
+            set loglines [count_log_lines 0]
             $replica replicaof 127.0.0.1 $port
-            wait_for_condition 100 50 {
-                [string match {*rdb format from socket, assuming connection error*} \
-                     [exec cat [srv 0 stdout]]]
-            } else {
-                fail "Interrupted full sync did not report a socket read error: [exec cat [srv 0 stdout]]"
-            }
+            wait_for_log_messages 0 {"*Redis stream IDMP metadata loading failed*"} $loglines 100 50
             assert_equal PONG [$replica ping]
             catch {exec kill $pid}
 
@@ -299,6 +312,7 @@ tags {"repl external:skip tls:skip"} {
             set pid [exec [info nameofexecutable] tests/helpers/fake_primary.tcl \
                          $port tests/assets/redis-8.6-idmp.rdb \
                          [string length $complete] &]
+            test_defer [list catch [list exec kill $pid]]
             wait_for_condition 50 50 {
                 [ping_server 127.0.0.1 $port]
             } else {
@@ -314,7 +328,6 @@ tags {"repl external:skip tls:skip"} {
             assert_equal 1 [$replica xlen interrupted]
             assert_equal {f v} [lindex [$replica xrange interrupted - +] 0 1]
             assert_equal PONG [$replica ping]
-            catch {exec kill $pid}
         }
     }
 }

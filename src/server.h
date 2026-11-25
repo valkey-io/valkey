@@ -718,11 +718,11 @@ typedef enum {
     CLUSTER_REPLICA_NO_FAILOVER_IF_EMPTY, /* Refuse automatic failover only while the replica is empty. */
 } cluster_replica_no_failover_policy;
 
-/* Voting policy of a cluster node, see cluster-voter. */
+/* cluster-voter wish; how the cluster acts on it is protocol-dependent. */
 typedef enum {
-    CLUSTER_VOTER_AUTO = 0, /* Promote below the target; demote above it. */
-    CLUSTER_VOTER_NO,       /* Stay a learner. Demote if already a voter. */
-    CLUSTER_VOTER_YES,      /* Promote once caught up, even above the target. */
+    CLUSTER_VOTER_AUTO = 0, /* Let the cluster decide. */
+    CLUSTER_VOTER_NO,       /* This node does not want to be a voter. */
+    CLUSTER_VOTER_YES,      /* This node wants to be a voter. */
 } cluster_voter_policy;
 
 /* Keyspace changes notification classes. Every class is associated with a

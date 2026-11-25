@@ -164,6 +164,7 @@ typedef struct {
     int deferred;          /* Waiting for epoch advance before re-propose */
     uint64_t wait_index;   /* Got UNCHANGED: complete once applied up to this */
     uint64_t min_index;    /* Lowest index our entry can have, see clusterRaftCompletePendingProposal() */
+    uint64_t retry_after;  /* voter-change-pending: retry once last_applied >= this */
 } raftPendingProposal;
 
 /* Leader: a proposal that pre-validation found unchanged, waiting until a
@@ -228,6 +229,7 @@ typedef struct {
     unsigned int todo_broadcast_ae : 1;
     unsigned int todo_retry_proposals : 1;
     unsigned int todo_retry_deferred : 1; /* For proposals that need rebasing of new epoch */
+    unsigned int todo_retry_parked : 1;   /* Parked on voter-change-pending until retry_after */
     unsigned int todo_schedule_failover : 1;
     unsigned int todo_update_replication : 1;
     unsigned int todo_lost_last_slot : 1; /* Our shard lost its last slot, see below */
@@ -493,6 +495,8 @@ static void raftSetVerifiedIndex(uint64_t msg_term, uint64_t verified_index, boo
 static int clusterRaftLeaderHasFreshQuorum(mstime_t now);
 static bool raftEntryAffectsQuorum(int type, sds data);
 static raftQuorumChangeStatus clusterRaftQuorumChangeStatus(int type, sds data);
+static uint64_t raftInFlightQuorumChangeIndex(void);
+static void clusterRaftScheduleParkedRetries(void);
 static clusterNode *clusterRaftSelectPromotionCandidate(void);
 static clusterNode *clusterRaftSelectDemotionCandidate(void);
 static void clusterRaftReconcileVoters(void);
@@ -1070,6 +1074,7 @@ static void clusterRaftPropose(sds entry, void *ctx, void (*callback)(void *ctx,
         pp->propose_time = pp->ctime;
         pp->deferred = 0;
         pp->wait_index = 0;
+        pp->retry_after = wait_voter_change ? raftInFlightQuorumChangeIndex() : 0;
         /* Our entry will come after everything that's committed, and after
          * what a leader already said was unchanged. On the leader, after
          * its whole log. */
@@ -1091,6 +1096,7 @@ static void clusterRaftPropose(sds entry, void *ctx, void (*callback)(void *ctx,
             break;
         }
         listAddNodeTail(rs->pending_proposals, pp);
+        if (wait_voter_change) clusterRaftScheduleParkedRetries();
     }
 
     if (rs->role == RAFT_ROLE_LEADER && clusterRaftTransferSent()) {
@@ -1408,10 +1414,16 @@ static int clusterRaftProcessPropose(clusterLink *link, int argc, sds *argv) {
         pre_result = RAFT_RESULT_REJECTED;
     }
     if (pre_result != RAFT_RESULT_OK) {
-        /* Send REJECT back to the proposing follower so it can unblock the client. */
+        /* REJECT <reason> <index> <entry>. voter-change-pending carries the
+         * in-flight voter-change index so the follower can park and retry
+         * once it has applied that entry; other reasons carry last_applied. */
         if (link) {
+            uint64_t reject_index = pre_result == RAFT_RESULT_VOTER_CHANGE_PENDING
+                                        ? raftInFlightQuorumChangeIndex()
+                                        : rs->last_applied;
             sds msg = wireNewMsg("REJECT");
-            msg = sdscatfmt(msg, " %s ", raftProposalResultWireReason(pre_result));
+            msg = sdscatfmt(msg, " %s %U ", raftProposalResultWireReason(pre_result),
+                            (unsigned long long)reject_index);
             msg = sdscatlen(msg, entry, sdslen(entry));
             msg = wireFinishMsg(msg);
             clusterRaftSendMsg(link, msg);
@@ -1500,8 +1512,12 @@ static void clusterRaftResolvePendingRead(raftPendingRead *r) {
         msg = sdscatfmt(msg, " %U %s %S", (unsigned long long)rs->last_applied, raftEntryTypeName(r->type), r->data);
         clusterRaftReplyProposer(r->proposer, wireFinishMsg(msg));
     } else {
+        uint64_t reject_index = result == RAFT_RESULT_VOTER_CHANGE_PENDING
+                                    ? raftInFlightQuorumChangeIndex()
+                                    : rs->last_applied;
         sds msg = wireNewMsg("REJECT");
-        msg = sdscatfmt(msg, " %s %s %S", raftProposalResultWireReason(result), raftEntryTypeName(r->type), r->data);
+        msg = sdscatfmt(msg, " %s %U %s %S", raftProposalResultWireReason(result),
+                        (unsigned long long)reject_index, raftEntryTypeName(r->type), r->data);
         clusterRaftReplyProposer(r->proposer, wireFinishMsg(msg));
     }
 }
@@ -1588,23 +1604,42 @@ static int clusterRaftProcessUnchanged(clusterLink *link, int argc, sds *argv) {
  * rejects a forwarded PROPOSE. We match it against our
  * pending_proposals and fire the callback with an error so the client
  * gets an immediate reply instead of hanging until timeout.
- * Format: "REJECT <reason> <type> <data...>"
+ * Format: "REJECT <reason> <index> <type> <data...>"
  * <reason> is a single word: "conflict" (retryable epoch), "rejected" (terminal),
- * "voter-change-pending" (retry after a voter change applies), etc. */
+ * "voter-change-pending" (retry after applying <index>), etc. */
 static int clusterRaftProcessReject(clusterLink *link, int argc, sds *argv) {
     UNUSED(link);
 
-    /* argv[0]="REJECT", argv[1]=reason, argv[2]=type, argv[3..]=data */
-    if (argc < 3) return 1;
+    /* argv[0]="REJECT", argv[1]=reason, argv[2]=index, argv[3]=type, argv[4..]=data */
+    if (argc < 4) return 1;
 
     const char *reason = argv[1];
-    int type = raftEntryTypeByName(argv[2]);
+    uint64_t index = strtoull(argv[2], NULL, 10);
+    int type = raftEntryTypeByName(argv[3]);
     if (type < 0) return 1;
 
-    int data_argc = argc - 3;
-    sds data = (data_argc > 0) ? sdsjoinsds(argv + 3, data_argc, " ", 1) : sdsempty();
+    int data_argc = argc - 4;
+    sds data = (data_argc > 0) ? sdsjoinsds(argv + 4, data_argc, " ", 1) : sdsempty();
 
     RaftProposalResult result = raftProposalResultFromWire(reason);
+
+    if (result == RAFT_RESULT_VOTER_CHANGE_PENDING) {
+        /* Park until last_applied catches up. If AE already applied that
+         * entry, the retry runs from beforeSleep. */
+        clusterRaftState *rs = RAFT_STATE();
+        listIter li;
+        listNode *ln;
+        listRewind(rs->pending_proposals, &li);
+        while ((ln = listNext(&li)) != NULL) {
+            raftPendingProposal *pp = listNodeValue(ln);
+            if (pp->type != type || sdscmp(pp->data, data)) continue;
+            /* 0 means not parked; the in-flight entry is never index 0. */
+            pp->retry_after = index ? index : 1;
+        }
+        clusterRaftScheduleParkedRetries();
+        sdsfree(data);
+        return 1;
+    }
 
     clusterRaftCompletePendingProposal(type, data, result, 0);
     sdsfree(data);
@@ -1897,6 +1932,34 @@ static raftQuorumChangeStatus clusterRaftQuorumChangeStatus(int type, sds data) 
     return RAFT_QC_NONE;
 }
 
+/* Latest unapplied quorum-changing log index, or last_applied if none.
+ * Never returns 0: that means "not parked" on pending proposals. */
+static uint64_t raftInFlightQuorumChangeIndex(void) {
+    clusterRaftState *rs = RAFT_STATE();
+    uint64_t last = 0;
+    for (uint64_t idx = rs->last_applied + 1; idx <= raftLogLastIndex(); idx++) {
+        raftLogEntry *e = raftLogGet(idx);
+        if (e && raftEntryAffectsQuorum(e->type, e->data)) last = e->index;
+    }
+    if (last) return last;
+    return rs->last_applied ? rs->last_applied : 1;
+}
+
+/* Retry proposals whose retry_after is now applied, from beforeSleep. */
+static void clusterRaftScheduleParkedRetries(void) {
+    clusterRaftState *rs = RAFT_STATE();
+    listIter li;
+    listNode *ln;
+    listRewind(rs->pending_proposals, &li);
+    while ((ln = listNext(&li)) != NULL) {
+        raftPendingProposal *pp = listNodeValue(ln);
+        if (pp->retry_after && rs->last_applied >= pp->retry_after) {
+            rs->todo_retry_parked = 1;
+            return;
+        }
+    }
+}
+
 /* Complete pending proposals matching type+data. For an applied entry, the
  * result comes from applying it, and it completes every one whose min_index
  * it isn't below, so that the entry isn't older than the proposal. An older
@@ -1946,8 +2009,6 @@ static void clusterRaftCompletePendingProposal(int type, sds data, RaftProposalR
 static void raftLogApply(raftLogEntry *e) {
     clusterRaftState *rs = RAFT_STATE();
     RaftProposalResult entry_result = RAFT_RESULT_OK;
-    /* NODE_FORGET removes the node; classify before apply mutates membership. */
-    int quorum_change = raftEntryAffectsQuorum(e->type, e->data);
     switch (e->type) {
     case RAFT_ENTRY_NODE_JOIN: {
         /* data: "<node-id> <address> <learner|voter>" */
@@ -2208,10 +2269,8 @@ static void raftLogApply(raftLogEntry *e) {
     /* Check pending proposals for a match and remove it. */
     clusterRaftCompletePendingProposal(e->type, e->data, entry_result, e->index);
 
-    /* Proposals parked on voter-change-pending retry once this change applies. */
-    if (quorum_change && listLength(rs->pending_proposals) > 0) {
-        rs->todo_retry_proposals = 1;
-    }
+    /* Only proposals parked on this (or an earlier) retry_after retry. */
+    if (listLength(rs->pending_proposals) > 0) clusterRaftScheduleParkedRetries();
 
     if (e->type == RAFT_ENTRY_SLOT_CHANGE && entry_result == RAFT_RESULT_OK) {
         /* Complete our import callback before revalidating ownership. */
@@ -2841,6 +2900,7 @@ static int clusterRaftProcessInstallSnapshot(clusterLink *link, int argc, sds *a
     rs->commit_index = snap_index;
     rs->snapshot_term = snap_term;
     clusterRaftCompleteUnchangedProposals();
+    clusterRaftScheduleParkedRetries();
 
     serverLog(LL_NOTICE, "Installed snapshot from %.40s (index=%llu, term=%llu).",
               argv[1], (unsigned long long)snap_index, (unsigned long long)snap_term);
@@ -3325,6 +3385,8 @@ static void clusterRaftSendProposal(raftPendingProposal *pp, clusterLink *leader
 /* Retry proposals from the pending list.
  * Deferred proposals (waiting for epoch advance) are always included — they
  * self-guard via raftRefreshEpochInData() and are skipped if not ready.
+ * Parked voter-change-pending proposals whose retry_after is applied are
+ * retried even when include_pending is 0.
  * include_pending: if set, also retry pending proposals (leader-change replay). */
 static void clusterRaftRetryProposals(int include_pending) {
     clusterRaftState *rs = RAFT_STATE();
@@ -3346,16 +3408,26 @@ static void clusterRaftRetryProposals(int include_pending) {
     listRewind(rs->pending_proposals, &li);
     while ((ln = listNext(&li)) != NULL) {
         raftPendingProposal *pp = listNodeValue(ln);
+        int parked_ready = 0;
 
-        /* Already answered, waiting for us to catch up. */
+        /* Already answered UNCHANGED, waiting for us to catch up. */
         if (pp->wait_index) continue;
+
+        if (include_pending) {
+            /* Leader change / reconnect: the waited-for index may be gone. */
+            pp->retry_after = 0;
+        } else if (pp->retry_after) {
+            if (rs->last_applied < pp->retry_after) continue;
+            pp->retry_after = 0;
+            parked_ready = 1;
+        }
 
         /* For deferred entries, update to latest shard epoch. */
         if (pp->deferred) {
             if (!raftRefreshEpochInData(pp->type, &pp->data)) continue;
 
             pp->deferred = 0;
-        } else if (!include_pending) {
+        } else if (!include_pending && !parked_ready) {
             continue;
         }
 
@@ -3363,7 +3435,10 @@ static void clusterRaftRetryProposals(int include_pending) {
             raftQuorumChangeStatus status = clusterRaftQuorumChangeStatus(pp->type, pp->data);
 
             /* A different membership transition is in flight: retry after it applies. */
-            if (status == RAFT_QC_CONFLICT) continue;
+            if (status == RAFT_QC_CONFLICT) {
+                pp->retry_after = raftInFlightQuorumChangeIndex();
+                continue;
+            }
 
             /* The identical transition is already in the log; it will
              * complete the pending proposal when applied. */
@@ -3376,7 +3451,10 @@ static void clusterRaftRetryProposals(int include_pending) {
                 continue;
             }
             if (pre_result != RAFT_RESULT_OK) {
-                if (pre_result == RAFT_RESULT_VOTER_CHANGE_PENDING) continue;
+                if (pre_result == RAFT_RESULT_VOTER_CHANGE_PENDING) {
+                    pp->retry_after = raftInFlightQuorumChangeIndex();
+                    continue;
+                }
                 if (pre_result == RAFT_RESULT_STALE_EPOCH && pp->retries > 0) {
                     pp->retries--;
                     pp->deferred = 1;
@@ -3840,10 +3918,11 @@ static void clusterRaftBeforeSleep(bool blocked) {
     }
     clusterRaftProcessPendingReads();
 
-    if (rs->todo_retry_deferred || rs->todo_retry_proposals) {
+    if (rs->todo_retry_deferred || rs->todo_retry_proposals || rs->todo_retry_parked) {
         int include_pending = rs->todo_retry_proposals;
         rs->todo_retry_deferred = 0;
         rs->todo_retry_proposals = 0;
+        rs->todo_retry_parked = 0;
         clusterRaftRetryProposals(include_pending);
     }
 

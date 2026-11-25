@@ -120,12 +120,12 @@ proc raft_connect_fake_node {host cport fake_id fake_addr} {
 proc raft_reply_ae_ack {fd ae_msg repl_offset {last_index ""}} {
     set lines [split $ae_msg "\n"]
     set fields [split [lindex $lines 0] " "]
-    # AE <leader-id> <term> <prev-log-idx> <prev-log-term> <commit> <count>
+    # AE <leader-id> <term> <prev-log-idx> <prev-log-term> <commit> <round> <count>
     set term [lindex $fields 2]
     if {$last_index eq ""} {
-        set last_index [expr {[lindex $fields 3] + [lindex $fields 6]}]
+        set last_index [expr {[lindex $fields 3] + [lindex $fields 7]}]
     }
-    raft_send $fd "AE_ACK $term 1 $last_index $repl_offset"
+    raft_send $fd "AE_ACK $term 1 $last_index [lindex $fields 6] $repl_offset"
     return $last_index
 }
 
@@ -198,15 +198,18 @@ proc raft_connect_fake_node {host cport fake_id fake_addr} {
 }
 
 # Parse an AE message and reply with AE_ACK.
-# Returns the last log index after applying the entries.
-proc raft_reply_ae_ack {fd ae_msg repl_offset} {
+# last_index defaults to the AE's prev-log-idx plus its entry count; pass
+# it explicitly to simulate a lagging follower.
+proc raft_reply_ae_ack {fd ae_msg repl_offset {last_index ""}} {
     set lines [split $ae_msg "\n"]
     set fields [split [lindex $lines 0] " "]
     # AE <leader-id> <term> <prev-log-idx> <prev-log-term> <commit> <round> <count>
     set term [lindex $fields 2]
     set prev_idx [lindex $fields 3]
     set count [lindex $fields 7]
-    set last_index [expr {$prev_idx + $count}]
+    if {$last_index eq ""} {
+        set last_index [expr {$prev_idx + $count}]
+    }
     raft_send $fd "AE_ACK $term 1 $last_index [lindex $fields 6] $repl_offset"
     return $last_index
 }
@@ -1063,6 +1066,31 @@ proc raft_join_fake_follower {fake_id fake_shard} {
     return $fd
 }
 
+# CLUSTER ADDVOTER is gone. Announce cluster-voter yes for the fake node,
+# ACK until auto-promote applies, and return the leader's last applied index.
+proc raft_promote_fake_follower {fd f_id} {
+    set addr [dict get [cluster_get_node_by_id 0 $f_id] addr]
+    if {![regsub {voter=no} $addr {voter=yes} addr]} {
+        if {[string first "voter=" $addr] < 0} {
+            append addr ",voter=yes"
+        }
+    }
+    raft_send $fd "PROPOSE NODE_INFO $f_id $addr noflags"
+    set deadline [expr {[clock milliseconds] + 5000}]
+    while {[clock milliseconds] < $deadline} {
+        if {![catch {set reply [raft_recv $fd 100]}]} {
+            if {[string match "AE *" $reply]} {
+                raft_reply_ae_ack $fd $reply 0
+            }
+        }
+        if {![cluster_has_flag [cluster_get_node_by_id 0 $f_id] learner] &&
+            [CI 0 cluster_size] == 2} {
+            return [CI 0 cluster_raft_last_applied]
+        }
+    }
+    error "learner was not promoted size=[CI 0 cluster_size]"
+}
+
 test "Raft proto: leader sends REPL_OFFSETS after follower offset changes" {
     start_server {overrides {cluster-enabled yes cluster-protocol raft cluster-node-timeout 1000}} {
         set fake_id [string repeat "a" 40]
@@ -1707,12 +1735,7 @@ test "Raft proto: the leader answers UNCHANGED only after a quorum acks a later 
         raft_ack_until_idle $fd
 
         # Make F a voter, so the quorum is both of us.
-        set rd [valkey_deferring_client]
-        $rd cluster addvoter $f_id
-        assert_equal OK [$rd read]
-        $rd close
-        assert_equal 2 [CI 0 cluster_size]
-        set last [raft_ack_until_idle $fd]
+        set last [raft_promote_fake_follower $fd $f_id]
         set commit [CI 0 cluster_raft_commit_index]
         set term [CI 0 cluster_raft_current_term]
 
@@ -1751,11 +1774,7 @@ test "Raft proto: a read confirmed by the ACK that commits a change isn't unchan
         raft_ack_until_idle $fd
 
         # Make F a voter, so the quorum is both of us.
-        set rd [valkey_deferring_client]
-        $rd cluster addvoter $f_id
-        assert_equal OK [$rd read]
-        $rd close
-        set last [raft_ack_until_idle $fd]
+        set last [raft_promote_fake_follower $fd $f_id]
         set term [CI 0 cluster_raft_current_term]
 
         # F forwards a SETSLOT NODE for the current owner, then a change of
@@ -1792,11 +1811,7 @@ test "Raft proto: the leader completes its proposal only with its own entry" {
         raft_ack_until_idle $fd
 
         # Make F a voter, so nothing commits without its ACK.
-        set rd [valkey_deferring_client]
-        $rd cluster addvoter $f_id
-        assert_equal OK [$rd read]
-        $rd close
-        set last [raft_ack_until_idle $fd]
+        set last [raft_promote_fake_follower $fd $f_id]
         set term [CI 0 cluster_raft_current_term]
 
         # F proposes slot 1 to the node, then to F. Then a client proposes
@@ -1840,11 +1855,7 @@ test "Raft proto: a proposal completes after its leader's log tail is replaced" 
         raft_ack_until_idle $fd
 
         # Make F a voter, so nothing commits without its ACK.
-        set rd [valkey_deferring_client]
-        $rd cluster addvoter $f_id
-        assert_equal OK [$rd read]
-        $rd close
-        set last [raft_ack_until_idle $fd]
+        set last [raft_promote_fake_follower $fd $f_id]
         set term [CI 0 cluster_raft_current_term]
 
         # Slots 1 and 2 are appended, but not committed.
@@ -1898,7 +1909,7 @@ test "Raft proto: the leader doesn't append a slot change that changes nothing" 
         foreach ranges {16384 {0 16384}} {
             set entry "SLOT_CHANGE $node_id 1 $node_id 1 $ranges"
             raft_send $fd "PROPOSE $entry"
-            assert_equal "REJECT rejected $entry" [raft_recv_until $fd "REJECT *"]
+            assert_equal "REJECT rejected $last $entry" [raft_recv_until $fd "REJECT *"]
         }
         after 100
         assert_equal $last [CI 0 cluster_raft_commit_index]
@@ -2207,16 +2218,17 @@ start_cluster 3 0 {overrides {cluster-protocol raft cluster-node-timeout 15000}}
         set fd1 [raft_connect_fake_node 127.0.0.1 $cport $f1 $a1]
         raft_send $fd1 "PROPOSE NODE_JOIN $f1 $a1 voter"
         after 500
+        set idx [expr {[CI 0 cluster_raft_last_applied] + 1}]
 
         set fd2 [raft_connect_fake_node 127.0.0.1 $cport $f2 $a2]
         raft_send $fd2 "PROPOSE NODE_JOIN $f2 $a2 voter"
         set reply [raft_recv $fd2 2000]
-        assert_match "REJECT voter-change-pending *" $reply
+        assert_match "REJECT voter-change-pending $idx NODE_JOIN *" $reply
 
         # Same node, different payload is CONFLICT, not SAME.
         raft_send $fd1 "PROPOSE NODE_JOIN $f1 $a2 voter"
         set reply [raft_recv $fd1 2000]
-        assert_match "REJECT voter-change-pending *" $reply
+        assert_match "REJECT voter-change-pending $idx NODE_JOIN *" $reply
         assert_equal 1 [raft_inflight_count [srv 0 client] NODE_JOIN]
 
         # Re-proposing the in-flight NODE_JOIN is SAME, not a second entry.
@@ -2231,6 +2243,44 @@ start_cluster 3 0 {overrides {cluster-protocol raft cluster-node-timeout 15000}}
         close $fd2
         resume_process [srv -1 pid]
         resume_process [srv -2 pid]
+    }
+}
+
+start_cluster 3 0 {overrides {cluster-protocol raft cluster-node-timeout 15000}} {
+    test "Raft proto: parked voter-change-pending retries after apply" {
+        # Two quorum changes from the leader: the second parks until the
+        # first applies, then retries. Pause followers so the first cannot
+        # commit until we resume.
+        set id1 [R 1 CLUSTER MYID]
+        set id2 [R 2 CLUSTER MYID]
+        assert_equal OK [R 1 CLUSTER FLUSHSLOTS]
+        assert_equal OK [R 2 CLUSTER FLUSHSLOTS]
+
+        pause_process [srv -1 pid]
+        pause_process [srv -2 pid]
+        set c1 [valkey_deferring_client]
+        $c1 CLUSTER FORGET $id1
+        after 400
+        assert_equal 1 [raft_inflight_count [srv 0 client] NODE_FORGET]
+
+        set c2 [valkey_deferring_client]
+        $c2 CLUSTER FORGET $id2
+        after 400
+        assert_equal 1 [raft_inflight_count [srv 0 client] NODE_FORGET]
+
+        resume_process [srv -1 pid]
+        resume_process [srv -2 pid]
+        wait_for_condition 100 50 {
+            [CI 0 cluster_size] == 1
+        } else {
+            fail "parked FORGET did not retry: size=[CI 0 cluster_size]"
+        }
+        assert_equal OK [$c1 read]
+        assert_equal OK [$c2 read]
+        $c1 close
+        $c2 close
+        pause_process [srv -1 pid]
+        pause_process [srv -2 pid]
     }
 }
 

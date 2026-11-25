@@ -86,12 +86,14 @@ PROPOSE <entry>
     proposal. A follower can still match an older identical entry that
     was committed before the proposal, if it hadn't learned that yet.
 
-REJECT <reason> <entry>
+REJECT <reason> <index> <entry>
     Reply to PROPOSE when the leader's pre-validation fails. <reason> is
     "conflict" (stale shard epoch; the proposer retries with fresh
     epochs), "transfer" (the leader is handing off leadership; the
-    proposer retries with the new leader) or "rejected" (the client gets
-    an error). The entry is included so the proposer can match it.
+    proposer retries with the new leader), "rejected" (the client gets
+    an error) or "voter-change-pending" (another voter change is in
+    flight). <index> is the in-flight voter-change log index for
+    voter-change-pending, otherwise last_applied.
 
 UNCHANGED <index> <entry>
     Reply to PROPOSE for an entry that wouldn't change anything, as found
@@ -1018,9 +1020,10 @@ Only `STALE_SHARD_EPOCH_REJECTION_MSG` triggers retry. Other errors
 (format errors, invalid state) are forwarded to the client immediately.
 
 When the leader rejects a forwarded proposal at pre-validation, it sends
-a `REJECT <reason> <type> <data...>` message back. The reason is a token:
-`conflict` (stale epoch, retryable), `transfer` (retried with the new
-leader) or `rejected` (permanent error).
+a `REJECT <reason> <index> <type> <data...>` message back. The reason is a
+token: `conflict` (stale epoch, retryable), `transfer` (retried with the new
+leader), `voter-change-pending` (retry after applying `<index>`), or
+`rejected` (permanent error).
 
 ### Entries that don't carry an epoch
 

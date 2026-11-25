@@ -566,27 +566,13 @@ leader's last log index. `CLUSTER FORGET` of a voter can still shrink
 the set down to one node. Afterwards the controller promotes another
 eligible `auto` or `yes` learner when one exists.
 
-To avoid overlapping membership transitions, the leader enforces **at
-most one quorum-changing entry in flight**, where a transition's identity
-is its entry type plus the target node id (the first `CLUSTER_NAMELEN`
-bytes of the entry data). The check scans `(last_applied, lastIndex]`,
-which is every appended entry that has not been applied yet, including
-entries that are not committed yet, and classifies the candidate as:
-
-- `NONE` — no quorum-changing entry in flight; proceed with full
-  pre-validation.
-- `SAME` — the identical transition is already in the log. The leader
-  does not append another copy. A local caller, a follower retrying
-  `PROPOSE`, and a pending proposal replayed after a leader change all
-  wait for that entry to be applied. The re-sent `PROPOSE` is not
-  rejected: `match_index` is 0 until the next `AE_ACK` after an election,
-  so the catch-up check does not describe this entry.
-- `CONFLICT` — a different transition is in flight; reject.
-
-`CONFLICT` is enforced in `clusterRaftPreValidate`. `SAME` is handled in
-`clusterRaftPropose`, `clusterRaftProcessPropose`, and the leader branch
-of `clusterRaftRetryProposals`. Every pending proposal with that
-type and data is completed when the existing entry is applied.
+To avoid overlapping membership transitions, the leader allows **at
+most one unapplied quorum-changing entry at a time**. A transition is
+identified by its entry type and target node. Learner joins do not
+change quorum and are not serialized this way. If the same transition
+is already in the log, the leader does not append another copy;
+callers wait for the existing entry to apply. A different transition
+is rejected until that entry is applied.
 
 ## Failure Detection
 

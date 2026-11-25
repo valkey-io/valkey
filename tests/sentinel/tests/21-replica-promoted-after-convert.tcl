@@ -4,8 +4,8 @@
 
 source "../tests/includes/init-tests.tcl"
 
-set replica_id 1
-set replica_port [RPort $replica_id]
+set ::replica_id 1
+set ::replica_port [RPort $::replica_id]
 
 proc replica_field_from_sentinel_0 {port field} {
     foreach replica [S 0 SENTINEL REPLICAS mymaster] {
@@ -53,12 +53,12 @@ test "Replica promoted again right after +convert-to-slave is not demoted at onc
     # With the default period, the next INFO comes 10s after the one that
     # triggers +convert-to-slave, leaving time to promote the replica again.
     S 0 SENTINEL DEBUG info-period 10000
-    R $replica_id replicaof no one
+    R $::replica_id replicaof no one
 
     # Sentinel 0 sees the replica as a primary and, after the wait,
     # converts it back to replica.
     wait_for_condition 3000 10 {
-        [RI $replica_id role] eq {slave}
+        [RI $::replica_id role] eq {slave}
     } else {
         fail "Sentinel did not convert the replica back"
     }
@@ -72,7 +72,7 @@ test "Replica promoted again right after +convert-to-slave is not demoted at onc
     assert_not_demoted_after_next_info $promoted
 
     wait_for_condition 3000 10 {
-        [RI $replica_id role] eq {slave}
+        [RI $::replica_id role] eq {slave}
     } else {
         fail "Sentinel did not eventually convert the replica back"
     }
@@ -80,9 +80,9 @@ test "Replica promoted again right after +convert-to-slave is not demoted at onc
 
 test "INFO replies sent before +convert-to-slave are ignored" {
     S 0 SENTINEL DEBUG info-period 2000
-    R $replica_id replicaof no one
+    R $::replica_id replicaof no one
     wait_for_condition 1000 10 {
-        [replica_field_from_sentinel_0 $replica_port role-reported] eq {master}
+        [replica_field_from_sentinel_0 $::replica_port role-reported] eq {master}
     } else {
         fail "Sentinel did not see the replica as primary"
     }
@@ -90,11 +90,11 @@ test "INFO replies sent before +convert-to-slave are ignored" {
     # While the instance sleeps, Sentinel keeps sending INFO. When it wakes up,
     # the first reply triggers +convert-to-slave and the other ones, sent
     # before the REPLICAOF, report the instance as primary.
-    R $replica_id debug sleep 9
+    R $::replica_id debug sleep 9
     S 0 SENTINEL DEBUG info-period 10000
 
     wait_for_condition 1000 10 {
-        [RI $replica_id role] eq {slave}
+        [RI $::replica_id role] eq {slave}
     } else {
         fail "Sentinel did not convert the replica back"
     }
@@ -106,7 +106,7 @@ test "INFO replies sent before +convert-to-slave are ignored" {
     assert_not_demoted_after_next_info $promoted
 
     wait_for_condition 3000 10 {
-        [RI $replica_id role] eq {slave}
+        [RI $::replica_id role] eq {slave}
     } else {
         fail "Sentinel did not eventually convert the replica back"
     }

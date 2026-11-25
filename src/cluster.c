@@ -250,6 +250,7 @@ void clusterUpdateMyselfFlags(void) {
      * only the leader turns it into ADD_VOTER or DEL_VOTER. */
     if (myself->voter_policy != server.cluster_voter) {
         myself->voter_policy = server.cluster_voter;
+        updated |= CLUSTER_UPDATED_VOTER;
     }
     clusterNotifyMyselfUpdated(updated);
 }

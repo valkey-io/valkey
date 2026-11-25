@@ -762,7 +762,10 @@ static void _addBulkStrRefToToList(client *c, const void *payload, size_t len) {
 }
 
 void _addReplyToBufferOrList(client *c, const char *s, size_t len) {
-    if (c->flag.close_after_reply) return;
+    /* An earlier append of the same reply may have scheduled the client to
+     * close (output buffer limit, or a replica generating a reply), so stop
+     * buffering the remaining pieces. */
+    if (c->flag.close_after_reply || c->flag.close_asap) return;
 
     /* Replicas should normally not cause any writes to the reply buffer. In case a rogue replica sent a command on the
      * replication link that caused a reply to be generated we'll simply disconnect it.
@@ -1551,12 +1554,8 @@ static void _addReplyBulkCBufferFused(client *c, const void *p, size_t len) {
         _addReplyToBufferOrList(c, buf, (size_t)(dst - buf));
         return;
     }
-    /* Each append may schedule the client to close, e.g. on reaching the
-     * output buffer limit; don't buffer the remaining pieces in that case. */
     _addReplyLongLongWithPrefix(c, len, '$');
-    if (c->flag.close_asap) return;
     _addReplyToBufferOrList(c, p, len);
-    if (c->flag.close_asap) return;
     _addReplyToBufferOrList(c, "\r\n", 2);
 }
 

@@ -497,9 +497,15 @@ static int reading_config_file;
 static int config_load_depth;
 
 /* A `dir` that failed chdir while reading the config file. It is only fatal if
- * no later `dir` line fixes it, so an included file can be overridden. */
-static char pending_dir[PATH_MAX];
-static char pending_dir_err[128];
+ * no later `dir` line fixes it, so an included file can be overridden.
+ * pending_dir_err keeps the line context so the error reads as it did when
+ * the failure aborted on the spot. */
+static sds pending_dir;
+static sds pending_dir_err;
+
+/* The config line being applied, for errors reported after it was parsed. */
+static const char *config_cur_line;
+static int config_cur_linenum;
 
 void loadServerConfigFromString(sds config) {
     deprecatedConfig deprecated_configs[] = {
@@ -526,6 +532,8 @@ void loadServerConfigFromString(sds config) {
     for (i = 0; i < totlines; i++) {
         linenum = i + 1;
         lines[i] = sdstrim(lines[i], " \t\r\n");
+        config_cur_line = lines[i];
+        config_cur_linenum = linenum;
 
         /* Skip comments and blank lines */
         if (lines[i][0] == '#' || lines[i][0] == '\0') continue;
@@ -596,10 +604,9 @@ void loadServerConfigFromString(sds config) {
         if (!strcasecmp(argv[0], "include") && argc == 2) {
             /* A relative path would resolve against the directory we failed
              * to leave, so it could load the wrong file or match nothing. */
-            if (pending_dir[0] != '\0' && argv[1][0] != '/') {
-                snprintf(buf, sizeof(buf), "Can't include a relative path after failing to chdir to '%s': %s",
-                         pending_dir, pending_dir_err);
-                err = buf;
+            if (pending_dir && argv[1][0] != '/') {
+                err = sdscatprintf(sdsempty(), "Can't include a relative path after failing to chdir to '%s'",
+                                   pending_dir);
                 goto loaderr;
             }
             loadServerConfig(argv[1], 0, NULL);
@@ -679,9 +686,8 @@ void loadServerConfigFromString(sds config) {
         return;
     }
 
-    if (pending_dir[0] != '\0') {
-        snprintf(buf, sizeof(buf), "Can't chdir to '%s': %s", pending_dir, pending_dir_err);
-        err = buf;
+    if (pending_dir) {
+        err = pending_dir_err;
         goto loaderr;
     }
 
@@ -3057,16 +3063,26 @@ static int setConfigDirOption(standardConfig *config, sds *argv, int argc, const
         *err = "dir can't be empty";
         return 0;
     }
+    /* A relative dir would resolve against the directory we failed to leave. */
+    if (pending_dir && argv[0][0] != '/') {
+        *err = "Can't use a relative dir after a dir that failed to chdir";
+        return 0;
+    }
     if (chdir(argv[0]) == -1) {
         if (config_load_depth > 0) {
-            snprintf(pending_dir, sizeof(pending_dir), "%s", argv[0]);
-            snprintf(pending_dir_err, sizeof(pending_dir_err), "%s", strerror(errno));
+            sdsfree(pending_dir);
+            sdsfree(pending_dir_err);
+            pending_dir = sdsnew(argv[0]);
+            pending_dir_err = sdscatprintf(sdsempty(), "Reading the configuration file, at line %d\n>>> '%s'\n%s",
+                                           config_cur_linenum, config_cur_line, strerror(errno));
             return 1;
         }
         *err = strerror(errno);
         return 0;
     }
-    pending_dir[0] = '\0';
+    sdsfree(pending_dir);
+    sdsfree(pending_dir_err);
+    pending_dir = pending_dir_err = NULL;
     return 1;
 }
 

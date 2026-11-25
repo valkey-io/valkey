@@ -1961,9 +1961,26 @@ start_server {tags {"introspection"}} {
         set bad [file join $tmp nonexistent]
         write_file $base "dir $tmp\n"
         set conf [file normalize [tmpfile override.conf]]
-        write_file $conf "include $base\ndir $bad\n"
+        write_file $conf "include $base\ndir $bad\nport 0\n"
         catch {exec $::VALKEY_SERVER_BIN $conf} err
-        assert_match "*Can't chdir to '$bad': No such file or directory*" $err
+        assert_match "*at line 2*>>> 'dir $bad'*No such file or directory*" $err
+    } {} {external:skip}
+
+    test {config file - relative dir after a failed dir is fatal} {
+        set tmp [file normalize [tmpdir include_reldir]]
+        set bad [file join $tmp nonexistent]
+        set conf [file normalize [tmpfile override.conf]]
+        write_file $conf "dir $bad\ndir ./\nport 0\n"
+        catch {exec $::VALKEY_SERVER_BIN $conf} err
+        assert_match "*at line 2*>>> 'dir ./'*Can't use a relative dir after a dir that failed to chdir*" $err
+    } {} {external:skip}
+
+    test {config file - forkless-policy in an include is checked against the final forkless-infrastructure-enabled} {
+        set base [file normalize [tmpfile base.conf]]
+        write_file $base "forkless-policy prefer-forkless\n"
+        start_server [list config_lines [list include $base forkless-infrastructure-enabled yes]] {
+            assert_equal {forkless-policy prefer-forkless} [r config get forkless-policy]
+        }
     } {} {external:skip}
 
     # Config file at this point is at a weird state, and includes all

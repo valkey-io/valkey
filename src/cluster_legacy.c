@@ -1597,7 +1597,7 @@ void clusterUpdateMyselfReplicaPriority(void) {
 void clusterInit(void) {
     int saveconf = 0;
 
-    server.cluster = zmalloc(sizeof(struct clusterState));
+    server.cluster = zcalloc(sizeof(struct clusterState));
     server.cluster->myself = NULL;
     server.cluster->currentEpoch = 0;
     server.cluster->state = CLUSTER_FAIL;
@@ -1610,6 +1610,8 @@ void clusterInit(void) {
     server.cluster->nodes_black_list = dictCreate(&clusterNodesBlackListDictType);
     server.cluster->migrating_slots_to = dictCreate(&clusterSlotDictType);
     server.cluster->importing_slots_from = dictCreate(&clusterSlotDictType);
+    /* Must precede clusterLoadConfig(), which can panic. The crash report reads the job list. */
+    initClusterSlotMigrationJobList();
     server.cluster->failover_auth_time = 0;
     server.cluster->failover_auth_count = 0;
     server.cluster->failover_auth_rank = 0;
@@ -1670,9 +1672,6 @@ void clusterInit(void) {
     /* Register our own rdb aux fields */
     serverAssert(rdbRegisterAuxField("cluster-slot-states", clusterEncodeOpenSlotsAuxField,
                                      clusterDecodeOpenSlotsAuxField) == C_OK);
-
-    /* Initialize list for slot migration jobs. */
-    initClusterSlotMigrationJobList();
 
     /* Set myself->port/cport/pport to my listening ports, we'll just need to
      * discover the IP address via MEET messages. */

@@ -4,6 +4,131 @@
 
 source tests/support/cluster_raft.tcl
 
+# Build a raft wire message: "RAFT" + 4-byte big-endian length + payload.
+proc raft_msg {payload} {
+    set len [expr {8 + [string length $payload]}]
+    set hdr "RAFT"
+    append hdr [binary format I $len]
+    append hdr $payload
+    return $hdr
+}
+
+# Connect to a node's cluster bus port and return the socket.
+proc raft_connect {host port} {
+    set fd [socket $host $port]
+    fconfigure $fd -translation binary -buffering full
+    return $fd
+}
+
+# Send a raft message on a cluster bus connection.
+proc raft_send {fd payload} {
+    puts -nonewline $fd [raft_msg $payload]
+    flush $fd
+}
+
+# Read a raft message from a cluster bus connection. Returns the payload.
+proc raft_recv {fd {timeout 5000}} {
+    fconfigure $fd -blocking 0
+    set deadline [expr {[clock milliseconds] + $timeout}]
+    set hdr ""
+    while {[string length $hdr] < 8} {
+        append hdr [read $fd [expr {8 - [string length $hdr]}]]
+        if {[string length $hdr] < 8} {
+            if {[clock milliseconds] > $deadline} {
+                error "timeout reading raft header"
+            }
+            after 10
+        }
+    }
+    if {[string range $hdr 0 3] ne "RAFT"} {
+        error "bad raft header: [string range $hdr 0 3]"
+    }
+    binary scan [string range $hdr 4 7] I totlen
+    set paylen [expr {$totlen - 8}]
+    set payload ""
+    while {[string length $payload] < $paylen} {
+        append payload [read $fd [expr {$paylen - [string length $payload]}]]
+        if {[string length $payload] < $paylen} {
+            if {[clock milliseconds] > $deadline} {
+                error "timeout reading raft payload (got [string length $payload]/$paylen)"
+            }
+            after 10
+        }
+    }
+    return $payload
+}
+
+# Listen on a random port for one connection. Sets the listen port in the
+# upvar port_var and returns the listening fd, to be passed to raft_accept.
+# Each listener has its own slot, so two accepts can be in flight at once.
+proc raft_listen {port_var} {
+    upvar $port_var listen_port
+    set key [incr ::_raft_listen_seq]
+    set ::_raft_accepted($key) ""
+    set listen_fd [socket -server [list _raft_on_accept $key] -myaddr 127.0.0.1 0]
+    set ::_raft_listen_key($listen_fd) $key
+    set listen_port [lindex [fconfigure $listen_fd -sockname] 2]
+    return $listen_fd
+}
+
+proc _raft_on_accept {key fd addr port} {
+    fconfigure $fd -translation binary -buffering full
+    set ::_raft_accepted($key) $fd
+}
+
+# Wait for a connection on a listener from raft_listen and close the listener.
+# Returns the accepted client fd.
+proc raft_accept {listen_fd {timeout 5000}} {
+    set key $::_raft_listen_key($listen_fd)
+    if {$::_raft_accepted($key) eq ""} {
+        set accept_after [after $timeout [list set ::_raft_accepted($key) timeout]]
+        vwait ::_raft_accepted($key)
+        after cancel $accept_after
+    }
+    close $listen_fd
+    set fd $::_raft_accepted($key)
+    unset ::_raft_accepted($key) ::_raft_listen_key($listen_fd)
+    if {$fd eq "timeout"} {
+        error "timeout waiting for connection"
+    }
+    return $fd
+}
+
+# Listen on a random port, run optional setup code, accept one connection, close
+# the listener. Returns the accepted client fd. Sets the listen port in the
+# upvar port_var before running the setup code.
+proc raft_listen_and_accept {port_var {timeout 5000} {before_accept {}}} {
+    upvar $port_var listen_port
+    set listen_fd [raft_listen listen_port]
+    if {$before_accept ne {}} {
+        uplevel 1 $before_accept
+    }
+    return [raft_accept $listen_fd $timeout]
+}
+
+# Connect a fake node to a cluster bus port and complete the HELLO/HI handshake.
+proc raft_connect_fake_node {host cport fake_id fake_addr} {
+    set fd [raft_connect $host $cport]
+    raft_send $fd "HELLO $fake_id $fake_addr"
+    set reply [raft_recv $fd]
+    assert_match "HI *" $reply
+    return $fd
+}
+
+# Reply AE_ACK to an AE message. last_index defaults to the AE's prev-log-idx
+# plus its entry count; pass it explicitly to simulate a lagging follower.
+proc raft_reply_ae_ack {fd ae_msg repl_offset {last_index ""}} {
+    set lines [split $ae_msg "\n"]
+    set fields [split [lindex $lines 0] " "]
+    # AE <leader-id> <term> <prev-log-idx> <prev-log-term> <commit> <count>
+    set term [lindex $fields 2]
+    if {$last_index eq ""} {
+        set last_index [expr {[lindex $fields 3] + [lindex $fields 6]}]
+    }
+    raft_send $fd "AE_ACK $term 1 $last_index $repl_offset"
+    return $last_index
+}
+
 # Read messages until one matches the pattern and return it.
 proc raft_recv_until {fd pattern {timeout 5000}} {
     set deadline [expr {[clock milliseconds] + $timeout}]
@@ -2024,6 +2149,114 @@ test "Raft proto: NODE_FORGET resets tracking from AE_ACK" {
  
         close $fd0
         close $fd1
+    }
+}
+
+test "Raft proto: lagged learner is not auto-promoted" {
+    start_server {overrides {cluster-enabled yes cluster-protocol raft cluster-node-timeout 5000}} {
+        set fake_id [string repeat "9" 40]
+        set fake_shard [string repeat "8" 40]
+
+        # MEET commits NODE_JOIN(learner) under quorum=1. Lag the AE ACK so
+        # match_index stays 0 and auto-promote must not pick us.
+        set fake_cport 0
+        set fd [raft_listen_and_accept fake_cport 5000 {
+            set fake_port [expr {$fake_cport - 10000}]
+            set fake_addr "127.0.0.1:${fake_port}@${fake_cport},,tls-port=0,shard-id=$fake_shard"
+            set meet_client [valkey_deferring_client]
+            $meet_client CLUSTER MEET 127.0.0.1 $fake_port
+        }]
+
+        set reply [raft_recv $fd 5000]
+        assert_match "HELLO *" $reply
+        set reply [raft_recv $fd 5000]
+        assert_match "MEET *" $reply
+        raft_send $fd "HI $fake_id $fake_addr"
+        raft_send $fd "ADD_ME"
+
+        set reply [raft_recv $fd 5000]
+        assert_match "AE *" $reply
+        raft_reply_ae_ack $fd $reply 0 0
+
+        wait_for_condition 50 100 {
+            [cluster_has_flag [cluster_get_node_by_id 0 $fake_id] learner]
+        } else {
+            fail "learner did not join"
+        }
+
+        after 2000
+        assert {[cluster_has_flag [cluster_get_node_by_id 0 $fake_id] learner]}
+
+        close $fd
+        $meet_client close
+    }
+}
+
+start_cluster 3 0 {overrides {cluster-protocol raft cluster-node-timeout 15000}} {
+    test "Raft proto: at most one distinct membership transition in flight" {
+        # Pause followers so the leader can append but not commit (quorum 2/3).
+        pause_process [srv -1 pid]
+        pause_process [srv -2 pid]
+
+        set cport [expr {[srv 0 port] + 10000}]
+        set f1 [string repeat "a" 40]
+        set f2 [string repeat "b" 40]
+        set a1 "127.0.0.1:9001@19001,,tls-port=0,shard-id=[string repeat "c" 40]"
+        set a2 "127.0.0.1:9002@19002,,tls-port=0,shard-id=[string repeat "d" 40]"
+
+        set fd1 [raft_connect_fake_node 127.0.0.1 $cport $f1 $a1]
+        raft_send $fd1 "PROPOSE NODE_JOIN $f1 $a1 voter"
+        after 500
+
+        set fd2 [raft_connect_fake_node 127.0.0.1 $cport $f2 $a2]
+        raft_send $fd2 "PROPOSE NODE_JOIN $f2 $a2 voter"
+        set reply [raft_recv $fd2 2000]
+        assert_match "REJECT voter-change-pending *" $reply
+
+        # Same node, different payload is CONFLICT, not SAME.
+        raft_send $fd1 "PROPOSE NODE_JOIN $f1 $a2 voter"
+        set reply [raft_recv $fd1 2000]
+        assert_match "REJECT voter-change-pending *" $reply
+        assert_equal 1 [raft_inflight_count [srv 0 client] NODE_JOIN]
+
+        # Re-proposing the in-flight NODE_JOIN is SAME, not a second entry.
+        raft_send $fd1 "PROPOSE NODE_JOIN $f1 $a1 voter"
+        set got [catch {raft_recv $fd1 400} reply]
+        if {!$got} {
+            assert_no_match "REJECT *" $reply
+        }
+        assert_equal 1 [raft_inflight_count [srv 0 client] NODE_JOIN]
+
+        close $fd1
+        close $fd2
+        resume_process [srv -1 pid]
+        resume_process [srv -2 pid]
+    }
+}
+
+start_cluster 3 0 {overrides {cluster-protocol raft cluster-node-timeout 15000}} {
+    test "Raft proto: second DEL_VOTER waits on the in-flight entry" {
+        set id [R 1 CLUSTER MYID]
+        pause_process [srv -1 pid]
+        pause_process [srv -2 pid]
+
+        set cport [expr {[srv 0 port] + 10000}]
+        set fd [raft_connect_fake_node 127.0.0.1 $cport [string repeat "e" 40] \
+            "127.0.0.1:9001@19001,,tls-port=0,shard-id=[string repeat "f" 40]"]
+        raft_send $fd "PROPOSE DEL_VOTER $id"
+        after 300
+        raft_send $fd "PROPOSE DEL_VOTER $id"
+        after 300
+        assert_equal 1 [raft_inflight_count [srv 0 client] DEL_VOTER]
+
+        close $fd
+        resume_process [srv -1 pid]
+        resume_process [srv -2 pid]
+        wait_for_condition 100 50 {
+            [raft_inflight_count [srv 0 client] DEL_VOTER] == 0
+        } else {
+            fail "DEL_VOTER did not apply"
+        }
     }
 }
 

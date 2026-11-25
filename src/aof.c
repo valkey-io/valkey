@@ -573,16 +573,6 @@ int writeAofManifestFile(sds buf) {
         goto cleanup;
     }
 
-    /* Sync the AOF directory before publishing the new manifest so any newly
-     * created or renamed AOF files it references are durable before rename(). */
-    if (fsyncFileDir(am_filepath) == -1) {
-        serverLog(LL_WARNING, "Fail to fsync AOF directory %s before manifest rename: %s.", am_filepath,
-                  strerror(errno));
-
-        ret = C_ERR;
-        goto cleanup;
-    }
-
     if (rename(tmp_am_filepath, am_filepath) != 0) {
         serverLog(LL_WARNING, "Error trying to rename the temporary AOF manifest file %s into %s: %s", tmp_am_name,
                   am_name, strerror(errno));

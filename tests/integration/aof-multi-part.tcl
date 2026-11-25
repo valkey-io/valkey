@@ -1402,12 +1402,12 @@ tags {"external:skip"} {
             }
         }
     }
-test "AOF manifest is not renamed if pre-rename directory fsync fails" {
+    test "History AOF files are not unlinked if directory fsync fails in aofDelHistoryFiles" {
         if {$::tcl_platform(os) eq "AIX"} {
             skip "fsyncFileDir is a no-op on AIX"
         }
 
-        set test_dir [tmpdir aof.manifest.fsyncdir]
+        set test_dir [tmpdir aof.history.fsyncdir]
         set test_aof_dirpath "$test_dir/$aof_dirname"
         set test_aof_manifest_file "$test_aof_dirpath/${aof_basename}$::manifest_suffix"
         file mkdir $test_aof_dirpath
@@ -1427,42 +1427,56 @@ test "AOF manifest is not renamed if pre-rename directory fsync fails" {
             skip "directory 0300 permissions do not block O_RDONLY open"
         }
 
-        start_server_aof [list dir $test_dir] {
+        start_server_aof [list dir $test_dir overrides [list aof-disable-auto-gc yes]] {
             set test_aof_dirpath "[get_valkey_dir]/appendonlydir"
             set test_aof_manifest_file "$test_aof_dirpath/appendonly.aof$::manifest_suffix"
 
             wait_done_loading r
             r set k1 v1
 
-            assert_aof_manifest_content $test_aof_manifest_file {
-                {file appendonly.aof.1.base.rdb seq 1 type b}
-                {file appendonly.aof.1.incr.aof seq 1 type i}
-            }
-
-            set loglines [count_log_lines 0]
-
-            # Make AOF directory non-readable (writable+searchable) so creating
-            # temp files and rename() succeed while fsyncFileDir() fails with EACCES.
-            file attributes $test_aof_dirpath -permissions 0300
-            assert_error {*ERR*} {r bgrewriteaof}
-            file attributes $test_aof_dirpath -permissions 0755
-
-            # Manifest must not have been overwritten with seq 2.
-            assert_aof_manifest_content $test_aof_manifest_file {
-                {file appendonly.aof.1.base.rdb seq 1 type b}
-                {file appendonly.aof.1.incr.aof seq 1 type i}
-            }
-
-            verify_log_message 0 "*Fail to fsync AOF directory*before manifest rename*" $loglines
-
-            # Once permissions are restored, BGREWRITEAOF succeeds and
-            # updates the manifest to seq 2.
+            # Trigger a background rewrite to generate history AOF files while auto-GC is disabled
             r bgrewriteaof
             waitForBgrewriteaof r
 
             assert_aof_manifest_content $test_aof_manifest_file {
                 {file appendonly.aof.2.base.rdb seq 2 type b}
+                {file appendonly.aof.1.base.rdb seq 1 type h}
+                {file appendonly.aof.1.incr.aof seq 1 type h}
                 {file appendonly.aof.2.incr.aof seq 2 type i}
+            }
+
+            # Verify history files exist on disk
+            assert {[file exists "$test_aof_dirpath/appendonly.aof.1.base.rdb"]}
+            assert {[file exists "$test_aof_dirpath/appendonly.aof.1.incr.aof"]}
+
+            set loglines [count_log_lines 0]
+
+            # Block directory reads so fsyncFileDir() fails with EACCES
+            file attributes $test_aof_dirpath -permissions 0300
+
+            # Re-enabling auto-GC invokes aofDelHistoryFiles(), which should fail directory fsync
+            # and defer deletion without unlinking history files
+            r config set aof-disable-auto-gc no
+
+            # Restore permissions so we can inspect directory
+            file attributes $test_aof_dirpath -permissions 0755
+
+            verify_log_message 0 "*Fail to fsync AOF directory*before deleting history files*" $loglines
+
+            # History files must still exist
+            assert {[file exists "$test_aof_dirpath/appendonly.aof.1.base.rdb"]}
+            assert {[file exists "$test_aof_dirpath/appendonly.aof.1.incr.aof"]}
+
+            # Now triggering history cleanup with permissions restored should succeed
+            r config set aof-disable-auto-gc yes
+            r config set aof-disable-auto-gc no
+
+            # Wait for bio thread to unlink
+            wait_for_condition 50 100 {
+                ![file exists "$test_aof_dirpath/appendonly.aof.1.base.rdb"] &&
+                ![file exists "$test_aof_dirpath/appendonly.aof.1.incr.aof"]
+            } else {
+                fail "History AOF files were not deleted after restoring directory permissions"
             }
         }
     }

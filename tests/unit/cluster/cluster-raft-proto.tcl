@@ -1632,13 +1632,21 @@ test "Raft proto: a proposal completes after its leader's log tail is replaced" 
         $rd1 cluster addslots 1
         set rd2 [valkey_deferring_client]
         $rd2 cluster addslots 2
-        while {![regexp {\n([0-9]+ (SLOT_CHANGE [^\n]* 2))(\n|$)} [raft_recv_until $fd "AE *"] -> line entry]} {}
+        while {![info exists entry2]} {
+            foreach line [split [raft_recv_until $fd "AE *"] "\n"] {
+                if {[regexp {^[0-9]+ (SLOT_CHANGE .* ([12]))$} $line -> e slot]} {set entry$slot $e}
+            }
+        }
 
         # F wins a later term and commits slot 2 in place of slot 1.
         set new_term [expr {$term + 1}]
-        raft_send $fd "AE $f_id $new_term $last $term [expr {$last + 1}] 0 1\n$new_term $entry"
+        raft_send $fd "AE $f_id $new_term $last $term [expr {$last + 1}] 0 1\n$new_term $entry2"
         assert_equal OK [$rd2 read]
         assert_equal 1 [s blocked_clients]
+
+        # Then slot 1, so that no proposal is left pending.
+        raft_send $fd "AE $f_id $new_term [expr {$last + 1}] $new_term [expr {$last + 2}] 0 1\n$new_term $entry1"
+        assert_equal OK [$rd1 read]
         $rd1 close
         $rd2 close
         close $fd

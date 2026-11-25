@@ -1523,13 +1523,6 @@ void addReplyNullArray(client *c) {
     }
 }
 
-/* Create the length prefix of a bulk reply, example: $2234 */
-void addReplyBulkLen(client *c, robj *obj) {
-    size_t len = stringObjectLen(obj);
-    if (prepareClientToWrite(c) != C_OK) return;
-    _addReplyLongLongWithPrefix(c, len, '$');
-}
-
 /* Append "$<len>\r\n<p>\r\n" to an already prepared client. Small bulk replies
  * are fused into one append to avoid repeating reply-routing bookkeeping per
  * piece; the limit bounds the additional copy and stack usage. */
@@ -1558,8 +1551,12 @@ static void _addReplyBulkCBufferFused(client *c, const void *p, size_t len) {
         _addReplyToBufferOrList(c, buf, (size_t)(dst - buf));
         return;
     }
+    /* Each append may schedule the client to close, e.g. on reaching the
+     * output buffer limit; don't buffer the remaining pieces in that case. */
     _addReplyLongLongWithPrefix(c, len, '$');
+    if (c->flag.close_asap) return;
     _addReplyToBufferOrList(c, p, len);
+    if (c->flag.close_asap) return;
     _addReplyToBufferOrList(c, "\r\n", 2);
 }
 

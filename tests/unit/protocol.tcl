@@ -255,6 +255,100 @@ start_server {tags {"protocol network"}} {
     # check the connection still works
     assert_equal [r ping] {PONG}
 
+    proc raw_bulk_socket {} {
+        if {$::tls} {
+            set s [::tls::socket [srv 0 host] [srv 0 port]]
+        } else {
+            set s [socket [srv 0 host] [srv 0 port]]
+        }
+        fconfigure $s -translation binary -blocking 0
+        return $s
+    }
+
+    # Read up to len bytes, giving up after a few seconds so that a short
+    # reply fails the test instead of hanging it.
+    proc raw_bulk_read {s len} {
+        set buf ""
+        set deadline [expr {[clock milliseconds] + 5000}]
+        while {[string length $buf] < $len && [clock milliseconds] < $deadline} {
+            set chunk [read $s [expr {$len - [string length $buf]}]]
+            if {$chunk eq ""} {
+                if {[eof $s]} break
+                after 1
+            }
+            append buf $chunk
+        }
+        return $buf
+    }
+
+    proc raw_bulk_cmd {s args} {
+        set cmd "*[llength $args]\r\n"
+        foreach a $args {
+            append cmd "\$[string length $a]\r\n$a\r\n"
+        }
+        puts -nonewline $s $cmd
+        flush $s
+    }
+
+    # Read exactly the bytes we expect, so a framing error leaves extra or
+    # missing bytes that the next comparison (or the final PING) catches.
+    proc raw_bulk_expect {s expected} {
+        assert_equal $expected [raw_bulk_read $s [string length $expected]]
+    }
+
+    foreach proto {2 3} {
+        test "Bulk string replies have exact framing at size boundaries - RESP$proto" {
+            set s [raw_bulk_socket]
+            raw_bulk_cmd $s HELLO $proto
+            raw_bulk_cmd $s ECHO hello-done
+            # Skip the HELLO reply, whose length depends on the client id.
+            set buf ""
+            while {![string match "*\$10\r\nhello-done\r\n" $buf]} {
+                set chunk [raw_bulk_read $s 1]
+                assert_equal 1 [string length $chunk]
+                append buf $chunk
+            }
+            set maphdr [expr {$proto == 3 ? "%1\r\n" : "*2\r\n"}]
+
+            # Lengths around the shared "$<len>\r\n" headers (< 32), the
+            # header digit count change and the fused-append limit (512).
+            foreach len {1 9 10 31 32 33 99 100 511 512 513 1000} {
+                set v [string range [string repeat 0123456789abcdef [expr {$len / 16 + 1}]] 0 [expr {$len - 1}]]
+                set bulk "\$$len\r\n$v\r\n"
+                raw_bulk_cmd $s SET rawbulk $v
+                raw_bulk_expect $s "+OK\r\n"
+                raw_bulk_cmd $s GET rawbulk
+                raw_bulk_expect $s $bulk
+                raw_bulk_cmd $s GETRANGE rawbulk 0 -1
+                raw_bulk_expect $s $bulk
+                raw_bulk_cmd $s DEL rawhash
+                raw_bulk_expect $s ":0\r\n"
+                raw_bulk_cmd $s HSET rawhash f $v
+                raw_bulk_expect $s ":1\r\n"
+                raw_bulk_cmd $s HGETALL rawhash
+                raw_bulk_expect $s "$maphdr\$1\r\nf\r\n$bulk"
+                raw_bulk_cmd $s DEL rawhash
+                raw_bulk_expect $s ":1\r\n"
+            }
+
+            # INT encoded string values.
+            foreach v {0 9 10 -1 123456789 -9223372036854775808 9223372036854775807} {
+                raw_bulk_cmd $s SET rawbulk $v
+                raw_bulk_expect $s "+OK\r\n"
+                raw_bulk_cmd $s OBJECT ENCODING rawbulk
+                raw_bulk_expect $s "\$3\r\nint\r\n"
+                raw_bulk_cmd $s GET rawbulk
+                raw_bulk_expect $s "\$[string length $v]\r\n$v\r\n"
+            }
+
+            raw_bulk_cmd $s DEL rawbulk
+            raw_bulk_expect $s ":1\r\n"
+            raw_bulk_cmd $s PING
+            raw_bulk_expect $s "+PONG\r\n"
+            close $s
+        }
+    }
+
     test {RESP3 attributes} {
         r hello 3
         assert_equal {Some real reply following the attribute} [r debug protocol attrib]

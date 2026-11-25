@@ -543,12 +543,14 @@ start_server {tags {"multi"}} {
 
     test {One client can WATCH the same key in multiple databases} {
         set rd [valkey_client]
+        test_defer {$rd close}
         foreach db {0 1 0} {
             $rd select $db
             $rd watch key
         }
         assert_equal 2 [get_field_in_client_info [$rd client info] watch]
         r select 1
+        test_defer {r select 9}
         r set key changed
         $rd multi
         $rd ping
@@ -556,12 +558,12 @@ start_server {tags {"multi"}} {
 
         # After EXEC, watching only DB 0 must not keep DB 1 watched.
         $rd watch key
+        assert_equal 1 [get_field_in_client_info [$rd client info] watch]
         r set key changed-again
         $rd multi
         $rd ping
         assert_equal {PONG} [$rd exec]
-        $rd close
-    } {0} {singledb:skip}
+    } {} {singledb:skip}
 
     test {WATCH with large number of keys} {
         set elements {}

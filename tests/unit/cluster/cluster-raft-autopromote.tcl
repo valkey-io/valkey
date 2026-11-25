@@ -269,7 +269,9 @@ start_cluster 6 0 {overrides {cluster-protocol raft cluster-node-timeout 1000}} 
         assert {$learner > 0 && $target > 0}
         set learner_id [R $learner CLUSTER MYID]
         set target_id [R $target CLUSTER MYID]
-        # Pause first so the forgotten node cannot MEET back in before the wait.
+        # start_cluster assigns slots; NODE_FORGET rejects a primary that still
+        # owns any. Flush before pause so the target can propose the DELSLOTS.
+        assert_equal OK [R $target CLUSTER FLUSHSLOTS]
         pause_process [srv -$target pid]
         assert_equal OK [R 0 CLUSTER FORGET $target_id]
         wait_for_condition 200 100 {
@@ -286,6 +288,7 @@ start_cluster 6 0 {overrides {cluster-protocol raft cluster-node-timeout 1000}} 
 
 start_cluster 3 0 {overrides {cluster-protocol raft cluster-node-timeout 1000}} {
     test "Raft autopromote: FORGET can shrink the voter set to one node" {
+        assert_equal OK [R 2 CLUSTER FLUSHSLOTS]
         assert_equal OK [R 0 CLUSTER FORGET [R 2 CLUSTER MYID]]
         pause_process [srv -2 pid]
         wait_for_condition 100 100 {
@@ -294,6 +297,7 @@ start_cluster 3 0 {overrides {cluster-protocol raft cluster-node-timeout 1000}} 
             resume_process [srv -2 pid]
             fail "size=[CI 0 cluster_size]"
         }
+        assert_equal OK [R 1 CLUSTER FLUSHSLOTS]
         assert_equal OK [R 0 CLUSTER FORGET [R 1 CLUSTER MYID]]
         pause_process [srv -1 pid]
         wait_for_condition 100 100 {

@@ -4076,7 +4076,6 @@ robj *dbUnshareStringValue(serverDb *db, robj *key, robj *o);
 #define EMPTYDB_NOFUNCTIONS (1 << 1) /* Indicate not to flush the functions. */
 typedef int(emptyDataHashtableFilter)(int didx);
 long long emptyData(int dbnum, int flags, void(callback)(hashtable *));
-long long emptyDbStructure(serverDb **dbarray, int dbnum, int async, void(callback)(hashtable *));
 void resetDbExpiryState(serverDb *db);
 int parseFlushCommandFlags(client *c, int *flags);
 int parseFlushCommandFlagsOrReply(client *c, int *flags);

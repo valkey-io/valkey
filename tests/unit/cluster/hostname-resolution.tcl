@@ -52,6 +52,35 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-replica-no-fa
     }
 }
 
+start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-replica-no-failover yes cluster-announce-hostname localhost cluster-resolve-hostnames yes}} {
+    test "Node that changed its ID under the same hostname stays NOADDR" {
+        set primary0_id [R 0 CLUSTER MYID]
+
+        # After CLUSTER RESET HARD, R 0 answers on the same address and hostname
+        # with a new node ID, so the other nodes mark the old ID as NOADDR.
+        R 0 cluster reset hard
+        wait_for_log_messages -1 {"*PONG contains mismatching sender ID*"} 0 1000 10
+        wait_for_log_messages -2 {"*PONG contains mismatching sender ID*"} 0 1000 10
+        wait_for_condition 1000 10 {
+            [cluster_has_flag [cluster_get_node_by_id 1 $primary0_id] noaddr] eq 1 &&
+            [cluster_has_flag [cluster_get_node_by_id 2 $primary0_id] noaddr] eq 1
+        } else {
+            fail "The node is not marked as NOADDR"
+        }
+
+        # The hostname still resolves to the address that answered with the new
+        # ID, so it must not be used to restore the old entry. Give it several
+        # resolve intervals and check the mismatch does not repeat.
+        set mismatches1 [count_message_lines [srv -1 stdout] "PONG contains mismatching sender ID"]
+        set mismatches2 [count_message_lines [srv -2 stdout] "PONG contains mismatching sender ID"]
+        after 3500
+        assert_equal $mismatches1 [count_message_lines [srv -1 stdout] "PONG contains mismatching sender ID"]
+        assert_equal $mismatches2 [count_message_lines [srv -2 stdout] "PONG contains mismatching sender ID"]
+        assert_equal 1 [cluster_has_flag [cluster_get_node_by_id 1 $primary0_id] noaddr]
+        assert_equal 1 [cluster_has_flag [cluster_get_node_by_id 2 $primary0_id] noaddr]
+    }
+}
+
 start_cluster 3 0 {tags {external:skip cluster} overrides {cluster-resolve-hostnames yes cluster-node-timeout 3000}} {
     test "Unresolvable hostname does not block the node and keeps the last known address" {
         set R1_id [R 1 cluster myid]

@@ -2238,6 +2238,7 @@ clusterNode *createClusterNode(char *nodename, int flags) {
     node->hostname_resolve_time = 0;
     node->hostname_resolve_inflight = 0;
     node->hostname_resolve_failed = 0;
+    memset(node->noaddr_ip, 0, sizeof(node->noaddr_ip));
     node->human_nodename = sdsempty();
     node->availability_zone = sdsempty();
     node->tcp_port = 0;
@@ -4556,6 +4557,7 @@ int clusterProcessPacket(clusterLink *link) {
                           link->node->name, humanNodename(link->node), link->node->shard_id,
                           (int)(now - (link->node->ctime)), link->node->flags);
                 link->node->flags |= CLUSTER_NODE_NOADDR;
+                memcpy(link->node->noaddr_ip, link->node->ip, NET_IP_STR_LEN);
                 link->node->ip[0] = '\0';
                 /* The IP may just be stale (e.g. reused by another node after a
                  * restart). Keep the ports so the address can be restored once
@@ -6977,8 +6979,13 @@ static void clusterApplyHostnameResolveResult(clusterResolveResult *r) {
 
     if (node->cport == 0) return;
     if (!(node->flags & CLUSTER_NODE_NOADDR) && strcasecmp(node->ip, r->ip) == 0) return;
+    /* The hostname still points at the address that answered with a different
+     * node ID, e.g. the node did CLUSTER RESET HARD or lost its nodes.conf.
+     * Reconnecting would only hit the same mismatch again. */
+    if (node->flags & CLUSTER_NODE_NOADDR && strcasecmp(node->noaddr_ip, r->ip) == 0) return;
 
     memcpy(node->ip, r->ip, NET_IP_STR_LEN);
+    node->noaddr_ip[0] = '\0';
     node->flags &= ~CLUSTER_NODE_NOADDR;
     if (node->link) freeClusterLink(node->link);
     serverLog(LL_NOTICE, "Address updated for node %.40s (%s), now %s:%d (resolved from hostname %s)", node->name,

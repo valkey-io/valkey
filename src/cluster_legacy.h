@@ -502,6 +502,7 @@ struct _clusterNode {
     mstime_t hostname_resolve_time;          /* Last time a DNS lookup of hostname was requested */
     int hostname_resolve_inflight;           /* A DNS lookup of hostname is pending in bio */
     int hostname_resolve_failed;             /* The last DNS lookup of hostname failed */
+    char noaddr_ip[NET_IP_STR_LEN];          /* IP that answered with another node ID (NOADDR) */
     sds human_nodename;                      /* The known human readable nodename for this node */
     sds availability_zone;                   /* The known availability zone for this node */
     int tcp_port;                            /* Latest known clients TCP port. */

@@ -681,19 +681,41 @@ start_server {tags {"expire"}} {
 
     test {SET keeps the expires table consistent when adding and overwriting keys} {
         r flushall
-        r set volatile bar EX 100
-        r set added bar
-        r set overwritten bar
-        r set overwritten bar2
-        assert_equal -1 [r ttl added]
-        assert_equal -1 [r ttl overwritten]
-        assert_range [r ttl volatile] 90 100
+        r set volatile{t} bar EX 100
+        r set added{t} bar
+        r set overwritten{t} bar
+        r set overwritten{t} bar2
+        assert_equal -1 [r ttl added{t}]
+        assert_equal -1 [r ttl overwritten{t}]
+        assert_range [r ttl volatile{t}] 90 100
         assert_match {*keys=3,expires=1,*} [r info keyspace]
 
-        # Overwriting the only volatile key must also drop it from the expires table.
-        r set volatile bar2
-        assert_equal -1 [r ttl volatile]
+        r set volatile{t} bar2
+        assert_equal -1 [r ttl volatile{t}]
         assert_match {*keys=3,expires=0*} [r info keyspace]
+
+        # Non-EMBSTR values take the swap branch of dbSetValue(), which keeps
+        # the old object (and its expire) in the keyspace.
+        r set volatile{t} [string repeat x 200] EX 100
+        r set volatile{t} [string repeat y 200]
+        assert_equal -1 [r ttl volatile{t}]
+        assert_match {*keys=3,expires=0,*} [r info keyspace]
+
+        # The other setKey() callers overwriting a key with a TTL.
+        r rpush list{t} 3 1 2
+        r sadd set{t} a b
+        r zadd zset{t} 1 a
+        foreach cmd {
+            {getset volatile{t} v}
+            {sort list{t} store volatile{t}}
+            {sunionstore volatile{t} set{t}}
+            {zunionstore volatile{t} 1 zset{t}}
+        } {
+            r set volatile{t} [string repeat x 200] EX 100
+            r {*}$cmd
+            assert_equal -1 [r ttl volatile{t}]
+            assert_match {*keys=6,expires=0,*} [r info keyspace]
+        }
     }
 
     test {SET - use KEEPTTL option, TTL should not be removed} {

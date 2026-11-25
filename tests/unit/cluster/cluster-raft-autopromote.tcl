@@ -177,7 +177,7 @@ start_cluster 3 0 {overrides {cluster-protocol raft cluster-node-timeout 15000} 
         set fd2 [raft_connect_fake_node 127.0.0.1 $cport $f2 $a2]
         raft_send $fd2 "PROPOSE NODE_JOIN $f2 $a2 voter"
         set reply [raft_recv $fd2 2000]
-        assert_match "REJECT *" $reply
+        assert_match "REJECT voter-change-pending *" $reply
 
         # Re-proposing the in-flight NODE_JOIN is SAME, not a second entry.
         raft_send $fd1 "PROPOSE NODE_JOIN $f1 $a1 voter"

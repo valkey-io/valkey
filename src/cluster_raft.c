@@ -53,8 +53,9 @@ typedef enum {
     RAFT_RESULT_OK = 0,          /* Proposal is valid / applied successfully. */
     RAFT_RESULT_STALE_EPOCH,     /* Rejected due to stale shard epoch (retryable). */
     RAFT_RESULT_REJECTED,        /* Rejected for other reasons (terminal). */
-    RAFT_RESULT_LEADER_TRANSFER, /* Retry after the leader has changed. */
-    RAFT_RESULT_UNCHANGED,       /* Valid, but applying it wouldn't change anything. */
+    RAFT_RESULT_LEADER_TRANSFER,      /* Retry after the leader has changed. */
+    RAFT_RESULT_UNCHANGED,            /* Valid, but applying it wouldn't change anything. */
+    RAFT_RESULT_VOTER_CHANGE_PENDING, /* Another voter change is in flight. */
 } RaftProposalResult;
 
 /* Human-readable error messages returned to clients via callbacks. */
@@ -65,6 +66,7 @@ typedef enum {
 #define REJECT_WIRE_CONFLICT "conflict" /* for stale shard epoch validation fail. */
 #define REJECT_WIRE_REJECTED "rejected" /* for any other validation fail. */
 #define REJECT_WIRE_TRANSFER "transfer" /* the leader is handing off leadership first. */
+#define REJECT_WIRE_VOTER_CHANGE_PENDING "voter-change-pending" /* another voter change is in flight. */
 
 /* Map a RaftProposalResult to a human-readable error string for client replies.
  * Returns NULL for RAFT_RESULT_OK (no error). */
@@ -75,6 +77,7 @@ static inline const char *raftProposalResultMsg(RaftProposalResult result) {
     case RAFT_RESULT_STALE_EPOCH: return STALE_SHARD_EPOCH_REJECTION_MSG;
     case RAFT_RESULT_REJECTED: return GENERIC_PROPOSAL_REJECTION_MSG;
     case RAFT_RESULT_LEADER_TRANSFER: return GENERIC_PROPOSAL_REJECTION_MSG;
+    case RAFT_RESULT_VOTER_CHANGE_PENDING: return GENERIC_PROPOSAL_REJECTION_MSG;
     }
     return GENERIC_PROPOSAL_REJECTION_MSG;
 }
@@ -83,6 +86,7 @@ static inline const char *raftProposalResultMsg(RaftProposalResult result) {
 static inline const char *raftProposalResultWireReason(RaftProposalResult result) {
     if (result == RAFT_RESULT_STALE_EPOCH) return REJECT_WIRE_CONFLICT;
     if (result == RAFT_RESULT_LEADER_TRANSFER) return REJECT_WIRE_TRANSFER;
+    if (result == RAFT_RESULT_VOTER_CHANGE_PENDING) return REJECT_WIRE_VOTER_CHANGE_PENDING;
     return REJECT_WIRE_REJECTED;
 }
 
@@ -90,6 +94,7 @@ static inline const char *raftProposalResultWireReason(RaftProposalResult result
 static inline RaftProposalResult raftProposalResultFromWire(const char *reason) {
     if (!strcasecmp(reason, REJECT_WIRE_CONFLICT)) return RAFT_RESULT_STALE_EPOCH;
     if (!strcasecmp(reason, REJECT_WIRE_TRANSFER)) return RAFT_RESULT_LEADER_TRANSFER;
+    if (!strcasecmp(reason, REJECT_WIRE_VOTER_CHANGE_PENDING)) return RAFT_RESULT_VOTER_CHANGE_PENDING;
     return RAFT_RESULT_REJECTED;
 }
 
@@ -1036,6 +1041,7 @@ static void clusterRaftPropose(sds entry, void *ctx, void (*callback)(void *ctx,
     /* SAME: this quorum change is already appended and not yet applied.
      * Keep the caller's callback for that entry instead of writing a copy. */
     int already_appended = 0;
+    int wait_voter_change = 0;
     RaftProposalResult pre_result = RAFT_RESULT_OK;
     if (rs->role == RAFT_ROLE_LEADER) {
         if (clusterRaftQuorumChangeStatus(type, data) == RAFT_QC_SAME) {
@@ -1043,7 +1049,10 @@ static void clusterRaftPropose(sds entry, void *ctx, void (*callback)(void *ctx,
         } else {
             /* Pre-validate on the leader to reject obviously stale/invalid proposals. */
             pre_result = clusterRaftPreValidate(type, data);
-            if (pre_result != RAFT_RESULT_OK && pre_result != RAFT_RESULT_UNCHANGED) {
+            if (pre_result == RAFT_RESULT_VOTER_CHANGE_PENDING) {
+                /* Keep pending; retry after the in-flight voter change applies. */
+                wait_voter_change = 1;
+            } else if (pre_result != RAFT_RESULT_OK && pre_result != RAFT_RESULT_UNCHANGED) {
                 if (callback) callback(ctx, raftProposalResultMsg(pre_result));
                 sdsfree(data);
                 return;
@@ -1093,7 +1102,7 @@ static void clusterRaftPropose(sds entry, void *ctx, void (*callback)(void *ctx,
         clusterRaftAddPendingRead(type, data, NULL);
         sdsfree(data);
     } else if (rs->role == RAFT_ROLE_LEADER) {
-        if (already_appended) {
+        if (already_appended || wait_voter_change) {
             sdsfree(data);
         } else {
             /* If we're a singleton leader with an empty log that hasn't committed
@@ -1319,7 +1328,7 @@ static RaftProposalResult clusterRaftPreValidate(int type, sds data) {
      * membership transition already in the log is rejected here so it never
      * consumes log space. */
     if (clusterRaftQuorumChangeStatus(type, data) == RAFT_QC_CONFLICT) {
-        return RAFT_RESULT_REJECTED;
+        return RAFT_RESULT_VOTER_CHANGE_PENDING;
     }
     switch (type) {
     case RAFT_ENTRY_FAILOVER:
@@ -1346,7 +1355,8 @@ static RaftProposalResult clusterRaftPreValidate(int type, sds data) {
     /* Only trusted with our state up to date. Otherwise, e.g. for A-B-A where
      * B is appended but not yet applied, the second A would look unchanged. */
     if (result == RAFT_RESULT_UNCHANGED && !clusterRaftLeaderStateIsCurrent()) result = RAFT_RESULT_OK;
-    if (result != RAFT_RESULT_OK && result != RAFT_RESULT_LEADER_TRANSFER && result != RAFT_RESULT_UNCHANGED) {
+    if (result != RAFT_RESULT_OK && result != RAFT_RESULT_LEADER_TRANSFER && result != RAFT_RESULT_UNCHANGED &&
+        result != RAFT_RESULT_VOTER_CHANGE_PENDING) {
         serverLog(LL_NOTICE, "Leader pre-validation: rejecting %s proposal (%s). data: %s",
                   raftEntryTypeName(type), raftProposalResultMsg(result), data);
     }
@@ -1580,7 +1590,8 @@ static int clusterRaftProcessUnchanged(clusterLink *link, int argc, sds *argv) {
  * pending_proposals and fire the callback with an error so the client
  * gets an immediate reply instead of hanging until timeout.
  * Format: "REJECT <reason> <type> <data...>"
- * <reason> is a single word: "conflict" (retryable epoch), "rejected" (terminal), etc. */
+ * <reason> is a single word: "conflict" (retryable epoch), "rejected" (terminal),
+ * "voter-change-pending" (retry after a voter change applies), etc. */
 static int clusterRaftProcessReject(clusterLink *link, int argc, sds *argv) {
     UNUSED(link);
 
@@ -1910,6 +1921,8 @@ static void clusterRaftCompletePendingProposal(int type, sds data, RaftProposalR
         if (pp->type != type || sdscmp(pp->data, data)) continue;
         /* Resent to the new leader by the retry on leader change. */
         if (result == RAFT_RESULT_LEADER_TRANSFER) continue;
+        /* Retry after the in-flight voter change has been applied. */
+        if (result == RAFT_RESULT_VOTER_CHANGE_PENDING) continue;
         /* On stale epoch with retries remaining: mark deferred.
          * The epoch update happens at retry time when the epoch has
          * actually advanced (checked by raftRefreshEpochInData). */
@@ -1934,6 +1947,8 @@ static void clusterRaftCompletePendingProposal(int type, sds data, RaftProposalR
 static void raftLogApply(raftLogEntry *e) {
     clusterRaftState *rs = RAFT_STATE();
     RaftProposalResult entry_result = RAFT_RESULT_OK;
+    /* NODE_FORGET removes the node; classify before apply mutates membership. */
+    int quorum_change = raftEntryAffectsQuorum(e->type, e->data);
     switch (e->type) {
     case RAFT_ENTRY_NODE_JOIN: {
         /* data: "<node-id> <address> <learner|voter>" */
@@ -2193,6 +2208,11 @@ static void raftLogApply(raftLogEntry *e) {
 
     /* Check pending proposals for a match and remove it. */
     clusterRaftCompletePendingProposal(e->type, e->data, entry_result, e->index);
+
+    /* Proposals parked on voter-change-pending retry once this change applies. */
+    if (quorum_change && listLength(rs->pending_proposals) > 0) {
+        rs->todo_retry_proposals = 1;
+    }
 
     if (e->type == RAFT_ENTRY_SLOT_CHANGE && entry_result == RAFT_RESULT_OK) {
         /* Complete our import callback before revalidating ownership. */
@@ -3343,14 +3363,8 @@ static void clusterRaftRetryProposals(int include_pending) {
         if (rs->role == RAFT_ROLE_LEADER) {
             raftQuorumChangeStatus status = clusterRaftQuorumChangeStatus(pp->type, pp->data);
 
-            /* A different membership transition is in flight: reject. */
-            if (status == RAFT_QC_CONFLICT) {
-                if (pp->callback) pp->callback(pp->ctx, GENERIC_PROPOSAL_REJECTION_MSG);
-                sdsfree(pp->data);
-                zfree(pp);
-                listDelNode(rs->pending_proposals, ln);
-                continue;
-            }
+            /* A different membership transition is in flight: retry after it applies. */
+            if (status == RAFT_QC_CONFLICT) continue;
 
             /* The identical transition is already in the log; it will
              * complete the pending proposal when applied. */
@@ -3363,6 +3377,7 @@ static void clusterRaftRetryProposals(int include_pending) {
                 continue;
             }
             if (pre_result != RAFT_RESULT_OK) {
+                if (pre_result == RAFT_RESULT_VOTER_CHANGE_PENDING) continue;
                 if (pre_result == RAFT_RESULT_STALE_EPOCH && pp->retries > 0) {
                     pp->retries--;
                     pp->deferred = 1;

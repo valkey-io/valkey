@@ -331,8 +331,11 @@ start_server {tags {"protocol network"}} {
                 raw_bulk_expect $s ":1\r\n"
             }
 
-            # INT encoded string values.
-            foreach v {0 9 10 -1 123456789 -9223372036854775808 9223372036854775807} {
+            # INT encoded string values. INT encoding holds a long, so the
+            # bounds depend on the build (32-bit vs 64-bit).
+            set long_max [expr {(1 << ([s arch_bits] - 1)) - 1}]
+            set long_min [expr {-$long_max - 1}]
+            foreach v [list 0 9 10 -1 123456789 $long_min $long_max] {
                 raw_bulk_cmd $s SET rawbulk $v
                 raw_bulk_expect $s "+OK\r\n"
                 raw_bulk_cmd $s OBJECT ENCODING rawbulk

@@ -829,9 +829,34 @@ start_cluster 1 0 {tags {external:skip cluster} overrides {cluster-databases 16 
     }
 
     test "CLUSTER SLOT-STATS ORDERBY non key-count metric sums keys over databases" {
+        R 0 CONFIG RESETSTAT
         populate_two_dbs $key
         set slot_stats [convert_array_into_dict [R 0 CLUSTER SLOT-STATS ORDERBY cpu-usec LIMIT 16384]]
         assert_equal 3 [dict get [dict get $slot_stats $key_slot] key-count]
+        set limited_stats [convert_array_into_dict [R 0 CLUSTER SLOT-STATS ORDERBY network-bytes-in LIMIT 1]]
+        assert_equal 1 [dict size $limited_stats]
+        assert_equal 3 [dict get [dict get $limited_stats $key_slot] key-count]
+        set near_full_stats [R 0 CLUSTER SLOT-STATS ORDERBY network-bytes-in LIMIT 16383]
+        assert_equal 16383 [llength $near_full_stats]
+        assert_equal $key_slot [lindex $near_full_stats 0 0]
+        assert_equal 3 [dict get [lindex $near_full_stats 0 1] key-count]
+    }
+
+    test "CLUSTER SLOT-STATS finds keys when only one created database is nonempty" {
+        R 0 FLUSHALL
+        R 0 SELECT 9
+        R 0 SET $key v9
+        R 0 SELECT 2
+        R 0 SET $key v2
+        R 0 DEL $key
+        assert_equal 1 [slot_key_count $key_slot]
+        set ranked [R 0 CLUSTER SLOT-STATS ORDERBY key-count LIMIT 1]
+        assert_equal $key_slot [lindex $ranked 0 0]
+        assert_equal 1 [dict get [lindex $ranked 0 1] key-count]
+        R 0 SELECT 9
+        R 0 DEL $key
+        R 0 SELECT 0
+        assert_equal 0 [slot_key_count $key_slot]
     }
 
     test "CLUSTER SLOT-STATS key-count after DEBUG RELOAD" {

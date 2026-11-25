@@ -26,17 +26,11 @@ typedef struct {
     uint64_t stat;
 } slotStatForSort;
 
-static int doesSlotBelongToMyShard(int slot) {
-    clusterNode *myself = getMyClusterNode();
-    clusterNode *primary = clusterNodeGetPrimary(myself);
-
-    return clusterNodeCoversSlot(primary, slot);
-}
-
 static int markSlotsAssignedToMyShard(unsigned char *assigned_slots, int start_slot, int end_slot) {
+    clusterNode *primary = clusterNodeGetPrimary(getMyClusterNode());
     int assigned_slots_count = 0;
     for (int slot = start_slot; slot <= end_slot; slot++) {
-        if (doesSlotBelongToMyShard(slot)) {
+        if (clusterNodeCoversSlot(primary, slot)) {
             assigned_slots[slot]++;
             assigned_slots_count++;
         }
@@ -44,10 +38,10 @@ static int markSlotsAssignedToMyShard(unsigned char *assigned_slots, int start_s
     return assigned_slots_count;
 }
 
-/* Key counts for the slots first_slot..first_slot+N-1, summed over all
- * databases. counts[i] is the count of slot first_slot+i. When counts is NULL,
- * key counts are computed per slot with countKeysInSlot(). */
+/* Use the sole database with keys directly or precompute counts when several
+ * databases have keys. When neither is set, every slot has zero keys. */
 typedef struct {
+    serverDb *single_db;
     unsigned int *counts;
     int first_slot;
 } slotKeyCounts;
@@ -107,21 +101,21 @@ static void collectKeyCounts(slotKeyCounts *key_counts, const unsigned char *ass
     zfree(ranges);
 }
 
-/* Returns true when more than one database holds keys. With at most one, the
- * key count of a slot is a single lookup in countKeysInSlot(), so building the
- * count array with collectKeyCounts() costs more than it saves. */
-static bool multipleDbsHaveKeys(void) {
-    int dbs_with_keys = 0;
+/* Identify the sole database with keys, if any. With zero or one, counting
+ * slots directly avoids building an array or walking empty databases again. */
+static bool findSingleSlotKeyDb(slotKeyCounts *key_counts) {
     serverDb *db;
     forEachCreatedDb(db) {
-        if (dbHasSlotKeys(db) && ++dbs_with_keys > 1) return true;
+        if (!dbHasSlotKeys(db)) continue;
+        if (key_counts->single_db != NULL) return false;
+        key_counts->single_db = db;
     }
-    return false;
+    return true;
 }
 
 static unsigned int getSlotKeyCount(const slotKeyCounts *key_counts, int slot) {
-    if (key_counts->counts == NULL) return countKeysInSlot(slot);
-    return key_counts->counts[slot - key_counts->first_slot];
+    if (key_counts->counts != NULL) return key_counts->counts[slot - key_counts->first_slot];
+    return key_counts->single_db != NULL ? countKeysInSlotForDb(slot, key_counts->single_db) : 0;
 }
 
 static uint64_t getSlotStat(int slot, slotStatType stat_type, const slotKeyCounts *key_counts) {
@@ -159,11 +153,11 @@ static int slotStatForSortDescCmp(const void *a, const void *b) {
     return (entry_b.stat > entry_a.stat) - (entry_b.stat < entry_a.stat);
 }
 
-static int collectAndSortSlotStats(slotStatForSort slot_stats[],
-                                   const unsigned char *assigned_slots,
-                                   slotStatType order_by,
-                                   int desc,
-                                   const slotKeyCounts *key_counts) {
+static void collectAndSortSlotStats(slotStatForSort slot_stats[],
+                                    const unsigned char *assigned_slots,
+                                    slotStatType order_by,
+                                    int desc,
+                                    const slotKeyCounts *key_counts) {
     int i = 0;
 
     for (int slot = 0; slot < CLUSTER_SLOTS; slot++) {
@@ -174,17 +168,16 @@ static int collectAndSortSlotStats(slotStatForSort slot_stats[],
         }
     }
     qsort(slot_stats, i, sizeof(slotStatForSort), (desc) ? slotStatForSortDescCmp : slotStatForSortAscCmp);
-    return i;
 }
 
-static void addReplySlotStat(client *c, int slot, const slotKeyCounts *key_counts) {
+static void addReplySlotStat(client *c, int slot, unsigned int key_count) {
     addReplyArrayLen(c, 2); /* Array of size 2, where 0th index represents (int) slot,
                              * and 1st index represents (map) usage statistics. */
     addReplyLongLong(c, slot);
     addReplyMapLen(c, (server.cluster_slot_stats_enabled) ? SLOT_STAT_COUNT
                                                           : 1); /* Nested map representing slot usage statistics. */
     addReplyBulkCString(c, "key-count");
-    addReplyLongLong(c, getSlotKeyCount(key_counts, slot));
+    addReplyLongLong(c, key_count);
 
     /* Any additional metrics aside from key-count come with a performance trade-off,
      * and are aggregated and returned based on its server config. */
@@ -202,21 +195,27 @@ static void addReplySlotStat(client *c, int slot, const slotKeyCounts *key_count
  * Response is ordered in ascending slot number. */
 static void addReplySlotsRange(client *c, unsigned char *assigned_slots, int startslot, int endslot, int len) {
     slotKeyCounts key_counts = {0};
-    if (multipleDbsHaveKeys()) collectKeyCounts(&key_counts, assigned_slots, startslot, endslot);
+    if (len > 0 && !findSingleSlotKeyDb(&key_counts)) {
+        collectKeyCounts(&key_counts, assigned_slots, startslot, endslot);
+    }
     addReplyArrayLen(c, len); /* Top level RESP reply format is defined as an array, due to ordering invariance. */
 
     for (int slot = startslot; slot <= endslot; slot++) {
-        if (assigned_slots[slot]) addReplySlotStat(c, slot, &key_counts);
+        if (assigned_slots[slot]) addReplySlotStat(c, slot, getSlotKeyCount(&key_counts, slot));
     }
     zfree(key_counts.counts);
 }
 
-static void addReplySortedSlotStats(client *c, slotStatForSort slot_stats[], int num_slots_assigned, long limit, const slotKeyCounts *key_counts) {
-    int len = min(limit, num_slots_assigned);
-    addReplyArrayLen(c, len); /* Top level RESP reply format is defined as an array, due to ordering invariance. */
-
-    for (int i = 0; i < len; i++) {
-        addReplySlotStat(c, slot_stats[i].slot, key_counts);
+/* After sorting a limited reply by another metric, reuse stat to hold the
+ * key counts of the returned slots. Check which databases hold keys once. */
+static void countKeysForSortedReply(slotStatForSort slot_stats[], int len) {
+    for (int i = 0; i < len; i++) slot_stats[i].stat = 0;
+    serverDb *db;
+    forEachCreatedDb(db) {
+        if (!dbHasSlotKeys(db)) continue;
+        for (int i = 0; i < len; i++) {
+            slot_stats[i].stat += countKeysInSlotForDb(slot_stats[i].slot, db);
+        }
     }
 }
 
@@ -282,14 +281,35 @@ void clusterSlotStatsAddNetworkBytesOutForShardedPubSubInternalPropagation(clien
 static void addReplyOrderBy(client *c, slotStatType order_by, long limit, int desc) {
     slotStatForSort slot_stats[CLUSTER_SLOTS];
     unsigned char assigned_slots[CLUSTER_SLOTS] = {UNASSIGNED_SLOT};
-    markSlotsAssignedToMyShard(assigned_slots, 0, CLUSTER_SLOTS - 1);
-    /* Sorting by key-count needs the count of every assigned slot, which is
-     * cheapest in one pass when several databases hold keys. Otherwise key
-     * counts are looked up per slot. */
+    int assigned_count = markSlotsAssignedToMyShard(assigned_slots, 0, CLUSTER_SLOTS - 1);
+    int len = min(limit, assigned_count);
+    if (len == 0) {
+        addReplyArrayLen(c, 0);
+        return;
+    }
+
+    /* When most slots will be returned, a sequential scan of owned slots is
+     * more cache friendly than looking them up in rank order. Bound the extra
+     * lookups to the final quarter of the assigned slots. */
     slotKeyCounts key_counts = {0};
-    if (order_by == KEY_COUNT && multipleDbsHaveKeys()) collectKeyCounts(&key_counts, assigned_slots, 0, CLUSTER_SLOTS - 1);
-    int num_slots_assigned = collectAndSortSlotStats(slot_stats, assigned_slots, order_by, desc, &key_counts);
-    addReplySortedSlotStats(c, slot_stats, num_slots_assigned, limit, &key_counts);
+    bool count_reply_only = false;
+    if (!findSingleSlotKeyDb(&key_counts)) {
+        if (order_by == KEY_COUNT || len >= assigned_count - assigned_count / 4) {
+            collectKeyCounts(&key_counts, assigned_slots, 0, CLUSTER_SLOTS - 1);
+        } else {
+            count_reply_only = true;
+        }
+    }
+    collectAndSortSlotStats(slot_stats, assigned_slots, order_by, desc, &key_counts);
+    if (count_reply_only) countKeysForSortedReply(slot_stats, len);
+
+    addReplyArrayLen(c, len); /* Top level RESP reply format is defined as an array, due to ordering invariance. */
+    for (int i = 0; i < len; i++) {
+        int slot = slot_stats[i].slot;
+        unsigned int key_count = (order_by == KEY_COUNT || count_reply_only) ? slot_stats[i].stat
+                                                                             : getSlotKeyCount(&key_counts, slot);
+        addReplySlotStat(c, slot, key_count);
+    }
     zfree(key_counts.counts);
 }
 

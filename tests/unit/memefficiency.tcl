@@ -585,6 +585,14 @@ run_solo {defrag} {
         return [lsearch -inline [split [r client list] "\r\n"] "* name=stalled *"]
     }
 
+    # Waits for n defrag cycles to finish after log line $from, returns the line of the last one.
+    proc wait_for_defrag_cycles {from n} {
+        for {set i 0} {$i < $n} {incr i} {
+            set from [lindex [wait_for_log_messages 0 {"*Active defrag done in*"} $from 100 100] 1]
+        }
+        return $from
+    }
+
     proc test_pubsub_pending_reply {type} {
         set title "Active Defrag pubsub with a pending channel reply: $type"
         test $title {
@@ -628,14 +636,9 @@ run_solo {defrag} {
             }
 
             # Let defrag scan the pubsub table while the replies are queued.
-            set old_defrag_time [s total_active_defrag_time]
+            set log_from [count_log_lines 0]
             r config set activedefrag yes
-            wait_for_condition 50 100 {
-                [s total_active_defrag_time] ne $old_defrag_time
-            } else {
-                fail "defrag not started"
-            }
-            after 2000
+            set log_from [wait_for_defrag_cycles $log_from 1]
             assert_equal PONG [r ping]
             assert_match {* omem=[1-9]*} [stalled_client_info]
             assert_equal [list $chan 1] [r pubsub numsub $chan]
@@ -648,7 +651,8 @@ run_solo {defrag} {
             } else {
                 fail "stalled client was not freed"
             }
-            after 2000
+            # The cycle already running may be past the pubsub stage.
+            wait_for_defrag_cycles $log_from 2
             r config set activedefrag no
 
             assert_equal 1 [r publish $chan hello]

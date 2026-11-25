@@ -32,6 +32,16 @@ proc wait_for_convert_to_slave {lower_bound} {
     fail "Sentinel did not convert the replica back"
 }
 
+# Wait until Sentinel 0 processed the replies to all the commands it sent to
+# the replica.
+proc wait_for_no_pending_commands {} {
+    wait_for_condition 500 10 {
+        [replica_field_from_sentinel_0 $::replica_port link-pending-commands] == 0
+    } else {
+        fail "Sentinel still has pending commands"
+    }
+}
+
 # Promote the replica again and check that Sentinel 0 did not process any INFO
 # after the one that triggered +convert-to-slave, so it did not observe the
 # replica role in between.
@@ -40,15 +50,14 @@ proc wait_for_convert_to_slave {lower_bound} {
 # one. $before_convert can be later than it only by the time the REPLICAOF
 # takes to reach the instance, so the checks below hold unless a local command
 # is delayed by several seconds.
+#
+# Return a time (in ms) such that any INFO Sentinel 0 processes after it was
+# sent after the new promotion.
 proc promote_again_before_next_info {before_convert} {
     # Replies to requests sent before +convert-to-slave may still be on their
     # way to Sentinel. Wait until it processed all of them, so any INFO it
     # processes after the new promotion was sent after the conversion.
-    wait_for_condition 500 10 {
-        [replica_field_from_sentinel_0 $::replica_port link-pending-commands] == 0
-    } else {
-        fail "Sentinel still has pending commands"
-    }
+    wait_for_no_pending_commands
     R $::replica_id replicaof no one
     # Promoting well within the info-period means no INFO was sent after the
     # conversion and before the promotion.
@@ -61,6 +70,11 @@ proc promote_again_before_next_info {before_convert} {
     if {$last_info > $before_convert + 1000} {
         fail "Sentinel processed an INFO before the replica was promoted again"
     }
+    # Every request sent before the promotion has been answered once there
+    # are no pending commands, so a later INFO was sent after the promotion.
+    wait_for_no_pending_commands
+    assert_equal {master} [RI $::replica_id role]
+    return [clock milliseconds]
 }
 
 # Return 1 if Sentinel 0 processed an INFO after $since (in ms). The clock is
@@ -70,7 +84,7 @@ proc info_refreshed_since {since} {
     expr {[replica_field_from_sentinel_0 $::replica_port info-refresh] < $now - $since}
 }
 
-# Wait for Sentinel 0 to process an INFO sent after $since (in ms), then check
+# Wait for Sentinel 0 to process an INFO after $since (in ms), then check
 # that it did not demote the replica.
 proc assert_not_demoted_after_next_info {since} {
     wait_for_condition 1500 10 {
@@ -80,11 +94,7 @@ proc assert_not_demoted_after_next_info {since} {
     }
     # A REPLICAOF would be queued while processing that INFO, so once Sentinel
     # has no pending commands it would have been executed.
-    wait_for_condition 500 10 {
-        [replica_field_from_sentinel_0 $::replica_port link-pending-commands] == 0
-    } else {
-        fail "Sentinel still has pending commands"
-    }
+    wait_for_no_pending_commands
     assert_equal {master} [RI $::replica_id role]
 }
 
@@ -108,8 +118,7 @@ test "Replica promoted again right after +convert-to-slave is not demoted at onc
     # converts it back to replica.
     set before_convert [wait_for_convert_to_slave $start]
 
-    promote_again_before_next_info $before_convert
-    set promoted [clock milliseconds]
+    set promoted [promote_again_before_next_info $before_convert]
 
     # The next INFO must be seen as a role change: the replica must not be
     # demoted before the wait elapses again.
@@ -141,8 +150,7 @@ test "INFO replies sent before +convert-to-slave are ignored" {
     # The INFO that triggers +convert-to-slave is processed after the sleep.
     set before_convert [wait_for_convert_to_slave [expr {$before_sleep + 12000}]]
 
-    promote_again_before_next_info $before_convert
-    set promoted [clock milliseconds]
+    set promoted [promote_again_before_next_info $before_convert]
 
     assert_not_demoted_after_next_info $promoted
 

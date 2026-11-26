@@ -46,6 +46,17 @@ start_server {tags {"modules"}} {
         assert_equal [r config get moduleconfigs.numeric] "moduleconfigs.numeric -2"
     }
 
+    test {Sensitive module config is redacted from commandlog} {
+        set old_threshold [lindex [r config get commandlog-execution-slower-than] 1]
+        r config set commandlog-execution-slower-than 0
+        r commandlog reset slow
+        r config set moduleconfigs.sensitive_numeric 424242
+        r config set commandlog-execution-slower-than $old_threshold
+        assert_equal [r config get moduleconfigs.sensitive_numeric] "moduleconfigs.sensitive_numeric 424242"
+        assert_equal {config set moduleconfigs.sensitive_numeric (redacted)} [lindex [r commandlog get -1 slow] 0 3]
+        assert {[lsearch [dict get [lindex [r config info moduleconfigs.sensitive_numeric] 0] flags] "sensitive"] >= 0}
+    }
+
     test {Config set commands enum flags} {
         r config set moduleconfigs.flags "none"
         assert_equal [r config get moduleconfigs.flags] "moduleconfigs.flags none"

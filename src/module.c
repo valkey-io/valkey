@@ -14600,6 +14600,7 @@ unsigned int maskModuleConfigFlags(unsigned int flags) {
     unsigned int new_flags = 0;
     if (flags & VALKEYMODULE_CONFIG_DEFAULT) new_flags |= MODIFIABLE_CONFIG;
     if (flags & VALKEYMODULE_CONFIG_IMMUTABLE) new_flags |= IMMUTABLE_CONFIG;
+    if (flags & VALKEYMODULE_CONFIG_SENSITIVE) new_flags |= SENSITIVE_CONFIG;
     if (flags & VALKEYMODULE_CONFIG_HIDDEN) new_flags |= HIDDEN_CONFIG;
     if (flags & VALKEYMODULE_CONFIG_PROTECTED) new_flags |= PROTECTED_CONFIG;
     if (flags & VALKEYMODULE_CONFIG_DENY_LOADING) new_flags |= DENY_LOADING_CONFIG;

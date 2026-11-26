@@ -1161,6 +1161,27 @@ proc raft_ack_until {fd index} {
     }
 }
 
+# Send CLUSTER ADDVOTER on rd until the leader appends it. The learner's last
+# ACK and the command are on different connections, so the leader may get the
+# command first and reject it because the learner doesn't have the whole log.
+proc raft_propose_add_voter {rd id} {
+    for {set i 0} {$i < 50} {incr i} {
+        set appended [count_log_message 0 "Leader appended ADD_VOTER"]
+        set rejected [count_log_message 0 "rejecting ADD_VOTER"]
+        $rd CLUSTER ADDVOTER $id
+        wait_for_condition 100 10 {
+            [count_log_message 0 "Leader appended ADD_VOTER"] > $appended ||
+            [count_log_message 0 "rejecting ADD_VOTER"] > $rejected
+        } else {
+            fail "ADDVOTER was neither appended nor rejected"
+        }
+        if {[count_log_message 0 "Leader appended ADD_VOTER"] > $appended} return
+        assert_error "*rejected*" {$rd read}
+        after 10
+    }
+    fail "ADDVOTER kept being rejected"
+}
+
 test "Raft proto: an entry commits on a quorum of voters, learners don't count" {
     start_server {overrides {cluster-enabled yes cluster-protocol raft cluster-node-timeout 5000}} {
         # Join all first: with two voters, a join needs a voter's ACK.
@@ -1177,7 +1198,7 @@ test "Raft proto: an entry commits on a quorum of voters, learners don't count" 
             raft_ack_until $fd [CI 0 cluster_raft_last_applied]
             set target [expr {[CI 0 cluster_raft_commit_index] + 1}]
             set rd [valkey_deferring_client]
-            $rd CLUSTER ADDVOTER $id
+            raft_propose_add_voter $rd $id
             foreach v $added { raft_ack_until $v $target }
             assert_equal OK [$rd read]
             $rd close

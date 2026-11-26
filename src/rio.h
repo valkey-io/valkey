@@ -44,6 +44,7 @@
 #define RIO_FLAG_CLOSE_ASAP (1 << 2) /* Rio was closed asynchronously during the current rio operation. */
 #define RIO_FLAG_SKIP_RDB_CHECKSUM (1 << 3)
 #define RIO_FLAG_STREAMING_COMPRESSION (1 << 4) /* Input uses whole-stream compression. */
+#define RIO_FLAG_AOF_INTEGRITY (1 << 5)         /* Input is an AOF preamble protected by AOF integrity. */
 
 #define RIO_TYPE_FILE (1 << 0)
 #define RIO_TYPE_BUFFER (1 << 1)

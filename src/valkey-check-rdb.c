@@ -49,6 +49,7 @@ void computeDatasetProfile(int dbid, robj *keyobj, robj *o, long long expiretime
 int rdbCheckMode = 0;
 int rdbCheckStats = 0;
 int rdbCheckOutput = 0;
+int rdbCheckRequireChecksum = 0; /* Set by valkey-check-aof for a base written with integrity. */
 long long now;
 
 #define LOW_TRACKE_VALUE 1
@@ -893,7 +894,7 @@ int redis_check_rdb(char *rdbfilename, FILE *fp) {
             memrev64ifbe(&cksum);
             if (rdb->flags & RIO_FLAG_SKIP_RDB_CHECKSUM) {
                 rdbCheckInfo("RDB file was saved with checksum disabled: skipped checksum for this transfer.");
-            } else if (cksum == 0) {
+            } else if (cksum == 0 && !rdbCheckRequireChecksum) {
                 rdbCheckInfo("RDB file was saved with checksum disabled: no check performed.");
             } else if (cksum != expected) {
                 rdbCheckError("RDB CRC error");

@@ -138,7 +138,7 @@ void reqresReset(client *c, int free_buf) {
  * 4. reqresAppendResponse will append the diff between the current offset and the one from step (1)
  * 5. When client is reset before the next command, we clear c->reqres.offset.saved and start again
  *
- * We cannot reply on c->sentlen to keep track because it depends on the network
+ * We cannot rely on c->sentlen to keep track because it depends on the network
  * (reqresAppendResponse will always write the whole buffer, unlike writeToClient)
  *
  * Ideally, we would just have this code inside reqresAppendRequest, which is called

@@ -640,7 +640,7 @@ dict *parseConfigOutput(valkeyReply *reply) {
     return configDict;
 }
 
-/* Process argument flags from Vallkey reply */
+/* Process argument flags from Valkey reply */
 static void processArgumentFlags(CommandArgument *cmdArg, valkeyReply *flags) {
     static const struct {
         const char *name;
@@ -696,7 +696,7 @@ static void parseCommandArgument(CommandArgument *cmdArg, valkeyReply *argMap) {
     }
 }
 
-/* Parse command arguments from Vallkey reply */
+/* Parse command arguments from Valkey reply */
 static void parseCommandArguments(valkeyReply *arguments, CommandArgument *result, struct CommandInfo *parent) {
     for (size_t j = 0; j < arguments->elements; j++) {
         result[j].parent = parent;

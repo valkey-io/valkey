@@ -11,7 +11,7 @@ start_server {tags {"acl external:skip"}} {
         r ACL USERS
     } {default newuser}
 
-    test {Usernames can not contain spaces or null characters} {
+    test {Usernames cannot contain spaces or null characters} {
         catch {r ACL setuser "a a"} err
         set err
     } {*Usernames can't contain spaces or null characters*}
@@ -833,6 +833,15 @@ start_server {tags {"acl external:skip"}} {
         assert {[llength [r ACL LOG]] == 0}
     }
 
+    test {ACLLOG - zero max length does not leak refused script keys} {
+        test_config_set r acllog-max-len 0
+        set before [s used_memory]
+        r AUTH antirez foo
+        r EVAL {for i = 1, 200 do server.pcall('set', ARGV[1], '1') end} 0 [string repeat x 100000]
+        r AUTH default ""
+        assert_lessthan [expr {[s used_memory] - $before}] 5000000
+    }
+
     test {ACL LOG entries are limited to a maximum amount} {
         r ACL LOG RESET
         r CONFIG SET acllog-max-len 5
@@ -918,7 +927,7 @@ start_server {tags {"acl external:skip"}} {
        assert_match "*ACL GENPASS argument must be the number*" $err2
     }
 
-    test {Default user can not be removed} {
+    test {Default user cannot be removed} {
        catch {r ACL deluser default} err
        set err
     } {ERR The 'default' user cannot be removed}
@@ -1175,7 +1184,7 @@ start_server [list overrides [list "dir" $server_path "acl-pubsub-default" "allc
         r PUBLISH hello world
     }
 
-    test {default: with config acl-pubsub-default resetchannels after reset, can not access any channels} {
+    test {default: with config acl-pubsub-default resetchannels after reset, cannot access any channels} {
         r CONFIG SET acl-pubsub-default resetchannels
         r ACL setuser default reset on nopass ~* +@all
         assert_error {*NOPERM*channel*} {r SUBSCRIBE foo}
@@ -1410,8 +1419,8 @@ start_server [list overrides [list "dir" $server_path "aclfile" "user.acl"] tags
         close $fd
     }
 
-    # Every file below keeps the default user as it already is, so that the
-    # client running the test is never disconnected by the reload.
+    # The client running the tests is never disconnected by a reload, since it
+    # is not a pub/sub client.
     test {ACL DIGEST is unchanged by an ACL LOAD of an equivalent file} {
         write_digest_acl_file $aclfile {
             "user default on nopass ~* &* +@all"
@@ -1445,6 +1454,46 @@ start_server [list overrides [list "dir" $server_path "aclfile" "user.acl"] tags
         }
         r ACL LOAD
         assert {[r ACL DIGEST] ne $digest}
+    }
+
+    test {ACL LOAD disconnects default user clients subscribed to revoked channels} {
+        write_digest_acl_file $aclfile {
+            "user default on nopass ~* &* +@all"
+            "user alice on >alice ~* &* +@all"
+        }
+        r ACL LOAD
+
+        set rd [valkey_deferring_client]
+        test_defer [list $rd close]
+        $rd SUBSCRIBE secret
+        $rd read
+
+        set rd_pattern [valkey_deferring_client]
+        test_defer [list $rd_pattern close]
+        $rd_pattern PSUBSCRIBE *
+        $rd_pattern read
+
+        set rd_public [valkey_deferring_client]
+        test_defer [list $rd_public close]
+        $rd_public SUBSCRIBE public
+        $rd_public read
+
+        write_digest_acl_file $aclfile {
+            "user default on nopass ~* resetchannels &public +@all"
+            "user alice on >alice ~* &* +@all"
+        }
+        r ACL LOAD
+
+        r AUTH alice alice
+        r PUBLISH secret test-message
+        catch {$rd read} e
+        assert_match {*I/O error*} $e
+        catch {$rd_pattern read} e
+        assert_match {*I/O error*} $e
+
+        # A subscription the new rules still allow survives the reload.
+        r PUBLISH public test-message
+        assert_equal {message public test-message} [$rd_public read]
     }
 }
 

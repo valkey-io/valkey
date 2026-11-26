@@ -25,6 +25,9 @@ unsigned long int global_defragged = 0;
 unsigned long int global_resumes = 0;
 unsigned long int global_wrong_cursor = 0;
 
+/* Set by FRAG.STALL. */
+int datatype_stall = 0;
+
 int global_strings_len = 0;
 ValkeyModuleString **global_strings = NULL;
 /* If non-zero, the global defrag callback stops after this many strings per
@@ -123,6 +126,19 @@ static int fragResetStatsCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv
     return VALKEYMODULE_OK;
 }
 
+/* FRAG.STALL 0|1
+ * When set, FragDefrag stops making progress, so its key stays on defrag_later. */
+static int fragStallCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    long long stall;
+    if (argc != 2)
+        return ValkeyModule_WrongArity(ctx);
+    if (ValkeyModule_StringToLongLong(argv[1], &stall) != VALKEYMODULE_OK)
+        return ValkeyModule_ReplyWithError(ctx, "ERR invalid value");
+
+    datatype_stall = (stall != 0);
+    return ValkeyModule_ReplyWithSimpleString(ctx, "OK");
+}
+
 /* FRAG.CREATE key len size maxstep */
 static int fragCreateCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     if (argc != 5)
@@ -205,6 +221,13 @@ int FragDefrag(ValkeyModuleDefragCtx *ctx, ValkeyModuleString *key, void **value
         datatype_defragged++;
     }
 
+    /* Report "not done" without moving the cursor. */
+    if (datatype_stall) {
+        ValkeyModule_DefragCursorSet(ctx, i);
+        last_set_cursor = i;
+        return 1;
+    }
+
     /* Deep defrag now */
     for (; i < o->len; i++) {
         datatype_attempts++;
@@ -270,6 +293,10 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
 
     if (ValkeyModule_CreateCommand(ctx, "frag.resetstats",
                                   fragResetStatsCommand, "write deny-oom", 1, 1, 1) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
+
+    if (ValkeyModule_CreateCommand(ctx, "frag.stall",
+                                  fragStallCommand, "fast", 0, 0, 0) == VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
 
     ValkeyModule_RegisterInfoFunc(ctx, FragInfo);

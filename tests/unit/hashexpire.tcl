@@ -380,6 +380,15 @@ start_server {tags {"hashexpire"}} {
             set e
         } {ERR *}
     }
+
+    test {HGETEX on a key named fields} {
+        r FLUSHALL
+        r HSET fields f1 v1
+        assert_equal {v1} [r HGETEX fields FIELDS 1 f1]
+        assert_equal {v1} [r HGETEX fields PERSIST FIELDS 1 f1]
+        assert_equal {v1} [r HGETEX fields EX 100 FIELDS 1 f1]
+        assert_range [r HTTL fields FIELDS 1 f1] 1 100
+    }
 }
 
 start_server {tags {"hashexpire"}} {
@@ -558,6 +567,15 @@ start_server {tags {"hashexpire"}} {
         catch {r HSETEX myhash EX 10 FIELDS 2 field1 val1} e
         set e
     } {ERR *}
+
+    test {HSETEX on a key named fields} {
+        r FLUSHALL
+        assert_equal 1 [r HSETEX fields FIELDS 1 f1 v1]
+        assert_equal 1 [r HSETEX fields EX 100 FIELDS 1 f2 v2]
+        assert_equal {v1 v2} [r HMGET fields f1 f2]
+        assert_equal -1 [r HTTL fields FIELDS 1 f1]
+        assert_range [r HTTL fields FIELDS 1 f2] 1 100
+    }
 
     foreach command {EX PX EXAT PXAT} {
         test "HSETEX $command 0/past time works correctly with 2 fields" {
@@ -1667,7 +1685,10 @@ start_server {tags {"hashexpire"}} {
         r copy myhash{t} nwhash{t}
 
         # Verify initial TTL state
-        assert_equal [r MEMORY USAGE myhash{t}] [r MEMORY USAGE nwhash{t}]
+        # With libc malloc, MEMORY USAGE of the copy can differ by an allocator chunk.
+        assert_equal [r OBJECT ENCODING myhash{t}] [r OBJECT ENCODING nwhash{t}]
+        set mem_src [r MEMORY USAGE myhash{t}]
+        assert_range [r MEMORY USAGE nwhash{t}] [expr {$mem_src - 16}] [expr {$mem_src + 16}]
         assert_equal "v1 v3 v4" [r HMGET myhash{t} f1 f3 f4]
         assert_equal "v1 v3 v4" [r HMGET nwhash{t} f1 f3 f4]
         assert_equal [r HEXPIRETIME myhash{t} FIELDS 1 f1] [r HEXPIRETIME nwhash{t} FIELDS 1 f1] 
@@ -1749,6 +1770,35 @@ start_server {tags {"hashexpire"}} {
 
         assert_equal {value {} {}} [r hmget hmgetbatchhfetest alive expired missing]
         assert_equal {} [r hget hmgetbatchhfetest expired]
+
+        r DEBUG SET-ACTIVE-EXPIRE 1
+    } {OK} {needs:debug}
+
+    test {MEMORY USAGE counts expired but unreaped hash fields} {
+        r DEBUG SET-ACTIVE-EXPIRE 0
+
+        # One small live field and 99 large fields that expire right away.
+        # With active expiry off nothing is reclaimed, so the large fields
+        # still occupy memory. If the size estimate sampled only live fields
+        # it would extrapolate the small one across the whole table and
+        # report a few hundred bytes for a ~100KB hash.
+        r del memusagehfe
+        r hset memusagehfe live v
+        set value [string repeat x 1000]
+        for {set i 1} {$i <= 99} {incr i} {
+            r hset memusagehfe f$i $value
+        }
+        assert_encoding hashtable memusagehfe
+        set fields {}
+        for {set i 1} {$i <= 99} {incr i} {
+            lappend fields f$i
+        }
+        assert_equal 99 [llength [r hpexpire memusagehfe 1 fields 99 {*}$fields]]
+        after 5
+        assert_equal 100 [r hlen memusagehfe]
+        assert_equal {} [r hget memusagehfe f1]
+
+        assert_morethan [r memory usage memusagehfe samples 0] 99000
 
         r DEBUG SET-ACTIVE-EXPIRE 1
     } {OK} {needs:debug}

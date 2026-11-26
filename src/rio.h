@@ -49,6 +49,7 @@
 #define RIO_TYPE_BUFFER (1 << 1)
 #define RIO_TYPE_CONN (1 << 2)
 #define RIO_TYPE_FD (1 << 3)
+#define RIO_TYPE_CONNSET (1 << 5)
 
 struct streamWriter;
 struct streamReader;
@@ -280,4 +281,6 @@ void rioSetReclaimCache(rio *r, int enabled);
 uint8_t rioCheckType(rio *r);
 void rioInitWithConnset(rio *r, connection **conns, int numconns);
 void rioFreeConnset(rio *r);
+void rioFreeConnectionFromConnset(rio *r, connection *conn_to_free);
+int rioConnsetConnErrno(rio *r, connection *conn);
 #endif

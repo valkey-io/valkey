@@ -162,6 +162,11 @@ proc set_debug_prevent_pause {value} {
     for {set i 0} {$i < [llength $::servers]} {incr i} {
         assert_match "OK" [R $i DEBUG SLOTMIGRATION PREVENT-PAUSE $value]
     }
+
+    # Inside a test, reset if the test fails. Outside a test nothing is registered
+    if {$value && $::cur_test ne ""} {
+        test_defer_fail { set_debug_prevent_pause 0 }
+    }
 }
 
 proc set_debug_prevent_failover {value} {
@@ -708,9 +713,8 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster network} overrides
 
     test "Import with hz set to 1" {
         assert_does_not_resync {
-            set old_hz [lindex [R 0 CONFIG GET hz] 1]
-            R 0 CONFIG SET hz 1
-            R 2 CONFIG SET hz 1
+            test_config_set {R 0} hz 1
+            test_config_set {R 2} hz 1
 
             # Populate data before migration
             populate 1000 "$16383_slot_tag:" 1000 -2
@@ -736,8 +740,6 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster network} overrides
             assert_equal "OK" [R 0 FLUSHDB SYNC]
             assert_equal "OK" [R 0 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node2_id]
             wait_for_migration 2 16383
-            R 0 CONFIG SET hz $old_hz
-            R 2 CONFIG SET hz $old_hz
         }
     }
 
@@ -798,6 +800,56 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster network} overrides
             # Migration log shows success on both ends
             assert {[dict get [get_migration_by_name 0 $jobname] state] eq "success"}
             assert {[dict get [get_migration_by_name 2 $jobname] state] eq "success"}
+
+            # Cleanup for the next test
+            assert_match "OK" [R 0 FLUSHALL SYNC]
+            assert_match "OK" [R 0 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node2_id]
+            wait_for_migration 2 16383
+        }
+    }
+
+    test "Single source import - write during snapshot is applied to the right database" {
+        assert_does_not_resync {
+            set_debug_prevent_pause 1
+
+            # A key in db 15 makes the snapshot end in db 15 on the target.
+            assert_match "OK" [R 2 SET $16383_slot_tag:balance 100]
+            for {set i 0} {$i < 5} {incr i} {
+                assert_match "OK" [R 2 SET $16383_slot_tag:pad$i p]
+            }
+            assert_match "OK" [R 2 SELECT 15]
+            assert_match "OK" [R 2 SET $16383_slot_tag:balance 500]
+            assert_match "OK" [R 2 SELECT 0]
+
+            # 7 keys * 200ms/key keeps the snapshot running during the write below.
+            R 2 CONFIG SET rdb-key-save-delay 200000
+            set errcode [catch {
+                assert_match "OK" [R 2 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node0_id]
+                set jobname [get_job_name 2 16383]
+                wait_for_migration_field 2 $jobname state snapshotting
+                assert_equal 101 [R 2 INCRBY $16383_slot_tag:balance 1]
+            } errmsg options]
+
+            # Restore even on failure, a leaked delay slows every later test.
+            R 2 CONFIG SET rdb-key-save-delay 0
+            if {$errcode} {
+                catch {R 2 CLUSTER CANCELSLOTMIGRATIONS}
+                set_debug_prevent_pause 0
+                R 2 SELECT 15
+                R 2 DEL $16383_slot_tag:balance
+                R 2 SELECT 0
+                R 2 DEL $16383_slot_tag:balance $16383_slot_tag:pad0 $16383_slot_tag:pad1 $16383_slot_tag:pad2 $16383_slot_tag:pad3 $16383_slot_tag:pad4
+                return -options $options $errmsg
+            }
+
+            set_debug_prevent_pause 0
+            wait_for_migration 0 16383
+
+            # The db 0 write must not run in db 15 on the target.
+            assert_equal 101 [R 0 GET $16383_slot_tag:balance]
+            assert_match "OK" [R 0 SELECT 15]
+            assert_equal 500 [R 0 GET $16383_slot_tag:balance]
+            assert_match "OK" [R 0 SELECT 0]
 
             # Cleanup for the next test
             assert_match "OK" [R 0 FLUSHALL SYNC]
@@ -1243,6 +1295,21 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster network} overrides
         }
     }
 
+    test "Import cancelled while target writes are paused" {
+        set_debug_prevent_pause 1
+        assert_match "OK" [R 2 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node0_id]
+        set jobname [get_job_name 2 16383]
+        wait_for_migration_field 2 $jobname state waiting-to-pause
+
+        R 0 CLIENT PAUSE 100000 WRITE
+        assert_match "OK" [R 2 CLUSTER CANCELSLOTMIGRATIONS]
+        wait_for_migration_field 0 $jobname state failed
+        assert_equal "PONG" [R 0 PING]
+
+        R 0 CLIENT UNPAUSE
+        set_debug_prevent_pause 0
+    }
+
     test "OOM on target aborts migration" {
         assert_does_not_resync {
             # Load some data before the snapshot
@@ -1294,8 +1361,7 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster network} overrides
 
         # Trigger failover. Give a large repl backlog to ensure PSYNC will
         # succeed even after the new primary cleans up the importing keys.
-        set old_repl_backlog [lindex [R 3 CONFIG GET repl-backlog-size] 1]
-        R 3 CONFIG SET repl-backlog-size 100mb
+        test_config_set {R 3} repl-backlog-size 100mb
         assert_match "OK" [R 3 CLUSTER FAILOVER]
 
         # Jobs should be dropped on both ends
@@ -1322,7 +1388,6 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster network} overrides
 
         # Cleanup for the next test
         assert_match "OK" [R 2 FLUSHDB SYNC]
-        assert_equal "OK" [R 3 CONFIG SET repl-backlog-size $old_repl_backlog]
         set_debug_prevent_pause 0
     }
 
@@ -1410,8 +1475,7 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster network} overrides
     test "Export unpauses itself even if slot failover doesn't occur" {
         assert_does_not_resync {
             # Lower manual failover timeout for this test
-            set mf_timeout_old [lindex [R 0 CONFIG GET cluster-manual-failover-timeout] 1]
-            R 0 CONFIG SET cluster-manual-failover-timeout 100
+            test_config_set {R 0} cluster-manual-failover-timeout 100
 
             # Use debug command to prevent failover
             set_debug_prevent_failover 1
@@ -1432,9 +1496,6 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster network} overrides
             # Validate no longer paused
             assert_match "none" [s -0 paused_reason]
 
-            # Reset manual failover timeout
-            R 0 CONFIG SET cluster-manual-failover-timeout $mf_timeout_old
-
             # Cleanup for the next test
             set_debug_prevent_failover 0
             assert_match "OK" [R 0 FLUSHDB SYNC]
@@ -1444,8 +1505,7 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster network} overrides
     test "Export unpauses when cancelled" {
         assert_does_not_resync {
             # Lower manual failover timeout for this test
-            set mf_timeout_old [lindex [R 0 CONFIG GET cluster-manual-failover-timeout] 1]
-            R 0 CONFIG SET cluster-manual-failover-timeout 100
+            test_config_set {R 0} cluster-manual-failover-timeout 100
 
             # Use debug command to prevent failover
             set_debug_prevent_failover 1
@@ -1462,9 +1522,6 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster network} overrides
             wait_for_migration_field 2 $jobname state failed
 
             assert_match "none" [s -0 paused_reason]
-
-            # Reset manual failover timeout
-            R 0 CONFIG SET cluster-manual-failover-timeout $mf_timeout_old
 
             # Cleanup for the next test
             set_debug_prevent_failover 0
@@ -1556,6 +1613,16 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster network} overrides
                 $client CLUSTER SYNCSLOTS ESTABLISH SOURCE $node2_id NAME $fake_jobname SLOTSRANGE 16383 16383
                 $client CLUSTER SYNCSLOTS ESTABLISH SOURCE $node2_id NAME $fake_jobname SLOTSRANGE 10923 10923
             }
+        }
+    }
+
+    test "RESET is rejected on a slot migration client" {
+        assert_does_not_resync {
+            assert_causes_conn_drop 0 {
+                $client CLUSTER SYNCSLOTS ESTABLISH SOURCE $node2_id NAME $fake_jobname SLOTSRANGE 16383 16383
+                $client RESET
+            }
+            assert_equal PONG [R 0 PING]
         }
     }
 
@@ -2047,8 +2114,7 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster network} overrides
             assert_match "OK" [R 2 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node0_id]
             set jobname [get_job_name 2 16383]
             wait_for_migration_field 2 $jobname state waiting-to-pause
-            set old_cob [lindex [R 2 config get client-output-buffer-limit] 1]
-            R 2 config set client-output-buffer-limit "replica 10k 0 0"
+            test_config_set {R 2} client-output-buffer-limit "replica 10k 0 0"
 
             # Pause the target
             set node0_pid [srv -0 pid]
@@ -2077,7 +2143,6 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster network} overrides
 
             # Cleanup for the next test
             assert_match "OK" [R 2 FLUSHDB SYNC]
-            R 2 config set client-output-buffer-limit "$old_cob"
             set_debug_prevent_pause 0
         }
     }
@@ -2425,6 +2490,66 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster network} overrides
             wait_for_cluster_state ok
         }
     }
+
+    # Writes during snapshot and during incremental forwarding must reach the
+    # target. MSETEX is invisible to that path unless its keys are discovered.
+    test "MSETEX writes survive atomic slot migration" {
+        assert_does_not_resync {
+            set slot 16383
+            set tag $16383_slot_tag
+            ensure_slot_on_node 2 $slot
+            assert_match "OK" [R 2 FLUSHDB SYNC]
+            assert_match "OK" [R 0 FLUSHDB SYNC]
+
+            assert_equal "OK" [R 2 SET $tag:oldkey old]
+            # 30 keys * 100ms keeps the child in snapshotting while we write.
+            populate 30 "$tag:fill:" 100 -2
+
+            set old_delay [lindex [R 2 CONFIG GET rdb-key-save-delay] 1]
+            R 2 CONFIG SET rdb-key-save-delay 100000
+            assert_match "OK" [R 2 CLUSTER MIGRATESLOTS SLOTSRANGE $slot $slot NODE $node0_id]
+            set jobname [get_job_name 2 $slot]
+            wait_for_migration_field 2 $jobname state snapshotting
+
+            assert_equal 1 [R 2 MSETEX 1 $tag:oldkey new]
+            assert_equal 1 [R 2 MSETEX 1 $tag:newkey created EX 1000]
+            assert_equal "OK" [R 2 SET $tag:control control]
+            R 2 CONFIG SET rdb-key-save-delay $old_delay
+
+            wait_for_migration 0 $slot 300
+            assert_equal new [R 0 GET $tag:oldkey]
+            assert_equal created [R 0 GET $tag:newkey]
+            assert_morethan [R 0 PTTL $tag:newkey] 0
+            assert_equal control [R 0 GET $tag:control]
+            assert_equal 0 [R 2 CLUSTER COUNTKEYSINSLOT $slot]
+            assert_equal 33 [R 0 CLUSTER COUNTKEYSINSLOT $slot]
+            assert_equal "success" [dict get [get_migration_by_name 0 $jobname] state]
+            assert_equal "success" [dict get [get_migration_by_name 2 $jobname] state]
+
+            set_debug_prevent_pause 1
+            assert_match "OK" [R 0 CLUSTER MIGRATESLOTS SLOTSRANGE $slot $slot NODE $node2_id]
+            set jobname [get_job_name 0 $slot]
+            wait_for_migration_field 0 $jobname state waiting-to-pause
+
+            assert_equal 1 [R 0 MSETEX 1 $tag:oldkey newer]
+            assert_equal 1 [R 0 MSETEX 1 $tag:incrkey forwarded EX 1000]
+            assert_equal "OK" [R 0 SET $tag:control2 control2]
+            set_debug_prevent_pause 0
+
+            wait_for_migration 2 $slot 300
+            assert_equal newer [R 2 GET $tag:oldkey]
+            assert_equal forwarded [R 2 GET $tag:incrkey]
+            assert_morethan [R 2 PTTL $tag:incrkey] 0
+            assert_equal control2 [R 2 GET $tag:control2]
+            assert_equal 0 [R 0 CLUSTER COUNTKEYSINSLOT $slot]
+            assert_equal 35 [R 2 CLUSTER COUNTKEYSINSLOT $slot]
+            assert_equal "success" [dict get [get_migration_by_name 2 $jobname] state]
+            assert_equal "success" [dict get [get_migration_by_name 0 $jobname] state]
+
+            assert_match "OK" [R 2 FLUSHDB SYNC]
+            assert_match "OK" [R 0 FLUSHDB SYNC]
+        }
+    }
 }
 
 start_cluster 3 0 {tags {logreqres:skip external:skip cluster network}} {
@@ -2486,8 +2611,7 @@ start_cluster 3 6 {tags {logreqres:skip external:skip cluster network}} {
 
         # Trigger failover. Give a large repl backlog to ensure PSYNC will
         # succeed even after the new primary cleans up the importing keys.
-        set old_repl_backlog [lindex [R 3 CONFIG GET repl-backlog-size] 1]
-        R 3 CONFIG SET repl-backlog-size 100mb
+        test_config_set {R 3} repl-backlog-size 100mb
         assert_match "OK" [R 3 CLUSTER FAILOVER]
 
         # Jobs should be dropped on both ends
@@ -2515,7 +2639,6 @@ start_cluster 3 6 {tags {logreqres:skip external:skip cluster network}} {
         # Cleanup for the next test
         assert_match "OK" [R 2 FLUSHDB SYNC]
         set_debug_prevent_pause 0
-        assert_equal "OK" [R 3 CONFIG SET repl-backlog-size $old_repl_backlog]
     }
 }
 
@@ -3048,5 +3171,113 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster} overrides {cluste
         assert_match "OK" [R 0 FLUSHALL SYNC]
         assert_match "OK" [R 0 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node2_id]
         wait_for_migration 2 16383
+    }
+}
+
+start_cluster 3 3 {tags {logreqres:skip external:skip cluster} overrides {repl-diskless-sync yes repl-diskless-sync-delay 0}} {
+    test "Replica takes the primary's FINISH after a swapdb full sync during an import" {
+        set key "{6ZJ}:full-sync-import"
+        assert_equal 16383 [R 2 CLUSTER KEYSLOT $key]
+        R 3 config set repl-diskless-load swapdb
+        set_debug_prevent_pause 1
+        assert_match "OK" [R 2 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE [R 0 CLUSTER MYID]]
+        set job_name [get_job_name 2 16383]
+        wait_for_migration_field 3 $job_name state occurring-on-primary
+        wait_for_migration_field 0 $job_name state waiting-for-paused
+
+        # The full sync fails the replica's tracking job, while the primary's
+        # import is still waiting for the source to pause.
+        set syncs [status [Rn 0] sync_full]
+        R 0 debug change-repl-id
+        R 0 client kill type replica
+        wait_for_condition 100 100 {
+            [status [Rn 0] sync_full] > $syncs && [status [Rn 3] master_link_status] eq "up"
+        } else {
+            fail "Replica did not full sync"
+        }
+        wait_for_migration_field 3 $job_name state failed
+
+        # Verify writes made after the full sync survive FINISH reconciliation.
+        assert_equal OK [R 2 SET $key value]
+        set_debug_prevent_pause 0
+        wait_for_migration_field 0 $job_name state success
+        wait_for_ofs_sync [Rn 0] [Rn 3]
+        assert_equal success [dict get [get_migration_by_name 3 $job_name] state]
+        assert_equal value [R 0 GET $key]
+        assert_equal [R 0 DEBUG DIGEST] [R 3 DEBUG DIGEST]
+        wait_for_countkeysinslot 2 16383 0
+    }
+}
+
+start_cluster 2 1 {tags {logreqres:skip external:skip cluster} overrides {cluster-require-full-coverage no forkless-infrastructure-enabled yes forkless-policy prefer-forkless save "" repl-diskless-sync yes repl-diskless-sync-delay 0}} {
+    set node0_id [R 0 CLUSTER MYID]
+
+    test "Forkless BGSAVE falls back to fork while a slot import is in progress" {
+        set_debug_prevent_pause 1
+        assert_match "OK" [R 1 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node0_id]
+        set jobname [get_job_name 1 16383]
+        wait_for_migration_registered 0 $jobname
+        R 0 bgsave
+        waitForBgsave [Rn 0]
+        assert_equal fork [getInfoProperty [R 0 info persistence] rdb_last_bgsave_type]
+        assert_equal 1 [getInfoProperty [R 0 info debug] forkless_fallbacks_slot_import]
+        R 1 CLUSTER CANCELSLOTMIGRATIONS
+        wait_for_migration_field 0 $jobname state failed
+        set_debug_prevent_pause 0
+    }
+
+    test "Forkless sync to a replica falls back to fork when a slot migration starts during the scan" {
+        R 0 debug populate 2000 {b}
+        R 0 config set rdb-key-save-delay 1000
+        set loglines [count_log_lines 0]
+        R 0 debug change-repl-id
+        R 0 client kill type replica
+        wait_for_log_messages 0 {"*Starting BGSAVE for SYNC*method: forkless*"} $loglines 50 100
+        set_debug_prevent_pause 1
+        assert_match "OK" [R 1 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node0_id]
+        set jobname [get_job_name 1 16383]
+        wait_for_log_messages 0 {"*forkless save cancelled*"} $loglines 50 100
+        R 0 config set rdb-key-save-delay 0
+        wait_for_log_messages 0 {"*Starting BGSAVE for SYNC*method: fork"} $loglines 50 100
+        wait_for_condition 50 100 {
+            [getInfoProperty [R 2 info replication] master_link_status] eq "up"
+        } else {
+            fail "Replica didn't resync"
+        }
+        R 1 CLUSTER CANCELSLOTMIGRATIONS
+        wait_for_migration_field 0 $jobname state failed
+        set_debug_prevent_pause 0
+        R 0 flushall
+    }
+
+    test "Slot export snapshot that cannot fork during a forkless BGSAVE leaves the source able to migrate again" {
+        # A forkless BGSAVE has no child process, so the export does not wait
+        # for it, but serverFork() still refuses to fork while it runs. The
+        # export then takes its fork-failure path.
+        R 1 debug populate 100 {fk} 10
+        # Hold 'bgsave' (1s * 100 = 100s) until the fork fails.
+        # It is released after fork failure us confirmed.
+        R 1 config set rdb-key-save-delay 1000000
+        R 1 bgsave
+        assert_equal 1 [getInfoProperty [R 1 info persistence] rdb_bgsave_in_progress]
+        assert_equal forkless [getInfoProperty [R 1 info persistence] rdb_current_bgsave_type]
+
+        set loglines [count_log_lines -1]
+        assert_match "OK" [R 1 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node0_id]
+        set jobname [get_job_name 1 16383]
+        wait_for_log_messages -1 {"*Can't begin slot migration snapshot in background: fork: Operation already in progress*"} $loglines 100 100
+        wait_for_migration_field 1 $jobname state failed
+        assert_equal 1 [getInfoProperty [R 1 info persistence] rdb_bgsave_in_progress]
+
+        # Release the save.
+        R 1 config set rdb-key-save-delay 0
+        waitForBgsave [Rn 1]
+
+        # The failed attempt must not leave snapshot pipe state behind: the
+        # next export asserts that none is set when it starts.
+        assert_match "OK" [R 1 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node0_id]
+        wait_for_migration 0 16383
+        assert_equal PONG [R 1 ping]
+        R 1 flushall
     }
 }

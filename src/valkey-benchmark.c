@@ -1238,14 +1238,15 @@ static void showRPSReport(void) {
         const float p50 = (float)hdr_value_at_percentile(config.rps_histogram, 50.0);
         const float p95 = (float)hdr_value_at_percentile(config.rps_histogram, 95.0);
         const float p99 = (float)hdr_value_at_percentile(config.rps_histogram, 99.0);
+        const float p999 = (float)hdr_value_at_percentile(config.rps_histogram, 99.9);
         const float p100 = (float)hdr_max(config.rps_histogram);
 
         printf("\n");
         printf("RPS Summary:\n");
         printf("  target RPS: %.2f\n", target_rps);
         printf("  RPS distribution (reqs/sec):\n");
-        printf("    %9s %9s %9s %9s %9s %9s\n", "avg", "min", "p50", "p95", "p99", "max");
-        printf("    %9.3f %9.3f %9.3f %9.3f %9.3f %9.3f\n", avg_rps, p0, p50, p95, p99, p100);
+        printf("    %9s %9s %9s %9s %9s %9s %9s\n", "avg", "min", "p50", "p95", "p99", "p99.9", "max");
+        printf("    %9.3f %9.3f %9.3f %9.3f %9.3f %9.3f %9.3f\n", avg_rps, p0, p50, p95, p99, p999, p100);
     }
 }
 
@@ -1255,6 +1256,7 @@ static void showReport(void) {
     const float p50 = hdr_value_at_percentile(config.latency_histogram, 50.0) / 1000.0f;
     const float p95 = hdr_value_at_percentile(config.latency_histogram, 95.0) / 1000.0f;
     const float p99 = hdr_value_at_percentile(config.latency_histogram, 99.0) / 1000.0f;
+    const float p999 = hdr_value_at_percentile(config.latency_histogram, 99.9) / 1000.0f;
     const float p100 = ((float)hdr_max(config.latency_histogram)) / 1000.0f;
     const float avg = hdr_mean(config.latency_histogram) / 1000.0f;
 
@@ -1332,11 +1334,11 @@ static void showReport(void) {
         printf("Summary:\n");
         printf("  throughput summary: %.2f requests per second\n", reqpersec);
         printf("  latency summary (msec):\n");
-        printf("    %9s %9s %9s %9s %9s %9s\n", "avg", "min", "p50", "p95", "p99", "max");
-        printf("    %9.3f %9.3f %9.3f %9.3f %9.3f %9.3f\n", avg, p0, p50, p95, p99, p100);
+        printf("    %9s %9s %9s %9s %9s %9s %9s\n", "avg", "min", "p50", "p95", "p99", "p99.9", "max");
+        printf("    %9.3f %9.3f %9.3f %9.3f %9.3f %9.3f %9.3f\n", avg, p0, p50, p95, p99, p999, p100);
     } else if (config.csv) {
-        printf("\"%s\",\"%.2f\",\"%.3f\",\"%.3f\",\"%.3f\",\"%.3f\",\"%.3f\",\"%.3f\"\n", config.title, reqpersec, avg,
-               p0, p50, p95, p99, p100);
+        printf("\"%s\",\"%.2f\",\"%.3f\",\"%.3f\",\"%.3f\",\"%.3f\",\"%.3f\",\"%.3f\",\"%.3f\"\n", config.title, reqpersec,
+               avg, p0, p50, p95, p99, p999, p100);
     } else {
         printf("%*s\r", config.last_printed_bytes, " "); // ensure there is a clean line
         printf("%s: %.2f requests per second, p50=%.3f msec\n", config.title, reqpersec, p50);
@@ -2358,6 +2360,9 @@ char *generateFunctionScript(uint32_t num_functions, int with_keys) {
                      "server.register_function('foo%u', foo%u)\n",
                      num_functions,
                      num_functions);
+        if (n < 0 || (size_t)n >= buffer_len - written) {
+            break;
+        }
         written += n;
 
         num_functions--;
@@ -2685,7 +2690,7 @@ int main(int argc, char **argv) {
     }
     if (config.csv) {
         printf("\"test\",\"rps\",\"avg_latency_ms\",\"min_latency_ms\",\"p50_latency_ms\",\"p95_latency_ms\",\"p99_"
-               "latency_ms\",\"max_latency_ms\"\n");
+               "latency_ms\",\"p999_latency_ms\",\"max_latency_ms\"\n");
     }
 
     if (config.fuzz_mode) {

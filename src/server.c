@@ -184,7 +184,7 @@ void filterInvalidLogfmtChar(char *safemsg, size_t safemsglen, const char *msg) 
     safemsg[index] = '\0';
 }
 
-/* Low level logging. To use only for very big messages, otherwise
+/* Low level logging. To use only for very big messages; otherwise,
  * serverLog() is to prefer. */
 void serverLogRaw(int level, const char *msg) {
     const int syslogLevelMap[] = {LOG_DEBUG, LOG_INFO, LOG_NOTICE, LOG_WARNING};
@@ -385,7 +385,7 @@ void dictHashtableDestructor(void *val) {
 
 /* Returns 1 when keys match */
 int dictSdsKeyCompare(const void *key1, const void *key2) {
-    int l1, l2;
+    size_t l1, l2;
     l1 = sdslen((sds)key1);
     l2 = sdslen((sds)key2);
     if (l1 != l2) return 0;
@@ -780,7 +780,7 @@ hashtableType hashWithVolatileItemsHashtableType = {
 
 /* Hashtable type without destructor */
 hashtableType sdsReplyHashtableType = {
-    .hashFunction = dictSdsCaseHash,
+    .hashFunction = dictSdsHash,
     .keyCompare = dictSdsKeyCompare};
 
 /* Keylist hash table type has unencoded Objects as keys and
@@ -891,6 +891,9 @@ void updateDictResizePolicy(void) {
     } else {
         hashtableSetResizePolicy(HASHTABLE_RESIZE_ALLOW);
     }
+    /* Leaf compaction in B+tree sorted sets rewrites node pages the same way
+     * a rehash does, so it follows the same fork-aware policy. */
+    orderedIndexSetCompactionAllowed(server.in_fork_child == CHILD_TYPE_NONE && !hasActiveChildProcess());
 }
 
 const char *strChildType(int type) {
@@ -937,7 +940,7 @@ int isMutuallyExclusiveChildType(int type) {
 
 /* Returns true when we're inside a long command that yielded to the event loop. */
 int isInsideYieldingLongCommand(void) {
-    return scriptIsTimedout() || server.busy_module_yield_flags;
+    return scriptIsTimedOut() || server.busy_module_yield_flags;
 }
 
 /* Return true if this instance has persistence completely turned off:
@@ -1391,19 +1394,19 @@ void databasesCron(void) {
     if (!hasActiveChildProcess()) {
         /* We use global counters so if we stop the computation at a given
          * DB we'll be able to start from the successive in the next
-         * cron loop iteration. */
+         * cron loop iteration. The counters index server.created_db_ids, so
+         * only created databases are visited. */
         static unsigned int resize_db = 0;
         static unsigned int rehash_db = 0;
         int dbs_per_call = CRON_DBS_PER_CALL;
         int j;
 
         /* Don't test more DBs than we have. */
-        if (dbs_per_call > server.dbnum) dbs_per_call = server.dbnum;
+        if (dbs_per_call > server.created_db_count) dbs_per_call = server.created_db_count;
 
         for (j = 0; j < dbs_per_call; j++) {
-            serverDb *db = server.db[resize_db % server.dbnum];
+            serverDb *db = server.db[server.created_db_ids[resize_db % server.created_db_count]];
             resize_db++;
-            if (db == NULL) continue;
             kvstoreTryResizeHashtables(db->keys, CRON_DICTS_PER_DB);
             kvstoreTryResizeHashtables(db->expires, CRON_DICTS_PER_DB);
             kvstoreTryResizeHashtables(db->keys_with_volatile_items, CRON_DICTS_PER_DB);
@@ -1414,15 +1417,13 @@ void databasesCron(void) {
             uint64_t elapsed_us = 0;
             uint64_t threshold_us = 1 * 1000000 / server.hz / 100;
             for (j = 0; j < dbs_per_call; j++) {
-                serverDb *db = server.db[rehash_db % server.dbnum];
-                if (db != NULL) {
-                    elapsed_us += kvstoreIncrementallyRehash(db->keys, threshold_us - elapsed_us);
-                    if (elapsed_us >= threshold_us) break;
-                    elapsed_us += kvstoreIncrementallyRehash(db->expires, threshold_us - elapsed_us);
-                    if (elapsed_us >= threshold_us) break;
-                    elapsed_us += kvstoreIncrementallyRehash(db->keys_with_volatile_items, threshold_us - elapsed_us);
-                    if (elapsed_us >= threshold_us) break;
-                }
+                serverDb *db = server.db[server.created_db_ids[rehash_db % server.created_db_count]];
+                elapsed_us += kvstoreIncrementallyRehash(db->keys, threshold_us - elapsed_us);
+                if (elapsed_us >= threshold_us) break;
+                elapsed_us += kvstoreIncrementallyRehash(db->expires, threshold_us - elapsed_us);
+                if (elapsed_us >= threshold_us) break;
+                elapsed_us += kvstoreIncrementallyRehash(db->keys_with_volatile_items, threshold_us - elapsed_us);
+                if (elapsed_us >= threshold_us) break;
                 rehash_db++;
             }
         }
@@ -1472,7 +1473,7 @@ void updateCachedTime(int update_daylight_info) {
  * otherwise we need to update cache times so the same cached time will be used all over
  * the execution unit.
  * update_cached_time - if 0, will not update the cached time even if required.
- * us - if not zero, use this time for cached time, otherwise get current time. */
+ * us - if not zero, use this time for cached time; otherwise, get current time. */
 void enterExecutionUnit(int update_cached_time, ustime_t us) {
     if (server.execution_nesting++ == 0 && update_cached_time) {
         if (us == 0) {
@@ -1550,7 +1551,7 @@ void cronUpdateMemoryStats(void) {
 
     run_with_period(100) {
         /* Sample the RSS and other metrics here since this is a relatively slow call.
-         * We must sample the zmalloc_used at the same time we take the rss, otherwise
+         * We must sample the zmalloc_used at the same time we take the rss; otherwise,
          * the frag ratio calculate may be off (ratio of two samples at different times) */
         server.cron_malloc_stats.process_rss = zmalloc_get_rss();
         server.cron_malloc_stats.zmalloc_used = zmalloc_used_memory();
@@ -1659,16 +1660,15 @@ long long serverCron(struct aeEventLoop *eventLoop, long long id, void *clientDa
     /* Show some info about non-empty databases */
     if (server.verbosity <= LL_VERBOSE) {
         run_with_period(5000) {
-            for (j = 0; j < server.dbnum; j++) {
-                serverDb *db = server.db[j];
-                if (db == NULL) continue;
+            serverDb *db;
+            forEachCreatedDb(db) {
                 long long size, used, vkeys;
 
-                size = kvstoreBuckets(server.db[j]->keys) * hashtableEntriesPerBucket();
-                used = kvstoreSize(server.db[j]->keys);
-                vkeys = kvstoreSize(server.db[j]->expires);
+                size = kvstoreBuckets(db->keys) * hashtableEntriesPerBucket();
+                used = kvstoreSize(db->keys);
+                vkeys = kvstoreSize(db->expires);
                 if (used || vkeys) {
-                    serverLog(LL_VERBOSE, "DB %d: %lld keys (%lld volatile) in %lld slots HT.", j, used, vkeys, size);
+                    serverLog(LL_VERBOSE, "DB %d: %lld keys (%lld volatile) in %lld slots HT.", db->id, used, vkeys, size);
                 }
             }
         }
@@ -1699,10 +1699,16 @@ long long serverCron(struct aeEventLoop *eventLoop, long long id, void *clientDa
     }
 
     /* Check if a background saving or AOF rewrite in progress terminated. */
-    if (hasActiveChildProcess() || scriptingEngineDebuggerPendingChildren()) {
+    int had_child = hasActiveChildProcess();
+    if (had_child || scriptingEngineDebuggerPendingChildren()) {
         run_with_period(1000) receiveChildInfo();
         checkChildrenDone();
-    } else if (!isSaveInProgress()) {
+    }
+
+    /* Forked script debugging sessions are not the active child, and an idle
+     * one can live indefinitely, so they must not postpone the save points and
+     * the automatic AOF rewrite. */
+    if (!had_child && !hasActiveSaveOrChild()) {
         /* If there is not a background saving/rewrite in progress check if
          * we have to save/rewrite now. */
         for (j = 0; j < server.saveparamslen; j++) {
@@ -1780,7 +1786,7 @@ long long serverCron(struct aeEventLoop *eventLoop, long long id, void *clientDa
 
     /* Cleanup expired MIGRATE cached sockets. */
     run_with_period(1000) {
-        migrateCloseTimedoutSockets();
+        migrateCloseTimedOutSockets();
     }
 
     /* Resize tracking keys table if needed. This is also done at every
@@ -1805,7 +1811,7 @@ long long serverCron(struct aeEventLoop *eventLoop, long long id, void *clientDa
      * because we want to give priority to RDB savings for replication. */
     if (!hasActiveSaveOrChild() && server.rdb_bgsave_scheduled &&
         (server.unixtime - server.lastbgsave_try > CONFIG_BGSAVE_RETRY_DELAY || server.lastbgsave_status == C_OK)) {
-        if (rdbStartBgsave(server.rdb_bgsave_scheduled) == C_OK) server.rdb_bgsave_scheduled = RDB_BGSAVE_TYPE_NONE;
+        if (rdbStartBgsave(resolveBgsaveType()) == C_OK) server.rdb_bgsave_scheduled = 0;
     }
 
     /* TLS auto-reload if enabled (only when TLS is built-in). */
@@ -2513,6 +2519,7 @@ void initServerConfig(void) {
     server.primary = NULL;
     server.cached_primary = NULL;
     server.primary_initial_offset = -1;
+    server.primary_initial_offset_in_rdb = false;
     server.repl_state = REPL_STATE_NONE;
     server.repl_rdb_channel_state = REPL_DUAL_CHANNEL_STATE_NONE;
     server.repl_transfer_tmpfile = NULL;
@@ -2614,7 +2621,7 @@ int restartServer(client *c, int flags, mstime_t delay) {
     /* Close all file descriptors, with the exception of stdin, stdout, stderr
      * which are useful if we restart a server which is not daemonized. */
     for (j = 3; j < (int)server.maxclients + 1024; j++) {
-        /* Test the descriptor validity before closing it, otherwise
+        /* Test the descriptor validity before closing it; otherwise,
          * Valgrind issues a warning on close(). */
         if (fcntl(j, F_GETFD) != -1) close(j);
     }
@@ -2952,6 +2959,11 @@ void resetServerStats(void) {
     server.stat_fork_time = 0;
     server.stat_fork_rate = 0;
     server.stat_total_forks = 0;
+    server.stat_forkless_fallbacks_module = 0;
+    server.stat_forkless_fallbacks_slot_import = 0;
+    server.stat_forkless_fallbacks_exclude_data = 0;
+    server.stat_forkless_fallbacks_missing_inband_repl = 0;
+    server.stat_forkless_fallbacks_compression = 0;
     server.stat_rejected_conn = 0;
     server.stat_rejected_priority_conn = 0;
     server.stat_sync_full = 0;
@@ -3023,9 +3035,9 @@ int dbHasNoKeys(int dbid) {
 }
 
 bool dbsHaveNoKeys(void) {
-    for (int i = 0; i < server.dbnum; i++) {
-        if (!dbHasNoKeys(i))
-            return false;
+    serverDb *db;
+    forEachCreatedDb(db) {
+        if (kvstoreSize(db->keys) != 0) return false;
     }
     return true;
 }
@@ -3054,11 +3066,46 @@ serverDb *createDatabase(int id) {
     return db;
 }
 
+/* Adds id to server.created_db_ids. Databases are never freed while the
+ * server runs, so the list only grows. Its array grows by doubling, up to
+ * dbnum entries, so memory follows the number of created databases. The list
+ * is sorted by id so that the order of loops over it (for example eviction
+ * sampling and defrag stages) is deterministic and does not depend on the
+ * order databases were created. Only createDatabaseIfNeeded() calls this; it
+ * is exported for unit tests. */
+void trackCreatedDatabase(int id) {
+    serverAssert(server.created_db_count < server.dbnum);
+    if (server.created_db_count == server.created_db_capacity) {
+        int cap = server.created_db_capacity ? server.created_db_capacity * 2 : 16;
+        if (cap > server.dbnum) cap = server.dbnum;
+        server.created_db_ids = zrealloc(server.created_db_ids, sizeof(int) * cap);
+        server.created_db_capacity = cap;
+    }
+    int pos = server.created_db_count;
+    while (pos > 0 && server.created_db_ids[pos - 1] > id) {
+        server.created_db_ids[pos] = server.created_db_ids[pos - 1];
+        pos--;
+    }
+    serverAssert(pos == 0 || server.created_db_ids[pos - 1] != id);
+    server.created_db_ids[pos] = id;
+    server.created_db_count++;
+}
+
 serverDb *createDatabaseIfNeeded(int id) {
     if (server.db[id] == NULL) {
         server.db[id] = createDatabase(id);
+        trackCreatedDatabase(id);
     }
     return server.db[id];
+}
+
+/* Like createDatabaseIfNeeded(), for code that fills either server.db or a
+ * temporary database array (for example RDB loading into a temp db). Only
+ * databases created in server.db are tracked. */
+serverDb *createDatabaseInArrayIfNeeded(serverDb **dbarray, int id) {
+    if (dbarray == server.db) return createDatabaseIfNeeded(id);
+    if (dbarray[id] == NULL) dbarray[id] = createDatabase(id);
+    return dbarray[id];
 }
 
 void initServer(void) {
@@ -3157,6 +3204,9 @@ void initServer(void) {
     }
     server.dbnum = server.cluster_enabled ? server.config_databases_cluster : server.config_databases;
     server.db = zcalloc(sizeof(serverDb *) * server.dbnum);
+    server.created_db_ids = NULL;
+    server.created_db_count = 0;
+    server.created_db_capacity = 0;
 
     /* Set object metadata size before creating any database key objects */
     if (server.forkless_infrastructure_enabled) {
@@ -3193,7 +3243,7 @@ void initServer(void) {
     server.rdb_pipe_numconns_writing = 0;
     server.rdb_pipe_buff = NULL;
     server.rdb_pipe_bufflen = 0;
-    server.rdb_bgsave_scheduled = RDB_BGSAVE_TYPE_NONE;
+    server.rdb_bgsave_scheduled = 0;
     server.child_info_pipe[0] = -1;
     server.child_info_pipe[1] = -1;
     server.child_info_nread = 0;
@@ -4054,7 +4104,8 @@ static void propagatePendingCommands(void) {
  * Must stay an OR of every condition below - never drop one as an
  * optimization, since that would silently skip real pending work. */
 static inline int hasPostExecutionUnitPendingWork(void) {
-    return moduleHasPostExecUnitJobs() || server.also_propagate.numops || server.busy_module_yield_flags;
+    return moduleHasPostExecUnitJobs() || server.also_propagate.numops || server.busy_module_yield_flags ||
+           bgIteration_iterationActive();
 }
 
 /* Performs operations that should be performed after an execution unit ends.
@@ -4481,7 +4532,7 @@ void rejectCommandFormat(client *c, int notify_modules, const char *fmt, ...) {
     va_start(ap, fmt);
     sds s = sdscatvprintf(sdsempty(), fmt, ap);
     va_end(ap);
-    /* Make sure there are no newlines in the string, otherwise invalid protocol
+    /* Make sure there are no newlines in the string; otherwise, invalid protocol
      * is emitted (The args come from the user, they may contain any character). */
     sdsmapchars(s, "\r\n", "  ", 2);
     rejectCommandSds(c, s, notify_modules);
@@ -4546,7 +4597,7 @@ int commandCheckExistence(client *c, sds *err) {
             sdscatprintf(*err, "unknown command '%.128s', with args beginning with: %s", (char *)objectGetVal(c->argv[0]), args);
         sdsfree(args);
     }
-    /* Make sure there are no newlines in the string, otherwise invalid protocol
+    /* Make sure there are no newlines in the string; otherwise, invalid protocol
      * is emitted (The args come from the user, they may contain any character). */
     sdsmapchars(*err, "\r\n", "  ", 2);
     return 0;
@@ -4639,13 +4690,14 @@ void unprepareCommand(client *c) {
  * other operations can be performed by the caller. Otherwise
  * if C_ERR is returned the client was destroyed (i.e. after QUIT). */
 int processCommand(client *c) {
+    /* evictClients() below relies on this flag to skip clients that are still
+     * executing further up the stack. Callers must go through processCommandAndResetClient(). */
+    debugServerAssert(c->flag.processing_command);
     serverAssert(!c->flag.blocked && !c->flag.unblocked);
 
-    if (!scriptIsTimedout()) {
+    if (!scriptIsTimedOut()) {
         /* Both EXEC and scripts call call() directly so there should be
-         * no way in_exec or scriptIsRunning() is 1.
-         * That is unless lua_timedout, in which case client may run
-         * some commands. */
+         * no way in_exec or scriptIsRunning() is 1. */
         serverAssert(!server.in_exec);
         serverAssert(!scriptIsRunning());
     }
@@ -4898,7 +4950,7 @@ int processCommand(client *c) {
             return C_OK;
         }
 
-        /* Save out_of_memory result at command start, otherwise if we check OOM
+        /* Save out_of_memory result at command start; otherwise, if we check OOM
          * in the first write within script, memory used by lua stack and
          * arguments might interfere. We need to save it for EXEC and module
          * calls too, since these can call EVAL, but avoid saving it during an
@@ -4989,7 +5041,7 @@ int processCommand(client *c) {
 
     /* when a busy job is being done (script / module)
      * Only allow a limited number of commands.
-     * Note that we need to allow the transactions commands, otherwise clients
+     * Note that we need to allow the transactions commands; otherwise, clients
      * sending a transaction with pipelining without error checking, may have
      * the MULTI plus a few initial commands refused, then the timeout
      * condition resolves, and the bottom-half of the transaction gets
@@ -6460,11 +6512,11 @@ void totalNumberOfStatefulKeys(unsigned long *blocking_keys,
                                unsigned long *blocking_keys_on_nokey,
                                unsigned long *watched_keys) {
     unsigned long bkeys = 0, bkeys_on_nokey = 0, wkeys = 0;
-    for (int j = 0; j < server.dbnum; j++) {
-        if (server.db[j] == NULL) continue;
-        bkeys += dictSize(server.db[j]->blocking_keys);
-        bkeys_on_nokey += dictSize(server.db[j]->blocking_keys_unblock_on_nokey);
-        wkeys += dictSize(server.db[j]->watched_keys);
+    serverDb *db;
+    forEachCreatedDb(db) {
+        bkeys += dictSize(db->blocking_keys);
+        bkeys_on_nokey += dictSize(db->blocking_keys_unblock_on_nokey);
+        wkeys += dictSize(db->watched_keys);
     }
     if (blocking_keys) *blocking_keys = bkeys;
     if (blocking_keys_on_nokey) *blocking_keys_on_nokey = bkeys_on_nokey;
@@ -6478,7 +6530,6 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
     sds info = sdsempty();
     info = sdsMakeRoomFor(info, 4096);
     time_t uptime = server.unixtime - server.stat_starttime;
-    int j;
     int sections = 0;
     if (everything) all_sections = 1;
 
@@ -7180,9 +7231,8 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
     if (all_sections || (dictFind(section_dict, "keyspace") != NULL)) {
         if (sections++) info = sdscat(info, "\r\n");
         info = sdscatprintf(info, "# Keyspace\r\n");
-        for (j = 0; j < server.dbnum; j++) {
-            serverDb *db = server.db[j];
-            if (db == NULL) continue;
+        serverDb *db;
+        forEachCreatedDb(db) {
             long long keys, vkeys, keysvitems;
 
             keys = kvstoreSize(db->keys);
@@ -7190,17 +7240,10 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
             keysvitems = kvstoreSize(db->keys_with_volatile_items);
 
             if (keys || vkeys) {
-                info = sdscatprintf(info, "db%d:keys=%lld,expires=%lld,avg_ttl=%lld,keys_with_volatile_items=%lld\r\n", j, keys, vkeys,
+                info = sdscatprintf(info, "db%d:keys=%lld,expires=%lld,avg_ttl=%lld,keys_with_volatile_items=%lld\r\n", db->id, keys, vkeys,
                                     db->expiry[KEYS].avg_ttl, keysvitems);
             }
         }
-    }
-
-    /* Hotkeys */
-    if (all_sections || (dictFind(section_dict, "hotkeys") != NULL)) {
-        if (sections++) info = sdscat(info, "\r\n");
-        info = sdscatprintf(info, "# Hotkeys\r\n");
-        info = genHotkeysInfoString(info);
     }
 
     /* Throttling */
@@ -7237,7 +7280,12 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                 "eventloop_priority_duration_max:%llu\r\n", server.duration_stats[EL_DURATION_TYPE_PRIORITY_EL].max,
                 "eventloop_priority_cmd_per_cycle_max:%lld\r\n", server.priority_el_cmd_cnt_max,
                 "io_threaded_reads_pending:%lld\r\n", server.stat_io_reads_pending,
-                "io_threaded_writes_pending:%lld\r\n", server.stat_io_writes_pending));
+                "io_threaded_writes_pending:%lld\r\n", server.stat_io_writes_pending,
+                "forkless_fallbacks_module:%lld\r\n", server.stat_forkless_fallbacks_module,
+                "forkless_fallbacks_slot_import:%lld\r\n", server.stat_forkless_fallbacks_slot_import,
+                "forkless_fallbacks_exclude_data:%lld\r\n", server.stat_forkless_fallbacks_exclude_data,
+                "forkless_fallbacks_missing_inband_repl:%lld\r\n", server.stat_forkless_fallbacks_missing_inband_repl,
+                "forkless_fallbacks_compression:%lld\r\n", server.stat_forkless_fallbacks_compression));
 
         info = forkless_catDebugInfo(info);
         info = throttleRepl_sdscatInfoDebugMetrics(info);
@@ -8158,7 +8206,7 @@ __attribute__((weak)) int main(int argc, char **argv) {
     server.supervised = serverIsSupervised(server.supervised_mode);
     int background = server.daemonize && !server.supervised;
     if (background) {
-        /* We need to reset server.pid after daemonize(), otherwise the
+        /* We need to reset server.pid after daemonize(); otherwise, the
          * log printing role will always be the child. */
         daemonize();
         server.pid = getpid();
@@ -8279,20 +8327,22 @@ __attribute__((weak)) int main(int argc, char **argv) {
  * Common command extended options - EX/EXAT/PX/PXAT/KEEPTTL
  *
  * Function takes pointers to client, flags, unit, expire_idx, pointer to pointer of expire obj,
- * pointer to pointer of compare obj, pointer to pointer of incrby obj, pointer to pointer of
+ * compare_idx, pointer to pointer of compare obj, pointer to pointer of incrby obj, pointer to pointer of
  * lbound obj, pointer to pointer of ubound obj, and command_type which can be COMMAND_*.
  *
  * If there are any syntax violations C_ERR is returned else C_OK is returned.
  *
  * Input flags are updated upon parsing the arguments. Unit, expire_idx and expire are updated if there are any
- * EX/EXAT/PX/PXAT arguments. Unit is updated to millisecond if PX/PXAT is set.
+ * EX/EXAT/PX/PXAT arguments. Unit is updated to millisecond if PX/PXAT is set. compare_idx and compare_val are
+ * updated if there is an IFEQ/IFNE argument.
  *
  * start_idx provides a way to start scanning from a specific index.
  * max_args provides a way to limit the scan to a specific range of arguments.
  */
-int parseExtendedCommandArgumentsOrReply(client *c, int command_type, int start_idx, int max_args, int *flags, int *unit, int *expire_idx, robj **expire, robj **compare_val, robj **incrby_val, robj **lbound_val, robj **ubound_val) {
+int parseExtendedCommandArgumentsOrReply(client *c, int command_type, int start_idx, int max_args, int *flags, int *unit, int *expire_idx, robj **expire, int *compare_idx, robj **compare_val, robj **incrby_val, robj **lbound_val, robj **ubound_val) {
     int j = start_idx;
     if (expire_idx) *expire_idx = -1;
+    if (compare_idx) *compare_idx = -1;
     for (; j < max_args; j++) {
         char *opt = objectGetVal(c->argv[j]);
         robj *next = (j == max_args - 1) ? NULL : c->argv[j + 1];
@@ -8333,6 +8383,7 @@ int parseExtendedCommandArgumentsOrReply(client *c, int command_type, int start_
         {
             *flags |= ARGS_SET_IFEQ;
             *compare_val = next;
+            if (compare_idx) *compare_idx = j + 1;
             j++;
         } else if ((opt[0] == 'i' || opt[0] == 'I') &&
                    (opt[1] == 'f' || opt[1] == 'F') &&
@@ -8343,6 +8394,7 @@ int parseExtendedCommandArgumentsOrReply(client *c, int command_type, int start_
         {
             *flags |= ARGS_SET_IFNE;
             *compare_val = next;
+            if (compare_idx) *compare_idx = j + 1;
             j++;
         } else if ((opt[0] == 'g' || opt[0] == 'G') &&
                    (opt[1] == 'e' || opt[1] == 'E') &&

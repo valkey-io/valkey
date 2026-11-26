@@ -416,6 +416,7 @@ start_server {tags {"tracking network logreqres:skip"}} {
 
     test {BCAST with prefix collisions throw errors} {
         set r [valkey_client] 
+        test_defer [list $r close]
         catch {$r CLIENT TRACKING ON BCAST PREFIX FOOBAR PREFIX FOO} output
         assert_match {ERR Prefix 'FOOBAR'*'FOO'*} $output
 
@@ -454,6 +455,19 @@ start_server {tags {"tracking network logreqres:skip"}} {
         assert_match {ERR*Prefix*overlaps*} $output
         assert_match {*off*} [$r CLIENT TRACKINGINFO]
         $r close
+    }
+
+    test {BCAST prefix removed after a matching write in the same event loop cycle} {
+        r CLIENT TRACKING off
+        set rc [valkey_client]
+        $rc CLIENT TRACKING on BCAST PREFIX gone:
+        $rc MULTI
+        $rc SET gone:key 1
+        $rc CLIENT TRACKING off
+        $rc CLIENT TRACKING on
+        $rc EXEC
+        assert_equal PONG [$rc PING]
+        $rc close
     }
 
     test {hdel deliver invalidate message after response in the same connection} {
@@ -1116,6 +1130,7 @@ start_server {tags {"tracking network"}} {
 
     test {Coverage: Basic CLIENT CACHING} {
         set rd_redirection [valkey_deferring_client]
+        test_defer [list $rd_redirection close]
         $rd_redirection client id
         set redir_id [$rd_redirection read]
         assert_equal {OK} [r CLIENT TRACKING on OPTIN REDIRECT $redir_id]

@@ -223,6 +223,11 @@ void orderedIndexDismissMemory(OrderedIndex *oi);
  * included; callers account for them by sampling the items they hold. */
 size_t orderedIndexEstimateStructureMemory(const OrderedIndex *oi);
 
+/* Deletes re-pack sparse leaves inline. Pass false to park that while a fork
+ * child shares this process's pages (copy-on-write cost), true to resume.
+ * Applies to all indexes, like hashtableSetResizePolicy(). */
+void orderedIndexSetCompactionAllowed(int allowed);
+
 /* Defrag the index's own top-level struct. All node and item allocations are
  * handled incrementally by orderedIndexScanDefrag. Returns the index pointer,
  * updated if the struct was relocated. */
@@ -241,6 +246,9 @@ unsigned long orderedIndexScanDefrag(OrderedIndex *oi, unsigned long cursor, Ord
 
 /* Return the internal height of the data structure (tree levels). */
 int orderedIndexGetHeight(const OrderedIndex *oi);
+
+/* Return the number of leaf nodes currently allocated. */
+unsigned long orderedIndexGetNumLeaves(const OrderedIndex *oi);
 
 /* Verify structural integrity. Returns 1 if valid, 0 if corrupt.
  * On failure, a description is written to errmsg. */

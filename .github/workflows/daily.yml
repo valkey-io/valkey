@@ -3,9 +3,10 @@ on:
   pull_request:
     types: [opened, synchronize, reopened, labeled]
     branches:
-      # any PR to a release branch.
+      # PRs to release, unstable, or agent branches, including future agent branches.
       - "[0-9].[0-9]"
       - "unstable"
+      - "agent/**"
     paths-ignore:
       - '**/*.md'
       - '**/00-RELEASENOTES'
@@ -590,7 +591,7 @@ jobs:
         uses: ./.github/actions/upload-test-failures
         with:
           job-name: ${{ github.job }}
-  test-ubuntu-tls-no-tls:
+  test-ubuntu-system-jemalloc-tls-no-tls:
     runs-on: ubuntu-latest
     if: |
       (github.event_name == 'workflow_call' || github.event_name == 'workflow_dispatch' ||
@@ -624,8 +625,14 @@ jobs:
           ref: b9e40069c0b47a722286b94eb5231f7f05c08713
           path: libbacktrace
       - run: cd libbacktrace && ./configure && make && sudo make install
+      - name: Install system jemalloc and gtest
+        run: sudo apt-get install libjemalloc-dev pkg-config libgtest-dev libgmock-dev
       - name: make
-        run: make BUILD_TLS=yes SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes
+        run: make all-with-unit-tests BUILD_TLS=yes MALLOC=system-jemalloc SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes
+      - name: check allocator
+        run: |
+          ldd src/valkey-server | grep libjemalloc
+          ./src/valkey-server --version | grep 'malloc=jemalloc'
       - name: testprep
         run: |
           sudo apt-get install tcl8.6 tclx tcl-tls
@@ -642,6 +649,9 @@ jobs:
         if: true && !contains(github.event.inputs.skiptests, 'sentinel')
         run: |
           ./runtest-sentinel --failures-output test-failures/sentinel.json ${{github.event.inputs.cluster_test_args}}
+      - name: unittest
+        if: true && !contains(github.event.inputs.skiptests, 'unittest')
+        run: make test-unit accurate=1
       - name: Upload test failures
         if: always()
         uses: ./.github/actions/upload-test-failures
@@ -781,7 +791,7 @@ jobs:
       - name: make
         run: make SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes
       - name: testprep
-        run: "sudo apt-get install vmtouch\nmkdir /tmp/master \nmkdir /tmp/slave\n"
+        run: "sudo apt-get install vmtouch\nmkdir -p ${RUNNER_TEMP}/primary\nmkdir -p ${RUNNER_TEMP}/replica\n"
       - name: warm up
         run: |
           ./src/valkey-server --daemonize yes --logfile /dev/null
@@ -793,13 +803,13 @@ jobs:
           echo "test SAVE doesn't increase cache"
           CACHE0=$(grep -w file /sys/fs/cgroup/memory.stat | awk '{print $2}')
           echo "$CACHE0"
-          ./src/valkey-server --daemonize yes --logfile /dev/null --dir /tmp/master --port 8080 --repl-diskless-sync no --pidfile /tmp/master/valkey.pid --rdbcompression no --enable-debug-command yes
+          ./src/valkey-server --daemonize yes --logfile /dev/null --dir ${RUNNER_TEMP}/primary --port 8080 --repl-diskless-sync no --pidfile ${RUNNER_TEMP}/primary/valkey.pid --rdbcompression no --enable-debug-command yes
           sleep 1 # wait for server startup
           ./src/valkey-cli -p 8080 debug populate 10000 k 102400
-          ./src/valkey-server --daemonize yes --logfile /dev/null --dir /tmp/slave --port 8081 --repl-diskless-load disabled --rdbcompression no
+          ./src/valkey-server --daemonize yes --logfile /dev/null --dir ${RUNNER_TEMP}/replica --port 8081 --repl-diskless-load disabled --rdbcompression no
           sleep 1 # wait for server startup
           ./src/valkey-cli -p 8080 save > /dev/null
-          VMOUT=$(vmtouch -v /tmp/master/dump.rdb)
+          VMOUT=$(vmtouch -v ${RUNNER_TEMP}/primary/dump.rdb)
           echo $VMOUT
           grep -q " 0%" <<< $VMOUT
           CACHE=$(grep -w file /sys/fs/cgroup/memory.stat | awk '{print $2}')
@@ -809,10 +819,10 @@ jobs:
           ./src/valkey-cli -p 8081 REPLICAOF 127.0.0.1 8080 > /dev/null
           while [ $(./src/valkey-cli -p 8081 info replication | grep "master_link_status:down") ]; do sleep 1; done;
           sleep 1 # wait for the completion of cache reclaim bio
-          VMOUT=$(vmtouch -v /tmp/master/dump.rdb)
+          VMOUT=$(vmtouch -v ${RUNNER_TEMP}/primary/dump.rdb)
           echo $VMOUT
           grep -q " 0%" <<< $VMOUT
-          VMOUT=$(vmtouch -v /tmp/slave/dump.rdb)
+          VMOUT=$(vmtouch -v ${RUNNER_TEMP}/replica/dump.rdb)
           echo $VMOUT
           grep -q " 0%" <<< $VMOUT
           CACHE=$(grep -w file /sys/fs/cgroup/memory.stat | awk '{print $2}')
@@ -820,14 +830,14 @@ jobs:
           if [ "$(( $CACHE-$CACHE0 ))" -gt "8000000" ]; then exit 1; fi
 
           echo "test reboot doesn't increase cache"
-          PID=$(cat /tmp/master/valkey.pid)
+          PID=$(cat ${RUNNER_TEMP}/primary/valkey.pid)
           kill -15 $PID
           while [ -x /proc/${PID} ]; do sleep 1; done
-          ./src/valkey-server --daemonize yes --logfile /dev/null --dir /tmp/master --port 8080
+          ./src/valkey-server --daemonize yes --logfile /dev/null --dir ${RUNNER_TEMP}/primary --port 8080
           sleep 1 # wait for server startup
           while [ $(./src/valkey-cli -p 8080 info persistence | grep "loading:1") ]; do sleep 1; done;
           sleep 1 # wait for the completion of cache reclaim bio
-          VMOUT=$(vmtouch -v /tmp/master/dump.rdb)
+          VMOUT=$(vmtouch -v ${RUNNER_TEMP}/primary/dump.rdb)
           echo $VMOUT
           grep -q " 0%" <<< $VMOUT
           CACHE=$(grep -w file /sys/fs/cgroup/memory.stat | awk '{print $2}')
@@ -1879,7 +1889,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-14]
+        os: [macos-15]
     runs-on: ${{ matrix.os }}
     if: |
       (github.event_name == 'workflow_call' || github.event_name == 'workflow_dispatch' ||
@@ -2222,7 +2232,7 @@ jobs:
       - test-ubuntu-no-malloc-usable-size
       - test-ubuntu-32bit
       - test-ubuntu-tls
-      - test-ubuntu-tls-no-tls
+      - test-ubuntu-system-jemalloc-tls-no-tls
       - test-ubuntu-io-threads
       - test-ubuntu-tls-io-threads
       - test-valgrind-test
@@ -2406,7 +2416,7 @@ jobs:
       - test-ubuntu-no-malloc-usable-size
       - test-ubuntu-32bit
       - test-ubuntu-tls
-      - test-ubuntu-tls-no-tls
+      - test-ubuntu-system-jemalloc-tls-no-tls
       - test-ubuntu-io-threads
       - test-ubuntu-tls-io-threads
       - test-ubuntu-reclaim-cache

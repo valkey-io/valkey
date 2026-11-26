@@ -151,6 +151,28 @@ start_server {tags {"acl external:skip"}} {
         r del secret
     }
 
+    test {EXEC without conditions is not restricted to the active database} {
+        r ACL SETUSER exec-db1-user on nopass db=1 +@all ~*
+        $r2 select 0
+        $r2 auth exec-db1-user password
+
+        # Condition keys are read from the active database, so it must still
+        # be accessible when conditions are given.
+        $r2 multi
+        $r2 select 1
+        catch {$r2 exec xx exec-db1-key} err
+        assert_match "*NOPERM*database*" $err
+
+        $r2 multi
+        $r2 select 1
+        $r2 set exec-db1-key value
+        assert_equal {OK OK} [$r2 exec]
+        assert_equal value [$r2 get exec-db1-key]
+        $r2 del exec-db1-key
+        $r2 auth default password
+        $r2 select 0
+    }
+
     test {Test separate read and write permissions} {
         r ACL SETUSER key-permission-RW on nopass %R~read* %W~write* +@all
         $r2 auth key-permission-RW password
@@ -485,6 +507,11 @@ start_server {tags {"acl external:skip"}} {
         assert_equal "OK" [r ACL DRYRUN command-test EVAL "" -1 read]
         assert_equal "OK" [r ACL DRYRUN command-test EVAL "" 3 rw rw]
         assert_equal "OK" [r ACL DRYRUN command-test EVAL "" 3 rw read]
+
+        # Test PFMERGE without source keys, the source key spec starts past the last argument
+        assert_equal "OK" [r ACL DRYRUN command-test PFMERGE rw]
+        assert_match {*has no permissions to access the 'read' key*} [r ACL DRYRUN command-test PFMERGE read]
+        assert_match {*has no permissions to access the 'nothing' key*} [r ACL DRYRUN command-test PFMERGE nothing]
 
         # Test GEORADIUS which uses the last type of keyspec, keyword
         assert_equal "OK" [r ACL DRYRUN command-test GEORADIUS read longitude latitude radius M STOREDIST write]

@@ -303,9 +303,10 @@ void computeDatasetDigest(unsigned char *final) {
 
     memset(final, 0, 20); /* Start with a clean result */
 
-    for (int j = 0; j < server.dbnum; j++) {
-        serverDb *db = server.db[j];
-        if (db == NULL || kvstoreSize(db->keys) == 0) continue;
+    serverDb *db;
+    forEachCreatedDb(db) {
+        if (kvstoreSize(db->keys) == 0) continue;
+        int j = db->id;
         kvstoreIterator *kvs_it = kvstoreIteratorInit(db->keys, HASHTABLE_ITER_SAFE | HASHTABLE_ITER_PREFETCH_VALUES);
 
         /* hash the DB id, so the same dataset moved in a different DB will lead to a different digest */
@@ -559,6 +560,8 @@ void debugCommand(client *c) {
             "    Force TLS write error for testing.",
             "BIO-DRAIN <type>",
             "    Wait for the specified bio job queue to become empty.",
+            "SET-CLOSE-AFTER-REPLY <id>",
+            "    Mark a client to be closed after its pending replies are written.",
             NULL};
         addExtendedReplyHelp(c, help, clusterDebugCommandExtendedHelp());
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "segfault")) {
@@ -593,6 +596,11 @@ void debugCommand(client *c) {
         sdsdup(objectGetVal(c->argv[2]));
         addReply(c, shared.ok);
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "reload")) {
+        if (server.loading || server.async_loading) {
+            addReplyErrorObject(c, shared.loadingerr);
+            return;
+        }
+
         int flush = 1, save = 1;
         int flags = RDBFLAGS_NONE;
 
@@ -639,6 +647,11 @@ void debugCommand(client *c) {
         serverLog(LL_NOTICE, "DB reloaded by DEBUG RELOAD");
         addReply(c, shared.ok);
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "loadaof")) {
+        if (server.loading || server.async_loading) {
+            addReplyErrorObject(c, shared.loadingerr);
+            return;
+        }
+
         if (server.aof_state != AOF_OFF) flushAppendOnlyFile(1);
         emptyData(-1, EMPTYDB_NO_FLAGS, NULL);
         protectClient(c);
@@ -688,7 +701,7 @@ void debugCommand(client *c) {
         }
         server.debug_cluster_failover_epoch = epoch;
         addReply(c, shared.ok);
-    } else if (!strcasecmp(objectGetVal(c->argv[1]), "slotmigration")) {
+    } else if (!strcasecmp(objectGetVal(c->argv[1]), "slotmigration") && c->argc == 4) {
         if (!strcasecmp(objectGetVal(c->argv[2]), "prevent-pause")) {
             server.debug_slot_migration_prevent_pause = (atoi(objectGetVal(c->argv[3])) != 0);
         } else if (!strcasecmp(objectGetVal(c->argv[2]), "prevent-failover")) {
@@ -744,6 +757,11 @@ void debugCommand(client *c) {
                 nextra += used;
                 remaining -= used;
             }
+        } else if (val->encoding == OBJ_ENCODING_BTREE) {
+            /* Leaf count of the B+tree index, read by tests that check leaf
+             * compaction. */
+            zset *zs = objectGetVal(val);
+            snprintf(extra, sizeof(extra), " btree_leaves:%lu", orderedIndexGetNumLeaves(zs->oi));
         }
 
         sds s = sdsempty();
@@ -1168,6 +1186,17 @@ void debugCommand(client *c) {
         }
         bioDrainWorker(type);
         addReply(c, shared.ok);
+    } else if (!strcasecmp(objectGetVal(c->argv[1]), "set-close-after-reply") && c->argc == 3) {
+        long long target_id;
+        if (getLongLongFromObjectOrReply(c, c->argv[2], &target_id, NULL) != C_OK) return;
+        client *target = lookupClientByID(target_id);
+        if (!target) {
+            addReplyError(c, "No such client");
+            return;
+        }
+        /* Queue the reply first, so it is not dropped when targeting ourselves. */
+        addReply(c, shared.ok);
+        target->flag.close_after_reply = 1;
     } else if (!handleDebugClusterCommand(c)) {
         addReplySubcommandSyntaxError(c);
         return;
@@ -2291,7 +2320,7 @@ int memtest_test_linux_anonymous_maps(void) {
                  (unsigned long)start_vect[regions], (unsigned long)size_vect[regions]);
         if (write(fd, logbuf, strlen(logbuf)) == -1) { /* Nothing to do. */
         }
-        regions++;
+        if (++regions == MEMTEST_MAX_REGIONS) break;
     }
 
     int errors = 0;
@@ -2318,7 +2347,7 @@ static void killMainThread(void) {
     int err;
     if (pthread_self() != server.main_thread_id && pthread_cancel(server.main_thread_id) == 0) {
         if ((err = pthread_join(server.main_thread_id, NULL)) != 0) {
-            serverLog(LL_WARNING, "main thread can not be joined: %s", strerror(err));
+            serverLog(LL_WARNING, "main thread cannot be joined: %s", strerror(err));
         } else {
             serverLog(LL_WARNING, "main thread terminated");
         }

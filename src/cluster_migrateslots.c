@@ -9,6 +9,7 @@
 #include "io_threads.h"
 #include "module.h"
 #include "functions.h"
+#include "forkless.h"
 #include "sds.h"
 #include "server.h"
 
@@ -252,8 +253,8 @@ void setSlotImportingStateInDb(serverDb *db,
 }
 
 void setSlotImportingStateInAllDbs(list *slot_ranges, int is_importing) {
-    for (int i = 0; i < server.dbnum; i++) {
-        serverDb *db = server.db[i];
+    serverDb *db;
+    forEachCreatedDb(db) {
         setSlotImportingStateInDb(db, slot_ranges, is_importing);
     }
 }
@@ -653,6 +654,9 @@ void clusterCommandSyncSlotsEstablish(client *c) {
     slotMigrationJob *job = createSlotImportJob(c, source_node, name, slot_ranges);
     fireModuleSlotMigrationEvent(job, VALKEYMODULE_SUBEVENT_ATOMIC_SLOT_MIGRATION_IMPORT_STARTED);
     listAddNodeHead(server.cluster->slot_migration_jobs, job);
+    /* A forkless sync that is still scanning would drop the migration's
+     * SYNCSLOTS commands, so stop it. The replicas retry with a fork. */
+    if (forklessIteratorOwnsIncomingReplication()) forklessSaveCancel();
 
     clusterDoBeforeSleep(CLUSTER_TODO_HANDLE_SLOT_MIGRATION);
     forceCommandPropagation(c, PROPAGATE_REPL | PROPAGATE_AOF);
@@ -814,6 +818,10 @@ void clusterCommandSyncSlotsFinish(client *c) {
 
     addReply(c, shared.ok);
     forceCommandPropagation(c, PROPAGATE_REPL | PROPAGATE_AOF);
+    /* Avoid duplicate events when a replicated FLUSHALL has already failed the
+     * job. Still accept a different outcome from the primary, since a full sync
+     * may have failed the replica's tracking job locally. */
+    if (job->state == target_state) return;
     finishSlotMigrationJob(job, target_state, message);
 }
 
@@ -1033,11 +1041,18 @@ void propagateSyncSlotsFinish(slotMigrationJob *job) {
     }
 
     /* Perform the propagation. Notably, we may not already be in an execution
-     * unit (cron, beforeSleep). */
+     * unit (cron, beforeSleep).
+     *
+     * The import can finish from cron or beforeSleep while writes are paused,
+     * e.g. a failed import right after delKeysInSlot() propagated its DELs.
+     * The FINISH only settles slot ownership for replicas, like those DELs, so
+     * it gets the same exemption in propagateNow(). */
+    server.server_del_keys_in_slot = 1;
     enterExecutionUnit(1, 0);
     alsoPropagate(-1, argv, argc, PROPAGATE_REPL | PROPAGATE_AOF, -1);
     exitExecutionUnit();
     postExecutionUnitOperations();
+    server.server_del_keys_in_slot = 0;
 
     if (name_obj) decrRefCount(name_obj);
     if (message_obj) decrRefCount(message_obj);
@@ -1649,7 +1664,9 @@ bool shouldRewriteHashtableIndex(int didx, hashtable *ht, void *privdata) {
 int childSnapshotForSyncSlot(rio *aof, slotMigrationJob *job) {
     list *slot_ranges = job->slot_ranges;
     size_t key_count = 0;
-    for (int db_num = 0; db_num < server.dbnum; db_num++) {
+    serverDb *db;
+    forEachCreatedDb(db) {
+        int db_num = db->id;
         listIter li;
         listNode *ln;
         listRewind(slot_ranges, &li);
@@ -1661,6 +1678,8 @@ int childSnapshotForSyncSlot(rio *aof, slotMigrationJob *job) {
             }
         }
     }
+    /* Restore the db the parent assumes, since it doesn't see the SELECTs above. */
+    if (rewriteSelectDbRio(aof, job->client->db->id) == C_ERR) return C_ERR;
     rioWrite(aof, "*3\r\n", 4);
     rioWriteBulkString(aof, "CLUSTER", 7);
     rioWriteBulkString(aof, "SYNCSLOTS", 9);
@@ -1750,6 +1769,9 @@ int slotExportJobBeginSnapshotToTargetSocket(slotMigrationJob *job) {
             close(slot_migration_pipe_write);
             close(server.slot_migration_pipe_read);
             close(server.slot_migration_child_exit_pipe);
+            close(safe_to_exit_pipe);
+            server.slot_migration_pipe_read = -1;
+            server.slot_migration_child_exit_pipe = -1;
             server.slot_migration_pipe_conn = NULL;
             return C_ERR;
         }

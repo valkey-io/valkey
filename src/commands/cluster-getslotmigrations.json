@@ -19,7 +19,7 @@
                 "type": "object",
                 "additionalProperties": false,
                 "properties": {
-                    "link_name": {
+                    "name": {
                         "type": "string",
                         "description": "A 40-byte randomly generated hex string representing the migration.",
                         "pattern": "^[0-9a-fA-F]{40}$"
@@ -72,6 +72,11 @@
                     "cow_size": {
                         "description": "Copy on write bytes during slot migration fork.",
                         "type": "integer"
+                    },
+                    "remaining_repl_size": {
+                        "description": "Bytes pending in the source slot export client's reply buffer. Zero for imports or when no export client is attached.",
+                        "type": "integer",
+                        "minimum": 0
                     }
                 }
             }

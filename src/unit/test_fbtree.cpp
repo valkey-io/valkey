@@ -222,6 +222,23 @@ TEST_F(FbtreeTest, DuplicateInsert) {
     EXPECT_GE(fbtreeGetIndexOfItem(fbt, ins2), 0);
 }
 
+/* Duplicates that overflow one leaf make adjacent leaves share a boundary key:
+ * the high key of one leaf equals the low key of the next. The validator's
+ * leaf-chain check must accept that (only a decreasing link is corruption). */
+TEST_F(FbtreeTest, DuplicateInsertAcrossLeaves) {
+    const size_t count = NODE_SIZE * 4;
+    sds items[NODE_SIZE * 4];
+    for (size_t i = 0; i < count; i++) items[i] = insert("key");
+    EXPECT_EQ(fbtreeLength(fbt), count);
+    EXPECT_GT(fbtreeNumLeaves(fbt), 1u);
+    expectValid();
+
+    /* Deleting some of the duplicates keeps the shared-boundary shape valid too. */
+    for (size_t i = 0; i < NODE_SIZE; i++) EXPECT_TRUE(fbtreeDelete(fbt, items[i * 3]));
+    EXPECT_EQ(fbtreeLength(fbt), count - NODE_SIZE);
+    expectValid();
+}
+
 TEST_F(FbtreeTest, EmptyString) {
     sds inserted = insert("");
     expectValid();
@@ -5732,5 +5749,719 @@ TEST(FeatureSearchTest, typical_node_size) {
     };
     for (int i = 0; i < 8; i++) {
         testAllImpls(features, 61, targets[i]);
+    }
+}
+
+/* ========== Leaf-Count Tracking Tests ========== */
+
+/* Ground-truth leaf count: walk the doubly-linked leaf list from the head.
+ * Used to cross-check the cached fbt->num_leaves counter. */
+static size_t walkLeafCount(fbtreeIndex *fbt) {
+    size_t n = 0;
+    for (leafNode *leaf = fbt->leftmost_leaf; leaf != nullptr; leaf = leaf->next) n++;
+    return n;
+}
+
+TEST_F(FbtreeTest, NumLeavesEmptyTree) {
+    EXPECT_EQ(fbtreeNumLeaves(fbt), 0u);
+    EXPECT_EQ(walkLeafCount(fbt), 0u);
+}
+
+TEST_F(FbtreeTest, NumLeavesSingleLeaf) {
+    insert("a");
+    insert("b");
+    insert("c");
+    EXPECT_EQ(fbtreeNumLeaves(fbt), 1u);
+    EXPECT_EQ(walkLeafCount(fbt), 1u);
+    expectValid();
+}
+
+TEST_F(FbtreeTest, NumLeavesMatchesWalkAfterSplits) {
+    /* Enough to force multiple leaf splits across more than one level. */
+    for (size_t i = 0; i < (size_t)TEST_TWO_LEVEL_ITEMS + 100; i++) {
+        fbtreeInsert(fbt, createBase26TestString("k", "", i, 5));
+    }
+    expectValid();
+    EXPECT_GT(fbtreeNumLeaves(fbt), 1u);
+    EXPECT_EQ(fbtreeNumLeaves(fbt), walkLeafCount(fbt));
+}
+
+TEST_F(FbtreeTest, NumLeavesAfterSingleDeletes) {
+    size_t total = (size_t)TEST_TWO_LEVEL_ITEMS + 100;
+    sds *items = (sds *)zmalloc(total * sizeof(sds));
+    for (size_t i = 0; i < total; i++) {
+        items[i] = fbtreeInsert(fbt, createBase26TestString("k", "", i, 5));
+    }
+    /* Delete every other item; some leaves empty out and get reclaimed. */
+    for (size_t i = 0; i < total; i += 2) {
+        fbtreeDelete(fbt, items[i]);
+    }
+    zfree(items);
+    expectValid();
+    EXPECT_EQ(fbtreeNumLeaves(fbt), walkLeafCount(fbt));
+}
+
+TEST_F(FbtreeTest, NumLeavesAfterRangeDelete) {
+    size_t total = (size_t)TEST_TWO_LEVEL_ITEMS + 200;
+    for (size_t i = 0; i < total; i++) {
+        fbtreeInsert(fbt, createBase26TestString("k", "", i, 5));
+    }
+    size_t before = fbtreeNumLeaves(fbt);
+    /* Delete a large middle rank range, removing many whole leaves. */
+    fbtreeDeleteRangeByRank(fbt, total / 4, (3 * total) / 4, nullptr, nullptr);
+    expectValid();
+    EXPECT_EQ(fbtreeNumLeaves(fbt), walkLeafCount(fbt));
+    EXPECT_LT(fbtreeNumLeaves(fbt), before);
+}
+
+TEST_F(FbtreeTest, NumLeavesAfterDeleteAllItems) {
+    size_t total = (size_t)NODE_SIZE * 3;
+    sds *items = (sds *)zmalloc(total * sizeof(sds));
+    for (size_t i = 0; i < total; i++) {
+        items[i] = fbtreeInsert(fbt, createBase26TestString("k", "", i, 4));
+    }
+    for (size_t i = 0; i < total; i++) fbtreeDelete(fbt, items[i]);
+    zfree(items);
+    /* All items gone -> tree empty -> zero leaves. */
+    EXPECT_EQ(fbtreeNumLeaves(fbt), 0u);
+    EXPECT_EQ(walkLeafCount(fbt), 0u);
+    expectValid();
+}
+
+TEST_F(FbtreeTest, NumLeavesResetOnEmpty) {
+    for (size_t i = 0; i < (size_t)NODE_SIZE * 2; i++) {
+        fbtreeInsert(fbt, createBase26TestString("k", "", i, 4));
+    }
+    EXPECT_GT(fbtreeNumLeaves(fbt), 1u);
+    fbtreeEmpty(fbt);
+    EXPECT_EQ(fbtreeNumLeaves(fbt), 0u);
+    EXPECT_EQ(walkLeafCount(fbt), 0u);
+    /* Reuse after empty must rebuild the counter from zero. */
+    fbtreeInsert(fbt, createString("x"));
+    EXPECT_EQ(fbtreeNumLeaves(fbt), 1u);
+    expectValid();
+}
+
+TEST_F(FbtreeTest, NumLeavesPopMinMax) {
+    for (size_t i = 0; i < (size_t)NODE_SIZE * 3; i++) {
+        fbtreeInsert(fbt, createBase26TestString("k", "", i, 4));
+    }
+    /* Pop from both ends until empty; leaves should be reclaimed to zero. */
+    while (fbtreeLength(fbt) > 0) {
+        sds mn = fbtreePopMin(fbt);
+        if (mn) sdsfree(mn);
+        if (fbtreeLength(fbt) == 0) break;
+        sds mx = fbtreePopMax(fbt);
+        if (mx) sdsfree(mx);
+    }
+    EXPECT_EQ(fbtreeNumLeaves(fbt), 0u);
+    EXPECT_EQ(fbtreeNumLeaves(fbt), walkLeafCount(fbt));
+    expectValid();
+}
+
+/* The structure estimate counts the leaf level from the exact leaf counter. A
+ * sampled estimate (fill of the first few leaves, extrapolated) misjudges any
+ * tree whose slack is unevenly placed: full leading leaves hide a sparse tail
+ * and vice versa. Two trees with the same leaf count must cost the same, and
+ * the leaf level must never be undercounted. */
+TEST_F(FbtreeTest, EstimateStructureMemoryCountsLeavesExactly) {
+    const size_t total = (size_t)TEST_TWO_LEVEL_ITEMS * 2;
+    sds *items = (sds *)zmalloc(total * sizeof(sds));
+    for (size_t i = 0; i < total; i++) items[i] = fbtreeInsert(fbt, createBase26TestString("k", "", i, 5));
+
+    /* Full leading leaves, every other item removed from the trailing half. */
+    for (size_t i = total / 2; i < total; i += 2) fbtreeDelete(fbt, items[i]);
+    expectValid();
+    size_t leaves_tail_sparse = fbtreeNumLeaves(fbt);
+    size_t est_tail_sparse = fbtreeEstimateStructureMemory(fbt);
+    EXPECT_GE(est_tail_sparse, leaves_tail_sparse * sizeof(leafNode));
+
+    /* Mirror image: sparse leading half, full trailing half. */
+    fbtreeEmpty(fbt);
+    for (size_t i = 0; i < total; i++) items[i] = fbtreeInsert(fbt, createBase26TestString("k", "", i, 5));
+    for (size_t i = 0; i < total / 2; i += 2) fbtreeDelete(fbt, items[i]);
+    zfree(items);
+    expectValid();
+    ASSERT_EQ(fbtreeNumLeaves(fbt), leaves_tail_sparse);
+    EXPECT_EQ(fbtreeEstimateStructureMemory(fbt), est_tail_sparse);
+}
+
+/* ========== Validator coverage: leaf counter and leaf chain ==========
+ *
+ * The leaf-chain splice and the leaf counter are the two structures that the
+ * node walk in fbtreeDebugValidate cannot see on its own. These tests prove the
+ * validator catches each failure mode, so every property test in this file
+ * guards them from here on. */
+
+/* Walk the leaf chain from the leftmost leaf, returning leaf `index`. */
+static leafNode *leafAt(fbtreeIndex *fbt, size_t index) {
+    leafNode *leaf = fbt->leftmost_leaf;
+    for (size_t i = 0; i < index && leaf; i++) leaf = leaf->next;
+    return leaf;
+}
+
+TEST_F(FbtreeTest, DebugValidateDetectsLeafCounterDrift) {
+    char errmsg[256];
+
+    /* Empty tree: a non-zero counter is a leak of the accounting. */
+    fbt->num_leaves = 1;
+    ASSERT_FALSE(fbtreeDebugValidate(fbt, false, errmsg, sizeof(errmsg)));
+    EXPECT_NE(strstr(errmsg, "empty tree has num_leaves"), nullptr) << "errmsg: " << errmsg;
+    fbt->num_leaves = 0;
+    ASSERT_TRUE(fbtreeDebugValidate(fbt, false, errmsg, sizeof(errmsg)));
+
+    /* Populated tree: the counter must equal the leaves reachable from the root. */
+    for (int i = 0; i < NODE_SIZE * 3; i++) fbtreeInsert(fbt, createBase26TestString("lc", "", i, 5));
+    ASSERT_GT(fbtreeNumLeaves(fbt), 1u);
+    ASSERT_TRUE(fbtreeDebugValidate(fbt, false, errmsg, sizeof(errmsg)));
+
+    fbt->num_leaves += 1;
+    ASSERT_FALSE(fbtreeDebugValidate(fbt, false, errmsg, sizeof(errmsg)));
+    EXPECT_NE(strstr(errmsg, "num_leaves"), nullptr) << "errmsg: " << errmsg;
+    fbt->num_leaves -= 1;
+
+    fbt->num_leaves -= 1;
+    ASSERT_FALSE(fbtreeDebugValidate(fbt, false, errmsg, sizeof(errmsg)));
+    fbt->num_leaves += 1;
+    ASSERT_TRUE(fbtreeDebugValidate(fbt, false, errmsg, sizeof(errmsg)));
+}
+
+TEST_F(FbtreeTest, DebugValidateDetectsBrokenLeafChain) {
+    char errmsg[256];
+    for (int i = 0; i < NODE_SIZE * 4 + 10; i++) fbtreeInsert(fbt, createBase26TestString("ch", "", i, 5));
+    ASSERT_GE(fbtreeNumLeaves(fbt), 5u);
+    ASSERT_TRUE(fbtreeDebugValidate(fbt, false, errmsg, sizeof(errmsg)));
+
+    leafNode *l0 = leafAt(fbt, 0), *l1 = leafAt(fbt, 1), *l2 = leafAt(fbt, 2), *l3 = leafAt(fbt, 3);
+    ASSERT_NE(l3, nullptr);
+
+    /* A back-pointer that does not return to its predecessor. */
+    l2->prev = l0;
+    ASSERT_FALSE(fbtreeDebugValidate(fbt, false, errmsg, sizeof(errmsg)));
+    EXPECT_NE(strstr(errmsg, "leaf chain"), nullptr) << "errmsg: " << errmsg;
+    l2->prev = l1;
+    ASSERT_TRUE(fbtreeDebugValidate(fbt, false, errmsg, sizeof(errmsg)));
+
+    /* A leaf skipped by the chain (still reachable from the root). */
+    l0->next = l2;
+    l2->prev = l0;
+    ASSERT_FALSE(fbtreeDebugValidate(fbt, false, errmsg, sizeof(errmsg)));
+    EXPECT_NE(strstr(errmsg, "leaf chain"), nullptr) << "errmsg: " << errmsg;
+    l0->next = l1;
+    l2->prev = l1;
+    ASSERT_TRUE(fbtreeDebugValidate(fbt, false, errmsg, sizeof(errmsg)));
+
+    /* Two adjacent leaves swapped: count and back-pointers stay consistent,
+     * so only the chain's order against the structural leaf order can see it. */
+    l0->next = l2;
+    l2->prev = l0;
+    l2->next = l1;
+    l1->prev = l2;
+    l1->next = l3;
+    l3->prev = l1;
+    ASSERT_FALSE(fbtreeDebugValidate(fbt, false, errmsg, sizeof(errmsg)));
+    EXPECT_NE(strstr(errmsg, "leaf chain"), nullptr) << "errmsg: " << errmsg;
+    l0->next = l1;
+    l1->prev = l0;
+    l1->next = l2;
+    l2->prev = l1;
+    l2->next = l3;
+    l3->prev = l2;
+    ASSERT_TRUE(fbtreeDebugValidate(fbt, false, errmsg, sizeof(errmsg)));
+
+    /* A chain truncated before the rightmost leaf. */
+    leafNode *saved_next = l2->next;
+    l2->next = NULL;
+    ASSERT_FALSE(fbtreeDebugValidate(fbt, false, errmsg, sizeof(errmsg)));
+    EXPECT_NE(strstr(errmsg, "leaf chain"), nullptr) << "errmsg: " << errmsg;
+    l2->next = saved_next;
+    ASSERT_TRUE(fbtreeDebugValidate(fbt, false, errmsg, sizeof(errmsg)));
+
+    /* A leftmost leaf that claims a predecessor. */
+    l0->prev = l3;
+    ASSERT_FALSE(fbtreeDebugValidate(fbt, false, errmsg, sizeof(errmsg)));
+    EXPECT_NE(strstr(errmsg, "leftmost leaf has non-NULL prev"), nullptr) << "errmsg: " << errmsg;
+    l0->prev = NULL;
+    ASSERT_TRUE(fbtreeDebugValidate(fbt, false, errmsg, sizeof(errmsg)));
+}
+
+/* When every leaf holds the same key, a chain that visits the leaves out of
+ * structural order (l0 -> l2 -> l1 -> l3) has the right count, consistent
+ * back-pointers and no key decreasing across any link. Only comparing the chain
+ * against the in-order leaf walk by identity can reject it. Left undetected,
+ * fbtreeSeekToRank() would land on one leaf while fbtreeNext() continues into a
+ * different one, so iteration and rank would disagree on which item is next. */
+TEST_F(FbtreeTest, DebugValidateDetectsPermutedEqualKeyLeafChain) {
+    char errmsg[256];
+    for (int i = 0; i < NODE_SIZE * 4 + 10; i++) insert("key");
+    ASSERT_GE(fbtreeNumLeaves(fbt), 5u);
+    ASSERT_TRUE(fbtreeDebugValidate(fbt, false, errmsg, sizeof(errmsg)));
+
+    leafNode *l0 = leafAt(fbt, 0), *l1 = leafAt(fbt, 1), *l2 = leafAt(fbt, 2), *l3 = leafAt(fbt, 3);
+    ASSERT_NE(l3, nullptr);
+    ASSERT_EQ(sdscmp(l0->values[l0->header.num_items - 1], l3->values[0]), 0) << "test needs equal keys across the permuted leaves";
+
+    l0->next = l2;
+    l2->prev = l0;
+    l2->next = l1;
+    l1->prev = l2;
+    l1->next = l3;
+    l3->prev = l1;
+    ASSERT_FALSE(fbtreeDebugValidate(fbt, false, errmsg, sizeof(errmsg)));
+    EXPECT_NE(strstr(errmsg, "leaf chain does not link"), nullptr) << "errmsg: " << errmsg;
+    l0->next = l1;
+    l1->prev = l0;
+    l1->next = l2;
+    l2->prev = l1;
+    l2->next = l3;
+    l3->prev = l2;
+    ASSERT_TRUE(fbtreeDebugValidate(fbt, false, errmsg, sizeof(errmsg)));
+}
+
+/* ========== Inline Leaf Compaction Tests ==========
+ *
+ * Deletes re-pack the leaves under a bottom inner node once it falls below the
+ * compaction trigger. The tests compare against the same workload with
+ * compaction parked (fbtreeSetCompactionAllowed(false)), which is the fork-time
+ * mode and also the only way to build a sparse tree for the resume tests. Every
+ * test that parks compaction re-enables it before it returns, because the
+ * setting is process-wide. */
+
+/* xorshift32: the same sequence on every platform. The tests below compare
+ * leaf counts and fills against fixed bounds, so the workload must not depend
+ * on the libc rand_r() implementation. The seed must be non-zero. */
+static uint32_t testRandNext(uint32_t *state) {
+    *state ^= *state << 13;
+    *state ^= *state >> 17;
+    *state ^= *state << 5;
+    return *state;
+}
+
+/* Scatter inserts across 26 key regions so they land in random leaves rather
+ * than always appending at the right edge. */
+static sds scatteredKey(uint32_t *seed, int *counter) {
+    char buf[32];
+    snprintf(buf, sizeof(buf), "%c%08d", 'a' + (testRandNext(seed) % 26), (*counter)++);
+    return createString(buf);
+}
+
+/* Leaf fill: items / (leaves * NODE_SIZE). What compaction keeps bounded. */
+static double loadFactor(fbtreeIndex *fbt) {
+    unsigned long leaves = fbtreeNumLeaves(fbt);
+    if (leaves == 0) return 1.0;
+    return (double)fbtreeLength(fbt) / ((double)leaves * NODE_SIZE);
+}
+
+/* Forward iteration must visit items in non-decreasing order. */
+static bool iterationSorted(fbtreeIndex *fbt) {
+    fbtreeIterator it;
+    fbtreeInitIterator(&it, fbt);
+    const_sds prev = NULL, cur;
+    while ((cur = fbtreeNext(&it)) != NULL) {
+        if (prev && sdscmp(prev, cur) > 0) return false;
+        prev = cur;
+    }
+    return true;
+}
+
+/* Delete every item whose index satisfies index % stride == phase, clearing
+ * its slot so the caller can tell survivors from deleted items. */
+static void deleteStrided(fbtreeIndex *fbt, sds *items, size_t n, size_t stride, size_t phase) {
+    for (size_t i = phase; i < n; i += stride) {
+        ASSERT_TRUE(fbtreeDelete(fbt, items[i]));
+        items[i] = NULL;
+    }
+}
+
+TEST_F(FbtreeTest, CompactOnScatteredDeletesKeepsLeavesPacked) {
+    const size_t n = 20000;
+    uint32_t seed = 4526;
+    int counter = 0;
+    sds *items = (sds *)zmalloc(n * sizeof(sds));
+    for (size_t i = 0; i < n; i++) items[i] = fbtreeInsert(fbt, scatteredKey(&seed, &counter));
+    ASSERT_GE(fbtreeHeight(fbt), 3u) << "need several bottom inner nodes";
+
+    /* Same workload with compaction parked gives the uncompacted baseline. */
+    fbtreeIndex *parked = fbtreeCreate();
+    seed = 4526;
+    counter = 0;
+    sds *parked_items = (sds *)zmalloc(n * sizeof(sds));
+    for (size_t i = 0; i < n; i++) parked_items[i] = fbtreeInsert(parked, scatteredKey(&seed, &counter));
+    fbtreeSetCompactionAllowed(false);
+    deleteStrided(parked, parked_items, n, 5, 0);
+    deleteStrided(parked, parked_items, n, 5, 2);
+    deleteStrided(parked, parked_items, n, 5, 4);
+    fbtreeSetCompactionAllowed(true);
+    double parked_lf = loadFactor(parked);
+    size_t parked_leaves = fbtreeNumLeaves(parked);
+    EXPECT_TRUE(fbtreeDebugValidate(parked, false, NULL, 0));
+    fbtreeFree(parked);
+    zfree(parked_items);
+
+    deleteStrided(fbt, items, n, 5, 0);
+    deleteStrided(fbt, items, n, 5, 2);
+    deleteStrided(fbt, items, n, 5, 4);
+    zfree(items);
+    expectValid();
+
+    /* 60% of the items are gone. Without compaction the leaves stay at ~40%
+     * fill; with it every bottom inner node has been re-packed at least once. */
+    EXPECT_LT(parked_lf, 0.45);
+    EXPECT_GT(loadFactor(fbt), 0.6);
+    EXPECT_LT(fbtreeNumLeaves(fbt) * 3, parked_leaves * 2);
+}
+
+TEST_F(FbtreeTest, CompactPreservesItemPointersAndOrder) {
+    const size_t n = 12000;
+    uint32_t seed = 7;
+    int counter = 0;
+    sds *items = (sds *)zmalloc(n * sizeof(sds));
+    for (size_t i = 0; i < n; i++) items[i] = fbtreeInsert(fbt, scatteredKey(&seed, &counter));
+    size_t leaves_before = fbtreeNumLeaves(fbt);
+
+    deleteStrided(fbt, items, n, 3, 1);
+    deleteStrided(fbt, items, n, 3, 2);
+    expectValid();
+    ASSERT_LT(fbtreeNumLeaves(fbt), leaves_before / 2) << "compaction did not run";
+
+    /* Items moved between leaves, but the sds allocations themselves did not
+     * move: every survivor is still found by pointer identity, at a rank that
+     * agrees with its position in iteration order. */
+    EXPECT_TRUE(iterationSorted(fbt));
+    unsigned long rank = 0;
+    for (size_t i = 0; i < n; i++) {
+        if (items[i] == NULL) continue;
+        long idx = fbtreeGetIndexOfItem(fbt, items[i]);
+        ASSERT_GE(idx, 0) << "survivor " << i << " lost";
+        ASSERT_EQ(fbtreeGetAtRank(fbt, (unsigned long)idx), items[i]);
+        rank++;
+    }
+    EXPECT_EQ(fbtreeLength(fbt), rank);
+    zfree(items);
+}
+
+/* Pop paths run the same hook. Build a two-level tree (the root is the only
+ * bottom inner node), park compaction while thinning it to ~40% fill, then let
+ * one pop at each end trigger the re-pack. */
+TEST_F(FbtreeTest, CompactOnPopMinAndPopMax) {
+    for (int end = 0; end < 2; end++) {
+        fbtreeEmpty(fbt);
+        const size_t n = 1500; /* scattered inserts leave leaves ~2/3 full: ~36 leaves, one bottom node */
+        uint32_t seed = 11;
+        int counter = 0;
+        sds *items = (sds *)zmalloc(n * sizeof(sds));
+        for (size_t i = 0; i < n; i++) items[i] = fbtreeInsert(fbt, scatteredKey(&seed, &counter));
+        ASSERT_EQ(fbtreeHeight(fbt), 2u);
+
+        fbtreeSetCompactionAllowed(false);
+        deleteStrided(fbt, items, n, 5, 0);
+        deleteStrided(fbt, items, n, 5, 1);
+        deleteStrided(fbt, items, n, 5, 3);
+        fbtreeSetCompactionAllowed(true);
+        zfree(items);
+        expectValid();
+        size_t sparse_leaves = fbtreeNumLeaves(fbt);
+        ASSERT_LT(loadFactor(fbt), 0.45);
+
+        sds popped = end == 0 ? fbtreePopMin(fbt) : fbtreePopMax(fbt);
+        ASSERT_NE(popped, nullptr);
+        sdsfree(popped);
+        expectValid();
+        EXPECT_LT(fbtreeNumLeaves(fbt) * 3, sparse_leaves * 2) << "end=" << end;
+        EXPECT_GT(loadFactor(fbt), 0.65) << "end=" << end;
+        EXPECT_TRUE(iterationSorted(fbt));
+
+        /* Draining the rest from that end keeps the structure valid throughout. */
+        while (fbtreeLength(fbt) > 0) {
+            popped = end == 0 ? fbtreePopMin(fbt) : fbtreePopMax(fbt);
+            ASSERT_NE(popped, nullptr);
+            sdsfree(popped);
+            if (fbtreeLength(fbt) % 97 == 0) expectValid();
+        }
+        expectValid();
+    }
+}
+
+/* Range deletes thin the two boundary bottom inner nodes (and the shared
+ * node when both boundary leaves hang off it). Alternate narrow in-leaf ranges
+ * with wide ranges that cross leaves and bottom inner nodes. */
+TEST_F(FbtreeTest, CompactOnRangeDelete) {
+    const size_t n = 20000;
+    uint32_t seed = 23;
+    int counter = 0;
+    for (size_t i = 0; i < n; i++) fbtreeInsert(fbt, scatteredKey(&seed, &counter));
+    ASSERT_GE(fbtreeHeight(fbt), 3u);
+
+    fbtreeIndex *parked = fbtreeCreate();
+    seed = 23;
+    counter = 0;
+    for (size_t i = 0; i < n; i++) fbtreeInsert(parked, scatteredKey(&seed, &counter));
+
+    /* Same sequence of rank ranges on both trees. Lengths stay equal, so the
+     * ranks address the same items in each. */
+    uint32_t rseed = 99;
+    for (int round = 0; round < 400 && fbtreeLength(fbt) > 500; round++) {
+        unsigned long len = fbtreeLength(fbt);
+        unsigned long start = testRandNext(&rseed) % len;
+        unsigned long span = (round % 4 == 0) ? 1 + testRandNext(&rseed) % 5 : 1 + testRandNext(&rseed) % 200;
+        unsigned long end = start + span - 1;
+        if (end >= len) end = len - 1;
+        unsigned long a = fbtreeDeleteRangeByRank(fbt, start, end, NULL, NULL);
+        fbtreeSetCompactionAllowed(false);
+        unsigned long b = fbtreeDeleteRangeByRank(parked, start, end, NULL, NULL);
+        fbtreeSetCompactionAllowed(true);
+        ASSERT_EQ(a, b);
+        ASSERT_EQ(fbtreeLength(fbt), fbtreeLength(parked));
+        if (round % 20 == 0) {
+            ASSERT_TRUE(fbtreeDebugValidate(fbt, false, NULL, 0)) << "round " << round;
+            ASSERT_TRUE(fbtreeDebugValidate(parked, false, NULL, 0)) << "round " << round;
+        }
+    }
+    expectValid();
+    EXPECT_TRUE(iterationSorted(fbt));
+    /* Whole-tree fill has no fixed floor: bottom nodes are never merged, so a
+     * node thinned to a few items keeps one leaf whatever its fill. Compare
+     * against the parked twin instead: the compacting tree must have shed a
+     * large share of the leaves the parked one kept. */
+    EXPECT_LT(loadFactor(parked), loadFactor(fbt));
+    EXPECT_LT(fbtreeNumLeaves(fbt) * 3, fbtreeNumLeaves(parked) * 2);
+    fbtreeFree(parked);
+}
+
+/* While compaction is parked, deletes only free emptied leaves. The first
+ * delete after it is allowed again re-packs the node it lands in. */
+TEST_F(FbtreeTest, CompactParkedThenResumesOnNextDelete) {
+    const size_t n = 1500; /* one bottom inner node, see CompactOnPopMinAndPopMax */
+    uint32_t seed = 31;
+    int counter = 0;
+    sds *items = (sds *)zmalloc(n * sizeof(sds));
+    for (size_t i = 0; i < n; i++) items[i] = fbtreeInsert(fbt, scatteredKey(&seed, &counter));
+    ASSERT_EQ(fbtreeHeight(fbt), 2u);
+    size_t full_leaves = fbtreeNumLeaves(fbt);
+
+    fbtreeSetCompactionAllowed(false);
+    deleteStrided(fbt, items, n, 2, 0);
+    EXPECT_TRUE(fbtreeDebugValidate(fbt, false, NULL, 0));
+    EXPECT_EQ(fbtreeNumLeaves(fbt), full_leaves) << "parked compaction must not free non-empty leaves";
+    EXPECT_LT(loadFactor(fbt), 0.55);
+    fbtreeSetCompactionAllowed(true);
+
+    size_t i = 1;
+    while (items[i] == NULL) i++;
+    ASSERT_TRUE(fbtreeDelete(fbt, items[i]));
+    expectValid();
+    EXPECT_LT(fbtreeNumLeaves(fbt) * 3, full_leaves * 2);
+    EXPECT_GT(loadFactor(fbt), 0.65);
+    zfree(items);
+}
+
+/* A tree deep enough that a bottom inner node's parent is itself an inner
+ * node rather than the root: the parent's cached child count for the compacted
+ * node is refreshed on the way back up, and the validator checks it. */
+TEST_F(FbtreeTest, CompactDeepTreeParentNotRoot) {
+    /* Sequential append fills leaves to NODE_SIZE and bottom inners to ~half,
+     * so exceeding NODE_SIZE bottom inners needs roughly NODE_SIZE^3 / 2 items. */
+    const size_t n = (size_t)NODE_SIZE * NODE_SIZE * NODE_SIZE * 6 / 10;
+    sds *items = (sds *)zmalloc(n * sizeof(sds));
+    for (size_t i = 0; i < n; i++) items[i] = fbtreeInsert(fbt, createBase26TestString("d", "", i, 5));
+    ASSERT_GE(fbtreeHeight(fbt), 4u) << "tree not deep enough: root, inner, bottom inner, leaf";
+    size_t leaves_before = fbtreeNumLeaves(fbt);
+
+    /* Every leaf loses 60% of its items, so every bottom inner node crosses the
+     * trigger, including the ones whose parent is not the root. Each node is
+     * re-packed as it crosses 50% and then keeps shrinking toward 40% without
+     * a second re-pack, so the leaf count drops by roughly a third. */
+    deleteStrided(fbt, items, n, 5, 0);
+    deleteStrided(fbt, items, n, 5, 2);
+    deleteStrided(fbt, items, n, 5, 4);
+    expectValid();
+    EXPECT_LT(fbtreeNumLeaves(fbt) * 4, leaves_before * 3);
+    EXPECT_GT(loadFactor(fbt), 0.55);
+    EXPECT_GE(fbtreeHeight(fbt), 4u); /* compaction never collapses inner levels */
+    EXPECT_TRUE(iterationSorted(fbt));
+
+    /* Rank lookups still agree with pointer identity for the survivors. */
+    unsigned long rank = 0;
+    for (size_t i = 0; i < n; i++) {
+        if (items[i] == NULL) continue;
+        ASSERT_EQ(fbtreeGetAtRank(fbt, rank), items[i]) << "rank " << rank;
+        rank++;
+    }
+    zfree(items);
+}
+
+/* Dense runs of keys sharing an 8-byte prefix, as packed zset items do for
+ * equal scores. Leaf boundaries fall inside the runs, so compaction rewrites
+ * exactly the boundaries where shared-prefix handling and anchors matter.
+ * After scattered deletes every survivor must still be found at its own rank
+ * and each prefix group must still answer a value-range count correctly. */
+TEST_F(FbtreeTest, CompactWithDenseSharedPrefixRuns) {
+    const int groups = 4;
+    const int per_group = 1200;
+    const int n = groups * per_group;
+    sds *items = (sds *)zmalloc(n * sizeof(sds));
+    bool *alive = (bool *)zmalloc(n * sizeof(bool));
+
+    /* Insert in a scattered order within each group so items do not simply
+     * append at the right edge. 7919 is prime and larger than per_group, so
+     * (i * 7919) % per_group is a permutation. */
+    for (int g = 0; g < groups; g++) {
+        for (int i = 0; i < per_group; i++) {
+            char buf[32];
+            snprintf(buf, sizeof(buf), "PFX%05d%06d", g, (i * 7919) % per_group);
+            items[g * per_group + i] = fbtreeInsert(fbt, createString(buf));
+            alive[g * per_group + i] = true;
+        }
+    }
+    ASSERT_EQ(fbtreeLength(fbt), (unsigned long)n);
+    ASSERT_GE(fbtreeHeight(fbt), 3u);
+    unsigned long leaves_before = fbtreeNumLeaves(fbt);
+
+    /* Delete two of every three items in insertion order, which is scattered
+     * in key order, so every leaf thins without emptying. */
+    for (int i = 0; i < n; i++) {
+        if (i % 3 == 0) continue;
+        ASSERT_TRUE(fbtreeDelete(fbt, items[i]));
+        alive[i] = false;
+    }
+    ASSERT_LT(fbtreeNumLeaves(fbt) * 2, leaves_before) << "compaction did not run";
+    EXPECT_TRUE(fbtreeDebugValidate(fbt, false, NULL, 0));
+    EXPECT_TRUE(iterationSorted(fbt));
+
+    unsigned long survivors = 0;
+    for (int i = 0; i < n; i++) {
+        if (!alive[i]) continue;
+        survivors++;
+        long rank = fbtreeGetIndexOfItem(fbt, items[i]);
+        ASSERT_GE(rank, 0) << "survivor " << i << " lost";
+        ASSERT_EQ(fbtreeGetAtRank(fbt, (unsigned long)rank), items[i]) << "survivor " << i;
+    }
+    EXPECT_EQ(fbtreeLength(fbt), survivors);
+
+    /* Each prefix group must still be addressable as a value range. */
+    for (int g = 0; g < groups; g++) {
+        char lo[16], hi[16];
+        snprintf(lo, sizeof(lo), "PFX%05d", g);
+        snprintf(hi, sizeof(hi), "PFX%05d~", g);
+        sds min_val = createString(lo);
+        sds max_val = createString(hi);
+        unsigned long expected = 0;
+        for (int i = g * per_group; i < (g + 1) * per_group; i++) expected += alive[i];
+        EXPECT_EQ(fbtreeCountRangeByValue(fbt, min_val, max_val, 0, 0), expected) << "group " << g;
+        sdsfree(min_val);
+        sdsfree(max_val);
+    }
+
+    zfree(alive);
+    zfree(items);
+}
+
+/* Reference set for the property test: the stored sds pointers the tree must
+ * hold, in no particular order. Pointer identity is enough because the tree
+ * stores the sds it is given and hands that same pointer back from lookups,
+ * pops and the range-delete callback. */
+#define LIVE_SET_CAPACITY 8192
+typedef struct {
+    sds items[LIVE_SET_CAPACITY];
+    int n;
+} liveSet;
+
+static void liveSetAdd(liveSet *s, sds item) {
+    ASSERT_LT(s->n, LIVE_SET_CAPACITY);
+    s->items[s->n++] = item;
+}
+
+static void liveSetRemove(liveSet *s, const_sds item) {
+    for (int i = 0; i < s->n; i++) {
+        if (s->items[i] == item) {
+            s->items[i] = s->items[--s->n];
+            return;
+        }
+    }
+    FAIL() << "removed an item the reference set did not hold";
+}
+
+static void liveSetRemoveCallback(sds item, void *ctx) {
+    liveSetRemove((liveSet *)ctx, item);
+}
+
+/* The tree holds exactly the reference set: the same count, and every
+ * reference item is found at a rank that hands back that same pointer. With
+ * equal counts, n items each at its own rank leaves no room for a stray or
+ * duplicated item, so this is a full content check. */
+static bool treeMatchesLiveSet(fbtreeIndex *fbt, const liveSet *s) {
+    if (fbtreeLength(fbt) != (unsigned long)s->n) return false;
+    for (int i = 0; i < s->n; i++) {
+        long rank = fbtreeGetIndexOfItem(fbt, s->items[i]);
+        if (rank < 0 || fbtreeGetAtRank(fbt, (unsigned long)rank) != s->items[i]) return false;
+    }
+    return true;
+}
+
+/* Random mix of inserts, deletes, pops and range deletes on trees of varied
+ * size and shape. Every operation must leave the structure valid, the items
+ * in order, and the content equal to a reference set maintained alongside. */
+TEST_F(FbtreeTest, PropertyMutationsWithInlineCompaction) {
+    const int NUM_ITERATIONS = 120;
+    uint32_t seed = 4526;
+    int key_counter = 0;
+    liveSet live;
+
+    for (int iter = 0; iter < NUM_ITERATIONS; iter++) {
+        fbtreeEmpty(fbt);
+        live.n = 0;
+
+        int target_size;
+        if (iter < 40) {
+            target_size = 1 + (testRandNext(&seed) % 80);
+        } else if (iter < 80) {
+            target_size = NODE_SIZE + 1 + (testRandNext(&seed) % 400);
+        } else {
+            target_size = 1000 + (testRandNext(&seed) % 3000);
+        }
+        for (int i = 0; i < target_size; i++) liveSetAdd(&live, fbtreeInsert(fbt, scatteredKey(&seed, &key_counter)));
+        ASSERT_TRUE(fbtreeDebugValidate(fbt, false, NULL, 0)) << "iter=" << iter;
+
+        int num_ops = 20 + (testRandNext(&seed) % 60);
+        for (int op = 0; op < num_ops; op++) {
+            int op_type = testRandNext(&seed) % 6;
+            unsigned long len = fbtreeLength(fbt);
+
+            if (op_type == 0) {
+                int k = 1 + (int)(testRandNext(&seed) % 40);
+                for (int j = 0; j < k; j++) liveSetAdd(&live, fbtreeInsert(fbt, scatteredKey(&seed, &key_counter)));
+            } else if (op_type == 1 && len > 0) {
+                const_sds victim = fbtreeGetAtRank(fbt, testRandNext(&seed) % len);
+                liveSetRemove(&live, victim);
+                ASSERT_TRUE(fbtreeDelete(fbt, victim));
+            } else if (op_type == 2 && len > 0) {
+                sds popped = (testRandNext(&seed) % 2) ? fbtreePopMin(fbt) : fbtreePopMax(fbt);
+                ASSERT_NE(popped, nullptr);
+                liveSetRemove(&live, popped);
+                sdsfree(popped);
+            } else if (op_type == 3 && len >= 2) {
+                unsigned long start = testRandNext(&seed) % len;
+                unsigned long end = start + (testRandNext(&seed) % (len - start));
+                if (end >= len) end = len - 1;
+                unsigned long deleted = fbtreeDeleteRangeByRank(fbt, start, end, liveSetRemoveCallback, &live);
+                ASSERT_EQ(deleted, end - start + 1) << "op " << op << " iter=" << iter;
+            } else if (len > 0) {
+                /* Burst delete: many single deletes clustered in one region, the
+                 * shape that leaves near-empty leaves next to full ones. */
+                unsigned long base = testRandNext(&seed) % len;
+                for (int k = 0; k < 30 && fbtreeLength(fbt) > 0; k++) {
+                    unsigned long r = base < fbtreeLength(fbt) ? base : fbtreeLength(fbt) - 1;
+                    const_sds victim = fbtreeGetAtRank(fbt, r);
+                    liveSetRemove(&live, victim);
+                    ASSERT_TRUE(fbtreeDelete(fbt, victim));
+                }
+            }
+
+            ASSERT_TRUE(fbtreeDebugValidate(fbt, false, NULL, 0))
+                << "Validation failed after op " << op << " type=" << op_type << " iter=" << iter;
+            ASSERT_TRUE(iterationSorted(fbt)) << "op " << op << " type=" << op_type << " iter=" << iter;
+            ASSERT_TRUE(treeMatchesLiveSet(fbt, &live))
+                << "Content differs from the reference set after op " << op << " type=" << op_type << " iter=" << iter;
+        }
     }
 }

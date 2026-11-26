@@ -95,7 +95,7 @@ void freeSparklineSequence(struct sequence *seq) {
  * ASCII rendering of sequence
  * ------------------------------------------------------------------------- */
 
-/* Render part of a sequence, so that render_sequence() call call this function
+/* Render part of a sequence, so that render_sequence() calls this function
  * with different parts in order to create the full output without overflowing
  * the current terminal columns. */
 sds sparklineRenderRange(sds output, struct sequence *seq, int rows, int offset, int len, int flags) {

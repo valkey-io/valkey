@@ -939,6 +939,7 @@ typedef void (*ValkeyModuleUserChangedFunc)(uint64_t client_id, void *privdata);
 #define VALKEYMODULE_CALL_ARGV_ERRORS_AS_REPLIES (1 << 8)
 #define VALKEYMODULE_CALL_ARGV_RESPECT_DENY_OOM (1 << 9)
 #define VALKEYMODULE_CALL_ARGV_DRY_RUN (1 << 10)
+/* Not supported by ValkeyModule_CallArgv; reserved for internal use. */
 #define VALKEYMODULE_CALL_ARGV_ALLOW_BLOCK (1 << 11)
 #define VALKEYMODULE_CALL_ARGV_REPLY_EXACT (1 << 12)
 
@@ -1416,7 +1417,9 @@ typedef struct ValkeyModuleReplyHandlersV1 {
     void (*setEnd)(void *ctx);
     void (*replyParsingError)(void *ctx);
 
-    /* This callback is invoked when the client is blocked waiting for a reply.
+    /* Reserved for internal asynchronous calls; public ValkeyModule_CallArgv
+     * does not invoke this callback.
+     * This callback is invoked when the client is blocked waiting for a reply.
      * `handle` can be passed to ValkeyModule_CallArgvAbort to cancel the
      * pending call before a reply arrives. The handle is valid until either
      * onRespAvailable is invoked or ValkeyModule_CallArgvAbort is called. */
@@ -1644,6 +1647,12 @@ VALKEYMODULE_API ValkeyModuleCallReply *(*ValkeyModule_Call)(ValkeyModuleCtx *ct
                                                              const char *cmdname,
                                                              const char *fmt,
                                                              ...)VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_CallArgv)(ValkeyModuleCtx *ctx,
+                                              ValkeyModuleString **argv,
+                                              int argc,
+                                              int flags,
+                                              const ValkeyModuleReplyHandlers *reply_handlers,
+                                              void *reply_ctx) VALKEYMODULE_ATTR;
 VALKEYMODULE_API const char *(*ValkeyModule_CallReplyProto)(ValkeyModuleCallReply *reply, size_t *len)VALKEYMODULE_ATTR;
 VALKEYMODULE_API void (*ValkeyModule_FreeCallReply)(ValkeyModuleCallReply *reply) VALKEYMODULE_ATTR;
 VALKEYMODULE_API int (*ValkeyModule_CallReplyType)(ValkeyModuleCallReply *reply) VALKEYMODULE_ATTR;
@@ -2424,6 +2433,7 @@ static int ValkeyModule_Init(ValkeyModuleCtx *ctx, const char *name, int ver, in
     VALKEYMODULE_GET_API(StringToLongDouble);
     VALKEYMODULE_GET_API(StringToStreamID);
     VALKEYMODULE_GET_API(Call);
+    VALKEYMODULE_GET_API(CallArgv);
     VALKEYMODULE_GET_API(CallReplyProto);
     VALKEYMODULE_GET_API(FreeCallReply);
     VALKEYMODULE_GET_API(CallReplyInteger);

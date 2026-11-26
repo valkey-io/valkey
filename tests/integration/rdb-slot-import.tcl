@@ -1,3 +1,6 @@
+# This file tests the loading and checking of the slot RDB. All tmpdirs need to start
+# with "rdb-slot-import-" so that the test suite can clean up the temporary files.
+
 tags {"rdb cluster external:skip"} {
 
 # Helper: start a server that is expected to fail during RDB load, then inspect logs.
@@ -101,6 +104,89 @@ start_server_and_kill_it [list \
         # Must not become ready for clients.
         assert_equal 0 [count_message_lines [dict get $srv stdout] "Ready to accept"]
     }
+}
+
+# Return the bytes of an RDB length, encoded the same way rdbSaveLen() does:
+# 6 bit (1 byte), 14 bit (2 bytes) or 32 bit (0x80 + 4 bytes).
+proc rdb_len_bytes {len} {
+    if {$len < (1 << 6)} {
+        set hex [format %02x $len]
+    } elseif {$len < (1 << 14)} {
+        set hex [format %02x%02x [expr {0x40 | ($len >> 8)}] [expr {$len & 0xff}]]
+    } else {
+        set hex [format 80%08x $len]
+    }
+    return [binary format H* $hex]
+}
+
+# Craft an RDB with RDB_OPCODE_SLOT_IMPORT (0xF3) holding a valid (CLUSTER_NAMELEN)
+# job name and a single slot range, so the range validation is what gets exercised.
+# Slot ranges must satisfy 0 <= start_slot <= end_slot < CLUSTER_SLOTS (16384).
+#
+# Bytes: F3 | len=40 | job_name | num_ranges=1 | start_slot | end_slot | FF | cksum=0
+set range_path [tmpdir "rdb-slot-import-range"]
+proc craft_slot_import_range_rdb {src_rdb dst_rdb start_slot end_slot} {
+    set fd [open $src_rdb rb]
+    fconfigure $fd -translation binary
+    set data [read $fd]
+    close $fd
+
+    # Empty RDB ends with: EOF(0xFF) + 8-byte CRC64, replaced by our own footer.
+    set prefix [string range $data 0 end-9]
+    set record [binary format H* f3]
+    append record [rdb_len_bytes 40][string repeat "A" 40]
+    append record [rdb_len_bytes 1]
+    append record [rdb_len_bytes $start_slot][rdb_len_bytes $end_slot]
+    append record [binary format H* ff0000000000000000]
+
+    set fd [open $dst_rdb wb]
+    fconfigure $fd -translation binary
+    puts -nonewline $fd $prefix
+    puts -nonewline $fd $record
+    close $fd
+}
+
+set bad_range_rdb [file join $range_path "start-gt-end.rdb"]
+craft_slot_import_range_rdb [file join $gen_path empty.rdb] $bad_range_rdb 2000 1000
+test {valkey-check-rdb rejects slot-import range with start slot greater than end slot} {
+    catch {
+        exec $::VALKEY_CHECK_RDB_BIN $bad_range_rdb
+    } result
+    assert_match {*--- RDB ERROR DETECTED ---*} $result
+    assert_match {*Invalid slot import range in RDB: start=2000 end=1000*} $result
+    assert_no_match {*RDB looks OK*} $result
+}
+
+set bad_range_rdb [file join $range_path "end-out-of-range.rdb"]
+craft_slot_import_range_rdb [file join $gen_path empty.rdb] $bad_range_rdb 0 16384
+test {valkey-check-rdb rejects slot-import range with end slot out of range} {
+    catch {
+        exec $::VALKEY_CHECK_RDB_BIN $bad_range_rdb
+    } result
+    assert_match {*--- RDB ERROR DETECTED ---*} $result
+    assert_match {*Invalid slot import range in RDB: start=0 end=16384*} $result
+    assert_no_match {*RDB looks OK*} $result
+}
+
+set bad_range_rdb [file join $range_path "start-out-of-range.rdb"]
+craft_slot_import_range_rdb [file join $gen_path empty.rdb] $bad_range_rdb 16384 17384
+test {valkey-check-rdb rejects slot-import range with start slot out of range} {
+    catch {
+        exec $::VALKEY_CHECK_RDB_BIN $bad_range_rdb
+    } result
+    assert_match {*--- RDB ERROR DETECTED ---*} $result
+    assert_match {*Invalid slot import range in RDB: start=16384 end=17384*} $result
+    assert_no_match {*RDB looks OK*} $result
+}
+
+set ok_range_rdb [file join $range_path "valid-range.rdb"]
+craft_slot_import_range_rdb [file join $gen_path empty.rdb] $ok_range_rdb 0 16383
+test {valkey-check-rdb accepts valid slot-import range} {
+    catch {
+        exec $::VALKEY_CHECK_RDB_BIN $ok_range_rdb
+    } result
+    assert_match {*RDB looks OK*} $result
+    assert_no_match {*RDB ERROR DETECTED*} $result
 }
 
 } ;# tags

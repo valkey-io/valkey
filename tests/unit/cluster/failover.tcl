@@ -26,7 +26,7 @@ set current_epoch [CI 1 cluster_current_epoch]
 
 set paused_pid [srv 0 pid]
 test "Killing one master node" {
-    pause_process $paused_pid
+    pause_process_persistent $paused_pid
 }
 
 test "Wait for failover" {
@@ -85,7 +85,7 @@ start_cluster 3 6 {tags {external:skip cluster}} {
 
     set paused_pid [srv 0 pid]
     test "Killing the first primary node" {
-        pause_process $paused_pid
+        pause_process_persistent $paused_pid
     }
 
     test "Wait for failover" {

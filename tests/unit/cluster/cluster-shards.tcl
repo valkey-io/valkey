@@ -37,7 +37,7 @@ start_cluster 3 3 {tags {external:skip cluster}} {
     }
 
     test "Kill a node and tell the replica to immediately takeover" {
-        pause_process [srv $primary_node pid]
+        pause_process_persistent [srv $primary_node pid]
         R $replica_node CLUSTER failover force
     }
 
@@ -152,7 +152,7 @@ test "Verify no slot shard" {
 set node_0_id [R 0 CLUSTER MYID]
 
 test "Kill a node and tell the replica to immediately takeover" {
-    pause_process [srv 0 pid]
+    pause_process_persistent [srv 0 pid]
     R 4 cluster failover force
 }
 

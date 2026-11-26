@@ -1134,6 +1134,7 @@ foreach {pop} {BLPOP BLMPOP_LEFT} {
         r rpush k hello
         r select 9
         set rd [valkey_deferring_client]
+        test_defer [list $rd close]
         $rd brpop k 5
         wait_for_blocked_clients_count 1
         r swapdb 1 9
@@ -1148,6 +1149,7 @@ foreach {pop} {BLPOP BLMPOP_LEFT} {
         r rpush k hello
         r pexpire k 100
         set rd [valkey_deferring_client]
+        test_defer [list $rd close]
         $rd deferred 0
         $rd select 9
         set id [$rd client id]
@@ -1194,6 +1196,7 @@ foreach {pop} {BLPOP BLMPOP_LEFT} {
         r debug set-active-expire 0
 
         set rd [valkey_deferring_client]
+        test_defer [list $rd close]
         $rd client id
         set id [$rd read]
         $rd brpop k 0
@@ -1970,6 +1973,14 @@ foreach {type large} [array get largevalue] {
 
         test "LSET out of range index - $type" {
             assert_error ERR*range* {r lset mylist 10 foo}
+        }
+
+        test "LSET does not truncate large indexes - $type" {
+            create_$type mylist "a $large"
+            foreach index {4294967295 4294967296 -4294967296 -4294967297} {
+                assert_error ERR*range* {r lset mylist $index changed} "LSET index $index"
+                assert_equal "a $large" [r lrange mylist 0 -1] "LSET index $index"
+            }
         }
     }
 

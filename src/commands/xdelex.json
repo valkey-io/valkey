@@ -66,16 +66,18 @@
             {
                 "name": "ids",
                 "token": "IDS",
-                "type": "pure-token"
-            },
-            {
-                "name": "numids",
-                "type": "integer"
-            },
-            {
-                "name": "id",
-                "type": "string",
-                "multiple": true
+                "type": "block",
+                "arguments": [
+                    {
+                        "name": "numids",
+                        "type": "integer"
+                    },
+                    {
+                        "name": "id",
+                        "type": "string",
+                        "multiple": true
+                    }
+                ]
             }
         ],
         "reply_schema": {

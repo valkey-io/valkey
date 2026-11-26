@@ -927,6 +927,36 @@ class BgIterationTest : public ::testing::Test {
     }
 
 
+    // Simulate active hash field expiry: an HDEL propagated outside of any client command.  The key
+    //  still exists after the HDEL (unless it was the last field).
+    void simulateFieldExpiry(int itemNum) {
+        int db = getDbFromItemNum(itemNum);
+        robj *argv[3];
+        argv[0] = createStringObjectFromCString("HDEL");
+        argv[1] = createStringObjectFromCString(keyStr(itemNum));
+        argv[2] = createStringObjectFromCString("f1");
+        serverCommand *cmd = lookupCommandByCString("HDEL");
+
+        ASSERT_EQ(server.in_call, 0); // test sanity check
+        bgIteration_handleCommandReplication(db, cmd, 3, argv);
+        for (int i = 0; i < 3; i++) decrRefCount(argv[i]);
+    }
+
+
+    // Expecting that an HDEL command should have been replicated.
+    void expectReadReplicationHdel(bgIterator *iter, int itemNum) {
+        bgIteration_feedIterators();
+        bgIteratorItem *item = bgIteratorRead(iter);
+        bgIteration_feedIterators();
+
+        ASSERT_EQ(item->type, BGITERATOR_ITEM_REPLICATION);
+        EXPECT_EQ(item->dbid, getDbFromItemNum(itemNum));
+        EXPECT_EQ(item->u.repl.cmd, lookupCommandByCString("HDEL"));
+        EXPECT_EQ(item->u.repl.argc, 3);
+        EXPECT_THAT(item->u.repl.argv[1], robjEqualsStr(keyStr(itemNum)));
+    }
+
+
     // Simulates an expiration, but validates behavior for an item inuse by bgIteration.
     void simulateExpirationOfInuse(int itemNum) {
         // An inuse item will have a refcount > 1.  BgIteration should have incremented the
@@ -986,6 +1016,7 @@ class BgIterationTest : public ::testing::Test {
         serverDb *aux = server.db[dbid0];
         server.db[dbid0] = server.db[dbid1];
         server.db[dbid1] = aux;
+        bgIteration_swapdb(dbid0, dbid1);
 
         bgIteration_handleCommandReplication(0, c->cmd, c->argc, c->argv);
         server.in_call--;
@@ -2007,6 +2038,105 @@ TEST_F(BgIterationTest, expireKeys_eventual_ExpeditedKeyExpired) {
 }
 
 
+// Active hash field expiry sends an HDEL outside of any client command.  The replication decision
+// must be based on the key (not on the stale decision from the last client write).  Here the last
+// client write was to a future key (so it did not replicate), but the HDEL is for a key which the
+// iteration has already passed.  It must be replicated.
+TEST_F(BgIterationTest, fieldExpiry_eventual_PassedKeyReplicated) {
+    bgIterator *it = bgIteratorCreateFullScanIter("iter", BGITERATOR_CONSISTENCY_EVENTUAL, NULL,
+                                                  iteratorCleanupFn, PRIVDATA);
+    expectReadKey(it, 0); // Key 0 is now passed.  Keys 1 & 2 are queued.
+
+    // A write to a future key does not replicate (leaves the replication decision "false")
+    c = getWriteClient(6, "xxx");
+    simulateUnblockedWriteWithModification(c);
+
+    simulateFieldExpiry(0);
+
+    expectReadKeySequence(it, 1, 2);
+    expectReadReplicationHdel(it, 0);
+    expectReadKeySequence(it, 3, 5);
+    expectReadKey(it, 6, "xxx"); // The future write is seen by the scan
+    expectReadKeySequence(it, 7, LAST_ITEM);
+    expectReadComplete(it);
+}
+
+
+// Same as above, but the HDEL is for a key which has not been reached yet.  It must NOT be
+// replicated, even though the last client write did replicate.  The iteration will send the key in
+// its current state.
+TEST_F(BgIterationTest, fieldExpiry_eventual_FutureKeyNotReplicated) {
+    bgIterator *it = bgIteratorCreateFullScanIter("iter", BGITERATOR_CONSISTENCY_EVENTUAL, NULL,
+                                                  iteratorCleanupFn, PRIVDATA);
+    expectReadKey(it, 0);
+    expectReadKey(it, 1); // Key 0 is now a past key which is no longer in use
+
+    // A write to a past key replicates (leaves the replication decision "true")
+    c = getWriteClient(0, "xxx");
+    simulateUnblockedWriteWithModification(c);
+
+    simulateFieldExpiry(8);
+
+    expectReadKey(it, 2);
+    expectReadReplication(it, c); // Only the SET is replicated
+    expectReadKeySequence(it, 3, LAST_ITEM);
+    expectReadComplete(it);
+}
+
+
+// An expedited (early iterated) key counts as passed, even though the scan hasn't reached it.
+TEST_F(BgIterationTest, fieldExpiry_eventual_ExpeditedKeyReplicated) {
+    bgIterator *it = bgIteratorCreateFullScanIter("iter", BGITERATOR_CONSISTENCY_EVENTUAL, NULL,
+                                                  iteratorCleanupFn, PRIVDATA);
+    expectReadKey(it, 0); // Also queues 1 & 2
+
+    c = getWrite2KeysClient("sunionstore", 0, 7);
+    simulateBlockedWrite(c, 2); // blocked on both 0 and 7
+    expectReadKeyWithUnblock(it, 7, 0);
+    expectReadKeyWithUnblock(it, 1, 7);
+    simulateUnblockedWriteWithModification(c);
+
+    // A write to a future key leaves the replication decision "false"
+    client *c2 = getWriteClient(9, "xxx");
+    simulateUnblockedWriteWithModification(c2);
+    freeTestClient(c2);
+
+    simulateFieldExpiry(7);
+
+    expectReadKey(it, 2);
+    expectReadReplication(it, c);
+    expectReadReplicationHdel(it, 7);
+    expectReadKeySequence(it, 3, 6);
+    expectReadKey(it, 8);        // 7 was already sent
+    expectReadKey(it, 9, "xxx"); // The future write is seen by the scan
+    expectReadKeySequence(it, 10, LAST_ITEM);
+    expectReadComplete(it);
+}
+
+
+// The last client write created a new (missing) future key, which was sent early.  Its missing-key
+// list is still set when the field expiry HDEL arrives.  The HDEL is not part of that write, so it
+// must not consume that list again (which would try to expedite the new key a second time).
+TEST_F(BgIterationTest, fieldExpiry_eventual_AfterNewKeyWrite) {
+    simpleDelItem(14); // Delete the item before iterator creation
+    bgIterator *it = bgIteratorCreateFullScanIter("iter", BGITERATOR_CONSISTENCY_EVENTUAL, NULL,
+                                                  iteratorCleanupFn, PRIVDATA);
+    expectReadKey(it, 0); // Items 1 & 2 are in queue (same bucket)
+
+    // A write creating a missing future key replicates (leaves the replication decision "true")
+    c = getWriteClient(14, "xxx");
+    simulateUnblockedWriteWithModification(c);
+
+    simulateFieldExpiry(8); // Not reached yet, so the HDEL is not replicated
+
+    expectReadKeySequence(it, 1, 2);
+    expectReadReplication(it, c); // Only the SET creating item 14 is replicated
+    expectReadKeySequence(it, 3, 13);
+    expectReadKey(it, LAST_ITEM); // 14 was created by the earlier replication
+    expectReadComplete(it);
+}
+
+
 /////////////////////////////////////////////////////
 // THE REMAINING TESTS ARE GENERAL / UNCATEGORIZED
 /////////////////////////////////////////////////////
@@ -2078,6 +2208,28 @@ TEST_F(BgIterationTest, earlyTerminationFromChild) {
     EXPECT_FALSE(blocked0);
     EXPECT_FALSE(blocked1);
     EXPECT_FALSE(blocked2);
+    EXPECT_EQ(cleanupCount, 1);
+    EXPECT_TRUE(cleanupTerminated);
+}
+
+
+// The main thread may terminate an iterator that its client has already closed (e.g. a forkless
+//  save cancelled after the background thread has failed).  The items released by the termination
+//  are then returned behind ITER_CLOSED.
+TEST_F(BgIterationTest, earlyTerminationFromMainAfterChildClose) {
+    bgIterator *it = bgIteratorCreateFullScanIter("iter", BGITERATOR_CONSISTENCY_NONE, NULL,
+                                                  iteratorCleanupFn, PRIVDATA);
+    expectReadKey(it, 0);
+    expectReadKey(it, 1);
+    simulateFlushDB(0, 1); // queues a FLUSHDB barrier item
+    bgIteratorStatus status;
+    bgIteratorGetStatus(it, &status);
+    EXPECT_EQ(status.flushdb_queued, 1u);
+
+    bgIteratorClose(it);     // background thread initiates the termination
+    bgIteratorTerminate(it); // main thread terminates before receiving ITER_CLOSED
+
+    bgIteration_feedIterators();
     EXPECT_EQ(cleanupCount, 1);
     EXPECT_TRUE(cleanupTerminated);
 }
@@ -2667,6 +2819,92 @@ TEST_F(BgIterationTest, flushDB_flushOne) {
 }
 
 
+/* The client stops reading at COMPLETE, so a limited FLUSHDB must not queue
+ * another item behind it. */
+TEST_F(BgIterationTest, flushDB_flushOneAfterComplete) {
+    bgIterator *it = bgIteratorCreateFullScanIter("iter", BGITERATOR_CONSISTENCY_NONE, NULL,
+                                                  iteratorCleanupFn, PRIVDATA);
+    bgIteratorStatus status;
+
+    expectReadKeySequence(it, 0, LAST_ITEM);
+    bgIteration_feedIterators(); // COMPLETE is queued
+    bgIteratorItem *item = bgIteratorRead(it);
+    EXPECT_EQ(item->type, BGITERATOR_ITEM_COMPLETE);
+
+    simulateFlushDB(0);
+    bgIteratorGetStatus(it, &status);
+    EXPECT_EQ(status.flushdb_queued, 0u);
+
+    bgIteratorClose(it);
+    bgIteration_feedIterators();
+    EXPECT_EQ(cleanupCount, 1);
+    EXPECT_FALSE(cleanupTerminated);
+}
+
+/* FLUSHDB must not queue an item behind COMPLETE before the client reads it. */
+TEST_F(BgIterationTest, flushDB_flushOneBeforeCompleteRead) {
+    bgIterator *it = bgIteratorCreateFullScanIter("iter", BGITERATOR_CONSISTENCY_NONE, NULL,
+                                                  iteratorCleanupFn, PRIVDATA);
+    bgIteratorStatus status;
+
+    expectReadKeySequence(it, 0, LAST_ITEM);
+    bgIteration_feedIterators(); // COMPLETE is queued, but not read yet
+
+    simulateFlushDB(0);
+    bgIteratorGetStatus(it, &status);
+    EXPECT_EQ(status.flushdb_queued, 0u);
+
+    bgIteratorItem *item = bgIteratorRead(it);
+    EXPECT_EQ(item->type, BGITERATOR_ITEM_COMPLETE);
+    bgIteratorClose(it);
+    bgIteration_feedIterators();
+    EXPECT_EQ(cleanupCount, 1);
+    EXPECT_FALSE(cleanupTerminated);
+}
+
+/* A limited FLUSHDB must not queue an item after the iterator is terminated. */
+TEST_F(BgIterationTest, flushDB_flushOneAfterTerminate) {
+    bgIterator *it = bgIteratorCreateFullScanIter("iter", BGITERATOR_CONSISTENCY_NONE, NULL,
+                                                  iteratorCleanupFn, PRIVDATA);
+    bgIteratorStatus status;
+
+    expectReadKey(it, 0);
+    bgIteratorTerminate(it);
+    bgIteratorItem *item = bgIteratorRead(it);
+    EXPECT_EQ(item->type, BGITERATOR_ITEM_TERMINATED);
+
+    simulateFlushDB(0);
+    bgIteratorGetStatus(it, &status);
+    EXPECT_EQ(status.flushdb_queued, 0u);
+
+    bgIteratorClose(it);
+    bgIteration_feedIterators();
+    EXPECT_EQ(cleanupCount, 1);
+    EXPECT_TRUE(cleanupTerminated);
+}
+
+/* FLUSHALL must not turn a completed iterator into a terminated one. */
+TEST_F(BgIterationTest, flushDB_flushAllBeforeCompleteRead) {
+    bgIterator *it = bgIteratorCreateFullScanIter("iter", BGITERATOR_CONSISTENCY_NONE, NULL,
+                                                  iteratorCleanupFn, PRIVDATA);
+    bgIteratorStatus status;
+
+    expectReadKeySequence(it, 0, LAST_ITEM);
+    bgIteration_feedIterators(); // COMPLETE is queued, but not read yet
+
+    simulateFlushDB(-1);
+    bgIteratorGetStatus(it, &status);
+    EXPECT_EQ(status.flushdb_queued, 0u);
+
+    bgIteratorItem *item = bgIteratorRead(it);
+    EXPECT_EQ(item->type, BGITERATOR_ITEM_COMPLETE);
+    bgIteratorClose(it);
+    bgIteration_feedIterators();
+    EXPECT_EQ(cleanupCount, 1);
+    EXPECT_FALSE(cleanupTerminated);
+}
+
+
 /* A multi with one future and one past key must expedite and replicate. */
 TEST_F(BgIterationTest, multiTwoKeysFirstFuture) {
     bgIterator *it = bgIteratorCreateFullScanIter("iter", BGITERATOR_CONSISTENCY_EVENTUAL, NULL,
@@ -2783,6 +3021,116 @@ TEST_F(BgIterationTest, multiNotReplicatedButDelRecreateAccess) {
     expectReadKeySequence(it, 1, 5);
     expectReadKey(it, 6, "xxx");
     expectReadKey(it, 7, "yyy");
+    expectReadKeySequence(it, 8, LAST_ITEM);
+    expectReadComplete(it);
+}
+
+
+// A replicated MULTI/EXEC that creates a new (future) key.  This mirrors the sequence that
+//  server.c produces for "MULTI; SET W0 xxx; EXEC" during an eventual (forkless full sync) iteration:
+//   - call(EXEC)   -> bgIteration_blockClientIfRequired(EXEC)
+//   - call(SET)    -> bgIteration_blockClientIfRequired(SET), then the SET executes
+//   - alsoPropagate(SET) -> propagateToBgIteration() sends MULTI, then SET
+//   - afterCommand -> propagatePendingCommands() -> propagateToBgIteration(-1) sends EXEC
+//  The new key must be added to early_iterate_entries exactly once.
+TEST_F(BgIterationTest, multiCreatesNewKey_eventual) {
+    simpleDelItem(14); // W0 (DB1) doesn't exist before iteration
+    bgIterator *it = bgIteratorCreateFullScanIter("iter", BGITERATOR_CONSISTENCY_EVENTUAL, NULL,
+                                                  iteratorCleanupFn, PRIVDATA);
+    expectReadKey(it, 0); // Items 1 & 2 are in queue (same bucket)
+
+    c = getMultiClient("SET W0 xxx", 1);
+    int dbid = c->db->id;
+    simulateUnblockedWrite_inCall(c); // the EXEC
+
+    server.in_exec = 1;
+    advanceMultiClientToCommand(c, 0); // SET W0 xxx
+    EXPECT_CALL(mock, blockClientInUseOnKeys(c, _, _)).Times(0);
+    bool blocked = bgIteration_blockClientIfRequired(c);
+    EXPECT_FALSE(blocked);
+    server.in_call++;
+    robj *value = dupStringObject(c->argv[2]);
+    setKey(c, c->db, c->argv[1], &value, SETKEY_ADD_OR_UPDATE);
+
+    // alsoPropagate() for the SET: propagateToBgIteration() sends MULTI first, then the SET
+    struct serverCommand *cmd_multi = lookupCommandByCString("multi");
+    bgIteration_handleCommandReplication(dbid, cmd_multi, 1, &shared.multi);
+    bgIteration_handleCommandReplication(dbid, c->cmd, c->argc, c->argv);
+    server.in_call--;
+    server.in_exec = 0;
+
+    // propagatePendingCommands() closes the transaction with EXEC
+    struct serverCommand *cmd_exec = lookupCommandByCString("exec");
+    bgIteration_handleCommandReplication(dbid, cmd_exec, 1, &shared.exec);
+    server.in_call--;
+
+    expectReadKeySequence(it, 1, 2); // already queued (same bucket as key 0)
+    expectReadMultiReplication(it);
+    expectReadReplication(it, c); // SET W0 xxx (c is still advanced to the SET)
+    expectReadExecReplication(it);
+    expectReadKeySequence(it, 3, 13);
+    // W0 (item 14) is skipped: it was created by the replicated transaction
+    expectReadKey(it, LAST_ITEM);
+    expectReadComplete(it);
+}
+
+
+// A replicated MULTI/EXEC that creates a new key, followed by a read that lazily expires a passed
+//  key:  "MULTI; SET H2 xxx; GET B0; EXEC".  The GET is nested inside the EXEC, so:
+//   - the DEL from the expiry must not re-process the SET's missing keys (adding H2 twice)
+//   - the DEL is replicated, since the replica already has B0
+//   - the EXEC closing the transaction is still replicated after the (nested) read
+TEST_F(BgIterationTest, multiCreatesNewKeyThenReadExpiresKey_eventual) {
+    simpleDelItem(7); // H2 doesn't exist before iteration
+    bgIterator *it = bgIteratorCreateFullScanIter("iter", BGITERATOR_CONSISTENCY_EVENTUAL, NULL,
+                                                  iteratorCleanupFn, PRIVDATA);
+    expectReadKeySequence(it, 0, 2); // B0 is passed (and no longer in use).  3 & 4 are queued.
+
+    c = getMultiClient("set H2 xxx; get B0", 0); // lowercase to match getWriteClient below
+    int dbid = c->db->id;
+    simulateUnblockedWrite_inCall(c); // the EXEC
+
+    server.in_exec = 1;
+    advanceMultiClientToCommand(c, 0); // SET H2 xxx
+    EXPECT_CALL(mock, blockClientInUseOnKeys(c, _, _)).Times(0);
+    bool blocked = bgIteration_blockClientIfRequired(c);
+    EXPECT_FALSE(blocked);
+    server.in_call++;
+    robj *value = dupStringObject(c->argv[2]);
+    setKey(c, c->db, c->argv[1], &value, SETKEY_ADD_OR_UPDATE);
+    struct serverCommand *cmd_multi = lookupCommandByCString("multi");
+    bgIteration_handleCommandReplication(dbid, cmd_multi, 1, &shared.multi);
+    bgIteration_handleCommandReplication(dbid, c->cmd, c->argc, c->argv);
+    server.in_call--;
+
+    advanceMultiClientToCommand(c, 1); // GET B0 - B0 is found to be expired
+    blocked = bgIteration_blockClientIfRequired(c);
+    EXPECT_FALSE(blocked);
+    server.in_call++;
+    bgIteration_keyDelete(dbid, static_cast<sds>(objectGetVal(c->argv[1])));
+    simpleDelItem(0);
+    robj *argv[2];
+    argv[0] = createStringObjectFromCString("DEL");
+    argv[1] = c->argv[1];
+    bgIteration_handleCommandReplication(dbid, lookupCommandByCString("DEL"), 2, argv);
+    decrRefCount(argv[0]);
+    server.in_call--;
+    server.in_exec = 0;
+
+    // propagatePendingCommands() closes the transaction with EXEC
+    struct serverCommand *cmd_exec = lookupCommandByCString("exec");
+    bgIteration_handleCommandReplication(dbid, cmd_exec, 1, &shared.exec);
+    server.in_call--;
+
+    expectReadKeySequence(it, 3, 4); // already queued
+    expectReadMultiReplication(it);
+    client *setClient = getWriteClient(7, "xxx"); // to match the replicated SET H2 xxx
+    expectReadReplication(it, setClient);
+    freeTestClient(setClient);
+    expectReadReplicationDel(it, 0);
+    expectReadExecReplication(it);
+    expectReadKeySequence(it, 5, 6);
+    // H2 (item 7) is skipped: it was created by the replicated transaction
     expectReadKeySequence(it, 8, LAST_ITEM);
     expectReadComplete(it);
 }
@@ -3169,4 +3517,38 @@ TEST_F(BgIterationTest, checkNoKeysWriteIsReplicated) {
 
     expectReadKeySequence(it, 3, LAST_ITEM);
     expectReadComplete(it);
+}
+
+
+// During a save, a write to an unsaved key queues that key ahead of the scan.  Expedited keys
+//  waiting at a feed must not stop the queue target from growing.
+TEST_F(BgIterationTest, queueTargetGrowsWithExpeditedKeysWaiting) {
+    // Start a consistent save, as BGSAVE does.  Capture its feed timer so the test runs the feed.
+    aeTimeProc *feed = NULL;
+    EXPECT_CALL(mock, aeCreateTimeEvent(_, _, _, _, _)).WillOnce(DoAll(SaveArg<2>(&feed), Return(0)));
+    bgIterator *it = bgIteratorCreateFullScanIter("iter", BGITERATOR_CONSISTENCY_START, NULL,
+                                                  iteratorCleanupFn, PRIVDATA);
+    ASSERT_NE(feed, nullptr);
+
+    // Before anything is fed, write 3 keys.  All are expedited into the queue.
+    for (int item = 0; item < 3; item++) {
+        client *writer = getWriteClient(item, "xxx");
+        simulateBlockedWrite(writer);
+        freeTestClient(writer);
+    }
+
+    // The client reads one of them.  (The first read doesn't run a feed.)
+    bgIteratorRead(it);
+
+    bgIteratorStatus status;
+    bgIteratorGetStatus(it, &status);
+    ASSERT_EQ(status.queue_length, 2u);
+    unsigned long target = status.queue_length_target;
+
+    // Run one feed.  Everything in the queue was added since the last feed, so the target must grow.
+    feed(NULL, 0, NULL);
+    bgIteratorGetStatus(it, &status);
+    EXPECT_GT(status.queue_length_target, target);
+
+    expectAnythingCleanup(it);
 }

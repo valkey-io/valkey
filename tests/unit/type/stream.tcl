@@ -1895,6 +1895,35 @@ start_server {tags {"stream needs:debug"} overrides {appendonly yes stream-node-
 
         r debug loadaof
         assert_equal [expr {$len_before_trim - $trimmed}] [r xlen mystream]
+        r flushall
+    }
+
+    test {XADD/XTRIM strip every repeated LIMIT when rewriting for propagation} {
+        set aof [get_last_incr_aof_path r]
+        set aof_offset [file size $aof]
+        r config set stream-node-max-entries 10
+
+        for {set j 0} {$j < 100} {incr j} {
+            r XADD mystream * xitem v
+        }
+
+        # The last LIMIT wins. A LIMIT below the node size (10) trims nothing.
+        r XADD mystream MAXLEN ~ 55 LIMIT 5 LIMIT 30 * xitem v
+        assert_equal 71 [r xlen mystream]
+        r XADD mystream LIMIT 5 MAXLEN ~ 55 LIMIT 6 LIMIT 30 NOMKSTREAM * xitem v
+        assert_equal 62 [r xlen mystream]
+        assert_equal 10 [r XTRIM mystream MAXLEN ~ 50 LIMIT 5 LIMIT 30]
+        assert_equal 52 [r xlen mystream]
+
+        set fp [open $aof r]
+        fconfigure $fp -translation binary
+        seek $fp $aof_offset
+        set blob [read $fp]
+        close $fp
+        assert_equal -1 [string first "LIMIT" $blob]
+
+        r debug loadaof
+        assert_equal 52 [r xlen mystream]
     }
 }
 
@@ -2032,6 +2061,45 @@ start_server {tags {"stream"}} {
         r DEL x
         r XADD x 1-18446744073709551615 f1 v1
         assert_error {*The ID specified in XADD is equal or smaller*} {r XADD x 1-* f2 v2}
+    }
+
+    test {XADD across macro nodes persists every entry (stream-node-max-bytes)} {
+        # Regression test for a use-after-free in streamAppendItem() when a new
+        # macro node's listpack is reallocated to the address just freed by the
+        # previous node's lpShrinkToFit(). The specific field payload sizes
+        # below and the XADD sequence drive jemalloc into that address reuse;
+        # without this exact shape the aliasing does not occur and the test
+        # silently loses coverage. The bug is allocator-agnostic, but this
+        # shape only reliably reproduces it under jemalloc.
+        r DEL k
+        set a100 [string repeat a 100]
+        set a1200 [string repeat a 1200]
+        set fields [list f1 $a100 f2 $a1200 f3 aaaa f4 a f5 $a1200 f6 $a1200]
+
+        r XADD k 2-2 f1 gd f2 bmljhyqvch
+        assert_equal {2-2} [lmap e [dict get [r XINFO STREAM k FULL] entries] {lindex $e 0}]
+
+        set saved_max_bytes [config_get_set stream-node-max-bytes 1]
+        r XADD k 2-3 {*}$fields
+        assert_equal {2-2 2-3} [lmap e [dict get [r XINFO STREAM k FULL] entries] {lindex $e 0}]
+        assert_equal {2-2 2-3} [lmap e [r XRANGE k - +] {lindex $e 0}]
+
+        r CONFIG SET stream-node-max-bytes 4096
+        r XADD k 2-4 {*}$fields
+        assert_equal {2-2 2-3 2-4} [lmap e [dict get [r XINFO STREAM k FULL] entries] {lindex $e 0}]
+        assert_equal {2-2 2-3 2-4} [lmap e [r XRANGE k - +] {lindex $e 0}]
+
+        r XADD k 2-5 {*}$fields
+        assert_equal {2-2 2-3 2-4 2-5} [lmap e [dict get [r XINFO STREAM k FULL] entries] {lindex $e 0}]
+        assert_equal {2-2 2-3 2-4 2-5} [lmap e [r XRANGE k - +] {lindex $e 0}]
+        assert_equal {2-5 2-4 2-3 2-2} [lmap e [r XREVRANGE k + -] {lindex $e 0}]
+
+        assert_equal 4 [r XLEN k]
+
+        assert_equal {f1 gd f2 bmljhyqvch} [lindex [lindex [r XRANGE k 2-2 2-2] 0] 1]
+        assert_equal $fields [lindex [lindex [r XRANGE k 2-5 2-5] 0] 1]
+
+        config_set stream-node-max-bytes $saved_max_bytes
     }
 }
 

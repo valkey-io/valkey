@@ -1016,6 +1016,21 @@ if {[string match {*jemalloc*} [s mem_allocator]]} {
             {r set foo "new_value" ifne "initial_value" get}
     }
 
+    test {SET IFEQ/IFNE with GET propagates a comparison value spelled GET} {
+        r del foo
+        set repl [attach_to_replication_stream]
+        r set foo GET
+        r set foo bar ifeq GET get
+        r set foo baz ifne GET get
+        assert_replication_stream $repl {
+            {select *}
+            {set foo GET}
+            {set foo bar ifeq GET}
+            {set foo baz ifne GET}
+        }
+        close_replication_stream $repl
+    } {} {needs:repl}
+
     test {Extended SET EX option} {
         r del foo
         r set foo bar ex 10
@@ -1211,6 +1226,11 @@ if {[string match {*jemalloc*} [s mem_allocator]]} {
 
 if {[string match {*jemalloc*} [s mem_allocator]]} {
     test {Memory usage of embedded string value} {
+        # The 24 byte size class only exists with an 8 byte quantum, as in the
+        # bundled jemalloc. A system jemalloc usually has a 16 byte quantum.
+        if {[r debug mallctl arenas.quantum] != 8} {
+            skip "needs jemalloc with quantum 8"
+        }
         # Check that we can fit 9 bytes of key + value into a 24 byte
         # allocation, including the serverObject itself.
         r set quux xyzzy

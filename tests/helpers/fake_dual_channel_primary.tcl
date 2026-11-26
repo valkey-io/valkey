@@ -3,6 +3,12 @@
 # RDB channel receives a valid size-framed RDB, while the main channel receives
 # the supplied command-stream bytes before the RDB finishes loading.
 #
+# The RDB is held until a control connection sends RELEASE. This makes the
+# order deterministic: the caller releases the RDB only after the replica has
+# buffered the stream. The server socket stays open until the RDB is sent, so
+# the control connection can reach it. It closes then, so the replica cannot
+# reconnect after the corrupt stream drops the link.
+#
 # Usage: tclsh fake_dual_channel_primary.tcl PORT RDB_FILE STREAM_FILE
 
 set port [lindex $argv 0]
@@ -30,15 +36,16 @@ proc send_bytes {sock bytes} {
 }
 
 proc send_rdb {sock} {
-    global rdb_payload
+    global rdb_payload server_socket
     catch {
         send_bytes $sock "\$[string length $rdb_payload]\r\n$rdb_payload"
     }
     catch {close $sock}
+    catch {close $server_socket}
 }
 
 proc read_command {sock} {
-    global channel main_psync_count stream_payload stream_sent server_socket done
+    global channel main_psync_count stream_payload stream_sent server_socket done rdb_sock
 
     while {[gets $sock line] >= 0} {
         set command [string toupper [string trim $line]]
@@ -55,12 +62,14 @@ proc read_command {sock} {
             } else {
                 send_bytes $sock "+CONTINUE [string repeat 0 40]\r\n$stream_payload"
                 set stream_sent 1
-                catch {close $server_socket}
             }
         } elseif {$command eq "SYNC"} {
             set channel($sock) rdb
             send_bytes $sock "\$ENDOFF:0 [string repeat 0 40] 0 1\r\n"
-            after 50 [list send_rdb $sock]
+            set rdb_sock $sock
+        } elseif {$command eq "RELEASE"} {
+            send_rdb $rdb_sock
+            send_bytes $sock "+OK\r\n"
         }
     }
 

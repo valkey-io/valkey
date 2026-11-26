@@ -591,13 +591,38 @@ start_server {overrides {save {900 1}} tags {"modules"}} {
         assert_equal {OK} [r test.malloc_api 0]
     }
 
+    test "TryCalloc fails when nmemb * size overflows" {
+        assert_equal 1 [r test.trycalloc_overflow]
+    }
+
     test "Cluster keyslot" {
         assert_equal 12182 [r test.keyslot foo]
+    }
+
+    foreach {cond initial} {IFEQ GET IFNE other} {
+        test "RM_Call SET $cond GET with one object as comparison value and GET option" {
+            r del k
+            r set k $initial
+            set repl [attach_to_replication_stream]
+            assert_equal $initial [r test.set_shared_get k newval $cond]
+            assert_equal newval [r get k]
+            assert_replication_stream $repl [list {select *} "set k newval $cond GET"]
+            r del k
+            close_replication_stream $repl
+        } {} {needs:repl}
     }
 }
 
 start_server {tags {"modules"}} {
     r module load $testmodule
+
+    test "VM_Call script-mode validation errors without error replies do not crash" {
+        assert_equal {ERR ENOENT} [r test.call_script_mode nosuchcmd]
+        assert_equal {ERR EINVAL} [r test.call_script_mode set]
+        assert_equal {ERR ESPIPE} [r test.call_script_mode shutdown]
+        assert_equal {OK 0} [r test.call_script_mode ping]
+        assert_equal PONG [r ping]
+    }
 
     foreach cmd {rm_call_flags vm_call_argv_flags} {
         test "test Dry Run - OK OOM/ACL with $cmd" {
@@ -654,5 +679,16 @@ if {[string match {*jemalloc*} [s mem_allocator]]} {
 
     test "Unload the module - misc" {
         assert_equal {OK} [r module unload misc]
+    }
+}
+
+# Valgrind will complain that the process terminated by a signal, skip it.
+tags {"valgrind:skip"} {
+    start_server {tags {"modules external:skip"} overrides {crash-memcheck-enabled no}} {
+        r module load $testmodule
+        test "Calloc panics when nmemb * size overflows" {
+            catch {r test.calloc_overflow}
+            wait_for_log_messages 0 {"*ValkeyModule_Calloc(*, 2) overflows*"} 0 10 1000
+        }
     }
 }

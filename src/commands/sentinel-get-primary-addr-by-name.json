@@ -13,18 +13,27 @@
             "ONLY_SENTINEL"
         ],
         "reply_schema": {
-            "type": "array",
-            "minItems": 2,
-            "maxItems": 2,
-            "items": [
+            "oneOf": [
                 {
-                    "type": "string",
-                    "description": "IP addr or hostname."
+                    "description": "The address of the primary.",
+                    "type": "array",
+                    "minItems": 2,
+                    "maxItems": 2,
+                    "items": [
+                        {
+                            "type": "string",
+                            "description": "IP addr or hostname."
+                        },
+                        {
+                            "type": "string",
+                            "description": "Port.",
+                            "pattern": "[0-9]+"
+                        }
+                    ]
                 },
                 {
-                    "type": "string",
-                    "description": "Port.",
-                    "pattern": "[0-9]+"
+                    "description": "No primary with the given name is monitored.",
+                    "type": "null"
                 }
             ]
         },

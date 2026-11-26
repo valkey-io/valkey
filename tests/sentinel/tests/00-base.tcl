@@ -345,3 +345,25 @@ test "SENTINEL IS-PRIMARY-DOWN-BY-ADDR checks if the primary is down" {
     assert_equal $sentinel_id [lindex $result 1]
     assert_equal {50} [lindex $result 2]
 }
+
+test "SENTINEL IS-PRIMARY-DOWN-BY-ADDR rejects a negative epoch" {
+    set sentinel_id [S 0 SENTINEL MYID]
+    set primary_ip_port [S 0 SENTINEL GET-PRIMARY-ADDR-BY-NAME mymaster]
+    set primary_ip [lindex $primary_ip_port 0]
+    set primary_port [lindex $primary_ip_port 1]
+    catch {S 0 SENTINEL IS-PRIMARY-DOWN-BY-ADDR $primary_ip $primary_port -1 $sentinel_id} err
+    assert_match "*Invalid epoch*" $err
+    # The epoch is checked before the primary lookup, so a negative epoch is also
+    # rejected when no vote is requested (runid "*") and for an address that no
+    # monitored primary has. These used to get "0 * 0".
+    catch {S 0 SENTINEL IS-PRIMARY-DOWN-BY-ADDR $primary_ip $primary_port -1 *} err
+    assert_match "*Invalid epoch*" $err
+    catch {S 0 SENTINEL IS-PRIMARY-DOWN-BY-ADDR $primary_ip 1 -1 $sentinel_id} err
+    assert_match "*Invalid epoch*" $err
+    # The current epoch must not have been changed: a vote for the next epoch
+    # is still granted. Kept below the epoch 99 used by later tests, as the
+    # sentinels are shared between test files.
+    set result [S 0 SENTINEL IS-PRIMARY-DOWN-BY-ADDR $primary_ip $primary_port 51 $sentinel_id]
+    assert_equal $sentinel_id [lindex $result 1]
+    assert_equal {51} [lindex $result 2]
+}

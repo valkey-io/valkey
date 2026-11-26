@@ -51,6 +51,7 @@ int tryOffloadFreeArgvToIOThreads(client *c, int argc, robj **argv);
 void IOThreadsAfterSleep(int numevents);
 void IOThreadsBeforeSleep(long long current_time);
 void drainIOThreadsQueue(void);
+int ioThreadsHaveNoPendingJobs(void);
 void testOnlyInitIOThreadQueues(void);
 void testOnlyFreeIOThreadQueues(void);
 void testOnlyFillIOThreadInbox(void);

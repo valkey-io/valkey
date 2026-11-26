@@ -1402,4 +1402,69 @@ tags {"external:skip"} {
             }
         }
     }
+
+    test "AOF manifest is not renamed if pre-rename directory fsync fails" {
+        if {$::tcl_platform(os) eq "AIX"} {
+            skip "fsyncFileDir is a no-op on AIX"
+        }
+
+        set test_dir [tmpdir aof.manifest.fsyncdir]
+        set test_aof_dirpath "$test_dir/$aof_dirname"
+        set test_aof_manifest_file "$test_aof_dirpath/${aof_basename}$::manifest_suffix"
+        file mkdir $test_aof_dirpath
+        test_defer [list clean_aof_persistence $test_aof_dirpath]
+        test_defer [list catch [list file attributes $test_aof_dirpath -permissions 0755]]
+
+        # Detect whether chmod 0300 blocks open(O_RDONLY) on a directory
+        # (root / CAP_DAC_READ_SEARCH bypasses directory read permissions).
+        file attributes $test_aof_dirpath -permissions 0300
+        set can_read_0300 0
+        if {![catch {set fd [open $test_aof_dirpath r]}]} {
+            close $fd
+            set can_read_0300 1
+        }
+        file attributes $test_aof_dirpath -permissions 0755
+        if {$can_read_0300} {
+            skip "directory 0300 permissions do not block O_RDONLY open"
+        }
+
+        start_server_aof [list dir $test_dir] {
+            set test_aof_dirpath "[get_valkey_dir]/appendonlydir"
+            set test_aof_manifest_file "$test_aof_dirpath/appendonly.aof$::manifest_suffix"
+
+            wait_done_loading r
+            r set k1 v1
+
+            assert_aof_manifest_content $test_aof_manifest_file {
+                {file appendonly.aof.1.base.rdb seq 1 type b}
+                {file appendonly.aof.1.incr.aof seq 1 type i}
+            }
+
+            set loglines [count_log_lines 0]
+
+            # Make AOF directory non-readable (writable+searchable) so creating
+            # temp files and rename() succeed while fsyncFileDir() fails with EACCES.
+            file attributes $test_aof_dirpath -permissions 0300
+            assert_error {*ERR*} {r bgrewriteaof}
+            file attributes $test_aof_dirpath -permissions 0755
+
+            # Manifest must not have been overwritten with seq 2.
+            assert_aof_manifest_content $test_aof_manifest_file {
+                {file appendonly.aof.1.base.rdb seq 1 type b}
+                {file appendonly.aof.1.incr.aof seq 1 type i}
+            }
+
+            verify_log_message 0 "*Fail to fsync AOF directory*before manifest rename*" $loglines
+
+            # Once permissions are restored, BGREWRITEAOF succeeds and
+            # updates the manifest to seq 2.
+            r bgrewriteaof
+            waitForBgrewriteaof r
+
+            assert_aof_manifest_content $test_aof_manifest_file {
+                {file appendonly.aof.2.base.rdb seq 2 type b}
+                {file appendonly.aof.2.incr.aof seq 2 type i}
+            }
+        }
+    }
 }

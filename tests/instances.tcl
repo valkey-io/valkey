@@ -248,6 +248,9 @@ proc log_crashes {} {
         if {$res != ""} {
             puts $res
             incr ::failed
+        } elseif {[sanitizer_ptrace_warning_in_file $log]} {
+            # Non-fatal, see check_sanitizer_errors in support/server.tcl.
+            puts "LeakSanitizer ptrace probe warning in $log, non-fatal"
         }
     }
 }
@@ -262,18 +265,23 @@ proc is_alive pid {
 
 proc stop_instance pid {
     catch {exec kill $pid}
-    # Node might have been stopped in the test
-    catch {exec kill -SIGCONT $pid}
+    # Node might have been stopped in the test. Only resume it in that case;
+    # see kill_server in support/server.tcl for why.
+    if {[process_is_stopped $pid]} {
+        catch {exec kill -SIGCONT $pid}
+    }
     if {$::valgrind} {
         set max_wait 120000
     } else {
         set max_wait 10000
     }
+    set forced 0
     while {[is_alive $pid]} {
         incr wait 10
 
         if {$wait == $max_wait} {
             puts [colorstr red "Forcing process $pid to crash..."]
+            set forced 1
             catch {exec kill -SEGV $pid}
         } elseif {$wait >= $max_wait * 2} {
             puts [colorstr red "Forcing process $pid to exit..."]
@@ -282,6 +290,13 @@ proc stop_instance pid {
             puts "Waiting for process $pid to exit..."
         }
         after 10
+    }
+
+    # Same as kill_server in support/server.tcl: a forced exit means the
+    # exit-time checks (the sanitizer leak scan in particular) did not run.
+    if {$forced} {
+        puts [colorstr red "Process $pid did not exit within [expr {$max_wait / 1000}]s of SIGTERM and was forced to crash; exit-time checks did not run"]
+        incr ::failed
     }
 }
 

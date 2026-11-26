@@ -35,9 +35,18 @@ proc check_log_backtrace_for_debug {log_pattern} {
             # function names may not be resolved
             assert_equal [count_log_message 0 "bio_"] 5
             # Verify at least one stack frame was emitted (format: #<n> 0x...)
-            # This format is specific to libbacktrace; execinfo.h uses a different format
+            # This format is specific to libbacktrace; execinfo.h uses a different format.
+            # Skip when fork() failed inside the signal handler (e.g. seccomp container) or
+            # when libbacktrace could not resolve symbols — both cases fall back to execinfo
+            # format and log a distinguishing message.
             if {[catch {exec grep -a "initLibbacktraceFrameState" $::VALKEY_SERVER_BIN}] == 0} {
-                assert_range [count_log_message 0 "#. 0x"] 1 999
+                set libbt_unavailable [expr {
+                    [count_log_message 0 "libbacktrace: fork failed"] > 0 ||
+                    [count_log_message 0 "libbacktrace failed to resolve symbols"] > 0
+                }]
+                if {!$libbt_unavailable} {
+                    assert_range [count_log_message 0 "#. 0x"] 1 999
+                }
             }
         }
     }

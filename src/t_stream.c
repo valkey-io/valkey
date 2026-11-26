@@ -837,8 +837,17 @@ int64_t streamTrim(stream *s, streamAddTrimArgs *args) {
             if (!(flags & STREAM_ITEM_FLAG_DELETED)) {
                 ptrdiff_t delta = p ? p - lp : 0;
                 flags |= STREAM_ITEM_FLAG_DELETED;
+                size_t oldbytes = lpBytes(lp);
                 lp = lpReplaceInteger(lp, &pcopy, flags);
-                if (p) p = lp + delta;
+                /* A RESTORE'd stream listpack may store the entry flags in a
+                 * valid but non-minimal integer encoding. lpReplaceInteger()
+                 * always writes the minimal encoding, so the listpack can shrink
+                 * and the saved 'delta' would overshoot the next entry; account
+                 * for the size change. */
+                if (p) {
+                    ptrdiff_t difference = (ptrdiff_t)oldbytes - (ptrdiff_t)lpBytes(lp);
+                    p = lp + delta - difference;
+                }
                 deleted_from_lp++;
                 s->length--;
             }

@@ -29,7 +29,7 @@ void clusterUpdateSlotExportsOnOwnershipChange(void);
 void clusterUpdateSlotImportsOnOwnershipChange(void);
 void clusterHandleFlushDuringSlotMigration(void);
 size_t clusterGetTotalSlotExportBufferMemory(void);
-bool clusterSlotFailoverGranted(int slot);
+bool clusterSlotFailoverGranted(int slot, clusterNode *sender);
 void clusterFailAllSlotExportsWithMessage(char *message);
 void clusterHandleSlotMigrationErrorResponse(slotMigrationJob *job);
 void killSlotMigrationChild(void);

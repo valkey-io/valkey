@@ -1841,6 +1841,9 @@ int rdbSave(int req, char *filename, rdbSaveInfo *rsi, int rdbflags) {
 
     serverLog(LL_NOTICE, "DB saved on disk");
     server.dirty = 0;
+    /* A background save that already wrote its file may still be waiting to be
+     * handled. Its changes are part of this save, don't subtract them again. */
+    server.dirty_before_bgsave = 0;
     server.lastsave = time(NULL);
     server.lastbgsave_status = C_OK;
     stopSaving(1);

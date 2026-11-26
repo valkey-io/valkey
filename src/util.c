@@ -678,6 +678,12 @@ int string2ull(const char *s, size_t slen, unsigned long long *value) {
         *value = ll;
         return 1;
     }
+    /* strtoull() negates the result when the number has a leading '-'
+     * (after optional whitespace), so a negative value below LLONG_MIN
+     * would wrap to a large positive one. Reject it here. */
+    size_t i = 0;
+    while (i < slen && isspace((unsigned char)s[i])) i++;
+    if (i < slen && s[i] == '-') return 0;
     errno = 0;
     char *endptr = NULL;
     *value = strtoull(s, &endptr, 10);

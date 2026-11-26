@@ -82,6 +82,8 @@ void testOnlySaveLastWrittenBuf(client *c, bufWriteMetadata *metadata, int bufcn
 void testOnlyTrimReplyUnusedTailSpace(client *c);
 /* Non-static engine function exercised directly by the deferred-reply tests. */
 void setDeferredReply(client *c, void *node, const char *s, size_t length);
+/* Non-static engine function from server.c, called in the fork child. */
+void dismissClientMemory(client *c);
 }
 
 /* Test fixture for networking tests - minimal fixture with no setup/teardown.
@@ -993,4 +995,31 @@ TEST_F(NetworkingTest, TestWriteDoneStopsWritesToCloseAsapClient) {
 
     zfree(c);
     connFreeFake(fc);
+}
+
+/* The fork child must not dismiss the memory of a client that an IO thread was
+ * reading when the main thread forked. That thread does not exist in the child,
+ * so the client's query buffer and argv may be half updated. */
+TEST_F(NetworkingTest, TestDismissClientMemorySkipsClientWithPendingRead) {
+    client *c = createTestClient();
+    c->querybuf = sdsnewlen(NULL, PROTO_IOBUF_LEN);
+    size_t used = zmalloc_used_memory();
+
+    c->io_read_state = CLIENT_PENDING_IO; /* IO thread reading and parsing */
+    dismissClientMemory(c);
+    ASSERT_EQ(zmalloc_used_memory(), used); /* query buffer not released */
+
+    c->io_read_state = CLIENT_COMPLETED_IO; /* not handed back to the main thread yet */
+    dismissClientMemory(c);
+    ASSERT_EQ(zmalloc_used_memory(), used);
+
+    /* A pending write changes nothing that is dismissed, so it does not prevent
+     * it: the query buffer is released. */
+    c->io_read_state = CLIENT_IDLE;
+    c->io_write_state = CLIENT_PENDING_IO;
+    dismissClientMemory(c);
+    ASSERT_LT(zmalloc_used_memory(), used);
+
+    c->querybuf = NULL;
+    freeReplyOffloadClient(c);
 }

@@ -250,6 +250,27 @@ start_server {tags {"repl external:skip"}} {
             assert_equal 100 [$slave bitfield_ro bits get u8 0]
         }
 
+        test {BITFIELD: OVERFLOW FAIL that only creates or grows the key is replicated} {
+            $master del bits
+            assert_equal {{}} [$master bitfield bits overflow fail incrby u8 8 -1]
+            assert_equal 2 [$master strlen bits]
+            $master set bits2 a
+            assert_equal {{}} [$master bitfield bits2 overflow fail incrby u8 64 -1]
+            assert_equal 9 [$master strlen bits2]
+            wait_for_ofs_sync $master $slave
+            assert_equal 2 [$slave strlen bits]
+            assert_equal 9 [$slave strlen bits2]
+        }
+
+        test {BITFIELD: OVERFLOW FAIL that only creates the key invalidates WATCH} {
+            $master del bits
+            $master watch bits
+            assert_equal {{}} [$master bitfield bits overflow fail incrby u8 8 -1]
+            $master multi
+            $master ping
+            assert_equal {} [$master exec]
+        }
+
         test {BITFIELD_RO with only key as argument on read-only replica} {
             set res [$slave bitfield_ro bits]
             assert {$res eq {}}
@@ -259,5 +280,15 @@ start_server {tags {"repl external:skip"}} {
             catch {$slave bitfield_ro bits set u8 0 100 get u8 0} err
             assert_match {*ERR BITFIELD_RO only supports the GET subcommand*} $err
         }
+    }
+}
+
+start_server {tags {"bitops aof needs:debug external:skip"} overrides {appendonly yes}} {
+    test {BITFIELD: OVERFLOW FAIL that only creates the key survives an AOF reload} {
+        r del bits
+        assert_equal {{}} [r bitfield bits overflow fail incrby u8 8 -1]
+        assert_equal 2 [r strlen bits]
+        r debug loadaof
+        assert_equal 2 [r strlen bits]
     }
 }

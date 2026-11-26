@@ -1413,6 +1413,11 @@ void bitfieldGeneric(client *c, int flags) {
         }
     }
 
+    /* lookupStringForBitCommand() may have created or grown the string even
+     * if every write failed with OVERFLOW FAIL. That is still a change and
+     * must be propagated, otherwise replicas and the AOF diverge. */
+    if (dirty && !changes) changes = 1;
+
     if (changes) {
         signalModifiedKey(c, c->db, c->argv[1]);
         notifyKeyspaceEvent(NOTIFY_STRING, "setbit", c->argv[1], c->db->id);

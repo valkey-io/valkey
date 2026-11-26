@@ -50,13 +50,15 @@ start_server {tags {"slowlog"} overrides {slowlog-log-slower-than 1000000}} {
         r client setname foobar
         r debug sleep 0.2
         set e [lindex [r slowlog get] 0]
-        assert_equal [llength $e] 6
+        assert_equal [llength $e] 8
         if {!$::external} {
             assert_equal [lindex $e 0] 106
         }
         assert_equal [expr {[lindex $e 2] > 100000}] 1
         assert_equal [lindex $e 3] {debug sleep 0.2}
         assert_equal {foobar} [lindex $e 5]
+        assert_equal 3 [lindex $e 6]
+        assert_equal {default} [lindex $e 7]
     } {} {needs:debug}
 
     test {SLOWLOG - Certain commands are omitted that contain sensitive information} {
@@ -160,6 +162,8 @@ start_server {tags {"slowlog"} overrides {slowlog-log-slower-than 1000000}} {
         r slowlog reset
         r sadd set 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31 32 33
         set e [lindex [r slowlog get] end-1]
+        # The arguments are capped, but the count reports the whole command.
+        assert_equal 33 [lindex $e 6]
         lindex $e 3
     } {sadd set 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31 {... (2 more arguments)}}
 
@@ -169,6 +173,7 @@ start_server {tags {"slowlog"} overrides {slowlog-log-slower-than 1000000}} {
         set arg [string repeat A 129]
         r sadd set foo $arg
         set e [lindex [r slowlog get] end-1]
+        assert_equal 4 [lindex $e 6]
         lindex $e 3
     } {sadd set foo {AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA... (1 more bytes)}}
 
@@ -273,6 +278,32 @@ start_server {tags {"slowlog"} overrides {slowlog-log-slower-than 1000000}} {
         $rd close
     }
 
+    test {SLOWLOG - the ACL user name of the client is logged} {
+        r acl setuser slowlog-acl-user on >slowlog-acl-pass +@all ~*
+        set rd [valkey_client]
+        $rd auth slowlog-acl-user slowlog-acl-pass
+        $rd client setname slowlog-acl-client
+
+        r config set slowlog-log-slower-than 0
+        r slowlog reset
+        $rd get foo
+        # Disabling the commandlog is not logged itself, so the GET above stays
+        # the most recent entry for the rest of the test.
+        r config set slowlog-log-slower-than -1
+
+        set e [lindex [r slowlog get 1] 0]
+        assert_equal {get foo} [lindex $e 3]
+        assert_equal {slowlog-acl-client} [lindex $e 5]
+        assert_equal 2 [lindex $e 6]
+        assert_equal {slowlog-acl-user} [lindex $e 7]
+
+        # The name is copied into the entry, so deleting the user (which also kills
+        # the clients authenticated as it) must not affect entries already logged.
+        $rd close
+        r acl deluser slowlog-acl-user
+        assert_equal {slowlog-acl-user} [lindex [lindex [r slowlog get 1] 0] 7]
+    }
+
     foreach is_eval {0 1} {
         test "SLOWLOG - the commands in script are recorded normally - is_eval: $is_eval" {
             if {$is_eval == 0} {
@@ -292,7 +323,7 @@ start_server {tags {"slowlog"} overrides {slowlog-log-slower-than 1000000}} {
             assert_equal 2 [llength $slowlog_resp]
 
             # The first one is the script command, and the second one is the ping command executed in the script
-            # Each slowlog contains: id, timestamp, execution time, command array, ip:port, client name
+            # Each slowlog contains: id, timestamp, execution time, command array, ip:port, client name, argument count, user name
             set script_cmd [lindex $slowlog_resp 0]
             set ping_cmd [lindex $slowlog_resp 1]
 
@@ -308,6 +339,40 @@ start_server {tags {"slowlog"} overrides {slowlog-log-slower-than 1000000}} {
             assert_equal [lindex $script_cmd 4] [lindex $ping_cmd 4]
             assert_equal {test-client} [lindex $script_cmd 5]
             assert_equal {test-client} [lindex $ping_cmd 5]
+
+            # The commands inside the script run on a temporary client that carries
+            # the user of the client that called the script.
+            assert_equal {default} [lindex $script_cmd 7]
+            assert_equal {default} [lindex $ping_cmd 7]
+        }
+    }
+}
+
+start_server {tags {"slowlog needs:repl external:skip"}} {
+    start_server {} {
+        set primary [srv -1 client]
+        set replica [srv 0 client]
+
+        test {SLOWLOG - commands replicated from the primary are logged as (superuser)} {
+            $replica replicaof [srv -1 host] [srv -1 port]
+            wait_for_sync $replica
+
+            $replica config set slowlog-log-slower-than 0
+            $replica slowlog reset
+            $primary set slowlog-repl-key v
+            wait_for_ofs_sync $primary $replica
+            $replica config set slowlog-log-slower-than -1
+
+            # The primary link has no user associated with it, since it is allowed
+            # to run anything.
+            set found 0
+            foreach e [$replica slowlog get -1] {
+                if {[lindex $e 3] eq {set slowlog-repl-key v}} {
+                    assert_equal {(superuser)} [lindex $e 7]
+                    set found 1
+                }
+            }
+            assert_equal 1 $found
         }
     }
 }

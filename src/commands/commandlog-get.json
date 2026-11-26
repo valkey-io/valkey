@@ -7,6 +7,12 @@
         "arity": 4,
         "container": "COMMANDLOG",
         "function": "commandlogCommand",
+        "history": [
+            [
+                "9.2.0",
+                "Added the number of arguments of the command and the user name to the reply."
+            ]
+        ],
         "command_flags": [
             "ADMIN",
             "LOADING",
@@ -22,8 +28,8 @@
             "uniqueItems": true,
             "items": {
                 "type": "array",
-                "minItems": 6,
-                "maxItems": 6,
+                "minItems": 8,
+                "maxItems": 8,
                 "items": [
                     {
                         "type": "integer",
@@ -41,7 +47,7 @@
                     },
                     {
                         "type": "array",
-                        "description": "The arguments of the command.",
+                        "description": "Up to 32 arguments of the command. A long argument keeps its first 128 bytes followed by the number of bytes omitted, and a trimmed command's last element states how many arguments were omitted.",
                         "items": {
                             "type": "string"
                         }
@@ -53,6 +59,15 @@
                     {
                         "type": "string",
                         "description": "Client name if set via the CLIENT SETNAME command."
+                    },
+                    {
+                        "type": "integer",
+                        "description": "The number of arguments the command was called with, which is larger than the arguments array when the command was trimmed.",
+                        "minimum": 1
+                    },
+                    {
+                        "type": "string",
+                        "description": "The name of the ACL user the client was authenticated as."
                     }
                 ]
             }

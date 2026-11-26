@@ -2694,6 +2694,57 @@ start_server {tags {"zset"}} {
         stressers btree
     }
 
+    test {BZPOPMIN preserves waiter order across a ready list} {
+        r del k
+        set clients {}
+        set code [catch {
+            foreach name {first list second} {
+                set $name [valkey_deferring_client]
+                lappend clients [set $name]
+                [set $name] client id
+                set ${name}_id [[set $name] read]
+            }
+
+            $first bzpopmin k 0
+            wait_for_blocked_clients_count 1
+            $list blpop k 0
+            wait_for_blocked_clients_count 2
+            $second bzpopmin k 0
+            wait_for_blocked_clients_count 3
+
+            # A list push serves only the middle waiter. The two sorted-set
+            # waiters must retain their original relative order afterwards.
+            assert_equal 1 [r lpush k x]
+            wait_for_blocked_clients_count 2
+            assert_match "*flags=N*" [r client list id $list_id]
+            assert_equal {k x} [$list read]
+            assert_match "*flags=b*" [r client list id $first_id]
+            assert_match "*flags=b*" [r client list id $second_id]
+            assert_equal 0 [r exists k]
+
+            assert_equal 1 [r zadd k 1 y]
+            wait_for_blocked_clients_count 1
+            wait_for_condition 100 10 {
+                [string match "*flags=N*" [r client list id $first_id]]
+            } else {
+                fail "Sorted-set waiters were reordered by a ready list"
+            }
+            assert_equal {k y 1} [$first read]
+            assert_match "*flags=b*" [r client list id $second_id]
+            assert_equal 0 [r exists k]
+
+            assert_equal 1 [r zadd k 2 z]
+            wait_for_blocked_clients_count 0
+            assert_equal {k z 2} [$second read]
+            assert_equal 0 [r exists k]
+        } result options]
+        foreach client $clients {
+            catch {$client close}
+        }
+        wait_for_blocked_clients_count 0
+        if {$code} {return -options $options $result}
+    }
+
     test "BZPOP/BZMPOP against wrong type" {
         r set foo{t} bar
         assert_error "*WRONGTYPE*" {r bzpopmin foo{t} 1}

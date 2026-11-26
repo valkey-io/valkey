@@ -918,15 +918,62 @@ start_server {tags {pathhash}} {
         r phset tree {} fields 1 root root-value
         r phset tree $binary_path fields 1 field $binary_value
         r pexpire tree 60000
+        set expire_at [r pexpiretime tree]
         r debug reload
         assert_equal pathhash [r type tree]
         assert_equal [list root-value] [r phget tree {} root]
         assert_equal [list $binary_value] [r phget tree $binary_path field]
         assert_equal 2 [r phpathcount tree]
+        assert_equal $expire_at [r pexpiretime tree]
         assert {[r pttl tree] > 0}
     } {} {needs:debug}
 
+    test {Path Hash reload and RESTORE preserve mixed payloads around Listpack thresholds} {
+        test_config_set r hash-max-listpack-value 64
+        foreach limit {0 4 512} {
+            test_config_set r hash-max-listpack-entries $limit
+            r del threshold-tree
+            r del threshold-restored
+            set expected [dict create]
+            foreach count [list [expr {max(1, $limit - 1)}] [expr {max(1, $limit)}] [expr {$limit + 1}]] {
+                set fields {}
+                for {set i 0} {$i < $count} {incr i} {
+                    lappend fields "field:$i" "value:$i"
+                }
+                r phset threshold-tree "count:$count" fields $count {*}$fields
+                dict set expected "count:$count" $fields
+            }
+            set binary_path [binary format H* 000102ff]
+            set binary_field [binary format H* 6600ff]
+            set binary_value [binary format H* 7600ff]
+            set long_field [string repeat f 65]
+            set long_value [string repeat v 1024]
+            foreach {path fields} [list {} {{} {} root 123} \
+                    $binary_path [list $binary_field $binary_value] \
+                    long-field [list $long_field short] long-value [list short $long_value]] {
+                r phset threshold-tree $path fields [expr {[llength $fields] / 2}] {*}$fields
+                dict set expected $path $fields
+            }
+            r pexpire threshold-tree 60000
+            set expire_at [r pexpiretime threshold-tree]
+            r restore threshold-restored $expire_at [r dump threshold-tree] absttl
+            r debug reload
+            foreach key {threshold-tree threshold-restored} {
+                assert_equal $expire_at [r pexpiretime $key]
+                assert_equal [dict size $expected] [r phpathcount $key]
+                dict for {path fields} $expected {
+                    set actual [r phgetall $key $path]
+                    assert_equal [llength $fields] [llength $actual]
+                    foreach {field value} $fields {
+                        assert_equal $value [dict get $actual $field]
+                    }
+                }
+            }
+        }
+    } {} {needs:debug}
+
     test {RESTORE rejects malformed path hash payloads without destabilizing the server} {
+        test_defer {r debug set-skip-checksum-validation 0}
         r debug set-skip-checksum-validation 1
 
         r phset legacy-source p fields 1 f v
@@ -960,8 +1007,16 @@ start_server {tags {pathhash}} {
         catch {r restore corrupt 0 $duplicate_field} err
         assert_match {*Bad data format*} $err
 
-        assert_equal PONG [r ping]
-        assert_equal OK [r debug set-skip-checksum-validation 0]
+        # Exercise early HashTable selection and cleanup of partially loaded
+        # payloads as well as the default Listpack cases above.
+        test_config_set r hash-max-listpack-entries 0
+        set truncated [string replace [r dump source] 11 end-10 {}]
+        set oversized_count [string replace [r dump source] 4 4 "\x81\x00\x00\x00\x01\x00\x00\x00\x00"]
+        foreach payload [list $empty_payload $duplicate_path $duplicate_field $truncated $oversized_count] {
+            assert_error {*Bad data format*} {r restore corrupt 0 $payload}
+            assert_equal 0 [r exists corrupt]
+            assert_equal PONG [r ping]
+        }
     } {} {needs:debug}
 
     test {Large per-path payload promotes and survives RDB round trip} {

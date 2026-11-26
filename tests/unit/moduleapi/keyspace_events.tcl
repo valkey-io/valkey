@@ -130,6 +130,27 @@ tags "modules" {
             assert_match {*db=0*} [r client info]
         } {} {singledb:skip}
 
+        test {SelectDb in keyspace notification does not change the transaction DB} {
+            r flushall
+            r acl setuser testuser on nopass +@all ~* resetdbs db=0
+            set rd [valkey_client]
+            $rd select 0
+            $rd auth testuser pass
+
+            # The first callback selects db 3 on the first SET, and a later
+            # subscriber of the same event must still see db 0
+            $rd multi
+            $rd set selectdb_a 1
+            $rd set b 2
+            $rd keyspace.get_selected_db
+            $rd keyspace.get_notified_db
+            assert_equal {OK OK 0 0} [$rd exec]
+            assert_match {*db=0*} [$rd client info]
+
+            $rd close
+            r acl deluser testuser
+        } {1} {singledb:skip}
+
         test "Unload the module - testkeyspace" {
             assert_equal {OK} [r module unload testkeyspace]
         }

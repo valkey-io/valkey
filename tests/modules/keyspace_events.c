@@ -132,6 +132,35 @@ static int KeySpace_NotificationModuleKeyMiss(ValkeyModuleCtx *ctx, int type, co
     return VALKEYMODULE_OK;
 }
 
+/* Switches to db 3 on keys starting with "selectdb_" */
+static int KeySpace_NotificationSelectDb(ValkeyModuleCtx *ctx, int type, const char *event, ValkeyModuleString *key) {
+    VALKEYMODULE_NOT_USED(type);
+    VALKEYMODULE_NOT_USED(event);
+    if (strncmp(ValkeyModule_StringPtrLen(key, NULL), "selectdb_", 9) == 0) ValkeyModule_SelectDb(ctx, 3);
+    return VALKEYMODULE_OK;
+}
+
+/* Records the DB seen by a subscriber running after KeySpace_NotificationSelectDb */
+static int notified_db = -1;
+static int KeySpace_NotificationRecordDb(ValkeyModuleCtx *ctx, int type, const char *event, ValkeyModuleString *key) {
+    VALKEYMODULE_NOT_USED(type);
+    VALKEYMODULE_NOT_USED(event);
+    if (strncmp(ValkeyModule_StringPtrLen(key, NULL), "selectdb_", 9) == 0) notified_db = ValkeyModule_GetSelectedDb(ctx);
+    return VALKEYMODULE_OK;
+}
+
+static int cmdGetNotifiedDb(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    VALKEYMODULE_NOT_USED(argv);
+    VALKEYMODULE_NOT_USED(argc);
+    return ValkeyModule_ReplyWithLongLong(ctx, notified_db);
+}
+
+static int cmdGetSelectedDb(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    VALKEYMODULE_NOT_USED(argv);
+    VALKEYMODULE_NOT_USED(argc);
+    return ValkeyModule_ReplyWithLongLong(ctx, ValkeyModule_GetSelectedDb(ctx));
+}
+
 static int KeySpace_NotificationModuleString(ValkeyModuleCtx *ctx, int type, const char *event, ValkeyModuleString *key) {
     VALKEYMODULE_NOT_USED(type);
     VALKEYMODULE_NOT_USED(event);
@@ -358,6 +387,22 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
     }
 
     if(ValkeyModule_SubscribeToKeyspaceEvents(ctx, VALKEYMODULE_NOTIFY_STRING, KeySpace_NotificationModuleStringPostNotificationJob) != VALKEYMODULE_OK){
+        return VALKEYMODULE_ERR;
+    }
+
+    if(ValkeyModule_SubscribeToKeyspaceEvents(ctx, VALKEYMODULE_NOTIFY_STRING, KeySpace_NotificationSelectDb) != VALKEYMODULE_OK){
+        return VALKEYMODULE_ERR;
+    }
+
+    if(ValkeyModule_SubscribeToKeyspaceEvents(ctx, VALKEYMODULE_NOTIFY_STRING, KeySpace_NotificationRecordDb) != VALKEYMODULE_OK){
+        return VALKEYMODULE_ERR;
+    }
+
+    if (ValkeyModule_CreateCommand(ctx,"keyspace.get_selected_db", cmdGetSelectedDb,"",0,0,0) == VALKEYMODULE_ERR){
+        return VALKEYMODULE_ERR;
+    }
+
+    if (ValkeyModule_CreateCommand(ctx,"keyspace.get_notified_db", cmdGetNotifiedDb,"",0,0,0) == VALKEYMODULE_ERR){
         return VALKEYMODULE_ERR;
     }
 

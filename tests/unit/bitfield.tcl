@@ -262,6 +262,15 @@ start_server {tags {"repl external:skip"}} {
             assert_equal 9 [$slave strlen bits2]
         }
 
+        test {BITFIELD: OVERFLOW FAIL that only creates the key invalidates WATCH} {
+            $master del bits
+            $master watch bits
+            assert_equal {{}} [$master bitfield bits overflow fail incrby u8 8 -1]
+            $master multi
+            $master ping
+            assert_equal {} [$master exec]
+        }
+
         test {BITFIELD_RO with only key as argument on read-only replica} {
             set res [$slave bitfield_ro bits]
             assert {$res eq {}}
@@ -271,5 +280,15 @@ start_server {tags {"repl external:skip"}} {
             catch {$slave bitfield_ro bits set u8 0 100 get u8 0} err
             assert_match {*ERR BITFIELD_RO only supports the GET subcommand*} $err
         }
+    }
+}
+
+start_server {tags {"bitops aof needs:debug external:skip"} overrides {appendonly yes}} {
+    test {BITFIELD: OVERFLOW FAIL that only creates the key survives an AOF reload} {
+        r del bits
+        assert_equal {{}} [r bitfield bits overflow fail incrby u8 8 -1]
+        assert_equal 2 [r strlen bits]
+        r debug loadaof
+        assert_equal 2 [r strlen bits]
     }
 }

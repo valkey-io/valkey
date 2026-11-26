@@ -373,6 +373,45 @@ start_server {tags {"hll"}} {
         assert {$err < (double($card)/100)*5}
     }
 
+    test {PFCOUNT of a dense HLL matches its count merged with an empty HLL} {
+        # A single dense key is counted from the packed 6-bit registers, while
+        # a multi-key count merges the registers into one byte per register
+        # first. Both register histograms must give the same result for any
+        # register values, including ones that PFADD can't produce.
+        r del hll{t} empty{t}
+        r pfadd empty{t}
+        for {set iter 0} {$iter < 12} {incr iter} {
+            # 0: uniform 0-63, 1: mostly zero, 2: a few adjacent values.
+            set kind [expr {$iter % 3}]
+            set base [randomInt 60]
+            set bytes {}
+            for {set i 0} {$i < 16384} {incr i 4} {
+                set v 0
+                for {set j 0} {$j < 4} {incr j} {
+                    switch $kind {
+                        0 {set reg [randomInt 64]}
+                        1 {set reg [expr {rand() < 0.05 ? [randomInt 64] : 0}]}
+                        2 {set reg [expr {$base + [randomInt 4]}]}
+                    }
+                    # Keep the first register at zero. Without any zero
+                    # register, high values make the estimate overflow.
+                    if {$i == 0 && $j == 0} {set reg 0}
+                    set v [expr {$v | ($reg << (6 * $j))}]
+                }
+                lappend bytes [expr {$v & 255}] [expr {($v >> 8) & 255}] [expr {$v >> 16}]
+            }
+            # Magic, dense encoding, three unused bytes, and a cached
+            # cardinality marked invalid so that PFCOUNT recomputes it.
+            r set hll{t} [binary format a4c4c8c* HYLL {0 0 0 0} {0 0 0 0 0 0 0 128} $bytes]
+
+            set dense [r pfcount hll{t}]
+            r pfdebug simd off
+            assert_equal $dense [r pfcount hll{t} empty{t}] "kind $kind, simd off"
+            r pfdebug simd on
+            assert_equal $dense [r pfcount hll{t} empty{t}] "kind $kind, simd on"
+        }
+    } {} {needs:pfdebug}
+
     test {PFDEBUG GETREG returns the HyperLogLog raw registers} {
         r del hll
         r pfadd hll 1 2 3

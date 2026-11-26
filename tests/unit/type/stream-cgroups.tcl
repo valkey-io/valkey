@@ -1977,6 +1977,49 @@ start_server {
             assert_equal 1 [$replica XLEN stream]
             assert_equal 1 [llength [$replica XPENDING stream grp - + 10]]
         }
+
+        test {XREADGROUP history read propagates delivery time and count} {
+            $master DEL stream
+            $master XADD stream 1-0 f v
+            $master XGROUP CREATE stream grp 0
+            $master XREADGROUP GROUP grp alice STREAMS stream >
+            after 10
+            assert_equal {{stream {{1-0 {f v}}}}} [$master XREADGROUP GROUP grp alice STREAMS stream 0]
+            wait_for_ofs_sync $master $replica
+
+            assert_equal 2 [lindex [$master XPENDING stream grp - + 10] 0 3]
+            assert_equal 2 [lindex [$replica XPENDING stream grp - + 10] 0 3]
+            set master_group [lindex [dict get [$master XINFO STREAM stream FULL] groups] 0]
+            set replica_group [lindex [dict get [$replica XINFO STREAM stream FULL] groups] 0]
+            assert_equal [dict get $master_group pending] [dict get $replica_group pending]
+        }
+
+        test {XREADGROUP history read propagates only the entries it re-delivers} {
+            $master DEL stream
+            $master XADD stream 1-0 f v
+            $master XADD stream 2-0 f v
+            $master XADD stream 3-0 f v
+            $master XGROUP CREATE stream grp 0
+            $master XREADGROUP GROUP grp alice STREAMS stream >
+            $master XGROUP CREATECONSUMER stream grp bob
+            $master XDEL stream 2-0
+            wait_for_ofs_sync $master $replica
+
+            set xclaim_before [get_replica_calls $replica xclaim]
+
+            # Deleted entries come back as nil and are left untouched
+            assert_equal {{stream {{1-0 {f v}} {2-0 {}}}}} \
+                [$master XREADGROUP GROUP grp alice COUNT 2 STREAMS stream 0]
+            # A consumer with an empty PEL re-delivers nothing
+            assert_equal {{stream {}}} [$master XREADGROUP GROUP grp bob STREAMS stream 0]
+            wait_for_ofs_sync $master $replica
+
+            assert_equal 1 [expr {[get_replica_calls $replica xclaim] - $xclaim_before}]
+            assert_equal {2 1 1} [lmap e [$replica XPENDING stream grp - + 10] {lindex $e 3}]
+            set master_group [lindex [dict get [$master XINFO STREAM stream FULL] groups] 0]
+            set replica_group [lindex [dict get [$replica XINFO STREAM stream FULL] groups] 0]
+            assert_equal [dict get $master_group pending] [dict get $replica_group pending]
+        }
     }
 
     start_server {tags {"stream needs:debug"} overrides {appendonly yes aof-use-rdb-preamble no}} {
@@ -1989,6 +2032,19 @@ start_server {
             r debug loadaof
             assert {[dict get [r xinfo stream mystream] length] == 0}
             assert_equal [r xinfo groups mystream] $grpinfo
+        }
+
+        test {XREADGROUP history read delivery time and count survive AOF reload} {
+            r DEL mystream
+            r XADD mystream 1-0 f v
+            r XGROUP CREATE mystream grp 0
+            r XREADGROUP GROUP grp alice STREAMS mystream >
+            after 10
+            r XREADGROUP GROUP grp alice STREAMS mystream 0
+            set pending [dict get [lindex [dict get [r XINFO STREAM mystream FULL] groups] 0] pending]
+            r debug loadaof
+            assert_equal 2 [lindex [r XPENDING mystream grp - + 10] 0 3]
+            assert_equal $pending [dict get [lindex [dict get [r XINFO STREAM mystream FULL] groups] 0] pending]
         }
     }
 }

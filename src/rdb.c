@@ -3719,13 +3719,13 @@ done:
 }
 
 /* Adapts rioRead to the read_fn signature used by parseRespCommandFromReader. */
-static size_t rdbRioReader(void *ctx, void *buf, size_t len) {
+size_t rdbRioReader(void *ctx, void *buf, size_t len) {
     return rioRead((rio *)ctx, buf, len);
 }
 
 /* Adapts rioRead to the readline_fn signature used by parseRespCommandFromReader:
  * like fgets, reads up to and including '\n', one byte at a time. */
-static char *rdbRioReadLine(void *ctx, char *buf, int size) {
+char *rdbRioReadLine(void *ctx, char *buf, int size) {
     int pos = 0;
     while (pos < size - 1) {
         if (rioRead((rio *)ctx, buf + pos, 1) == 0) break;

@@ -84,6 +84,27 @@ tags {"check-rdb external:skip logreqres:skip"} {
         } result
         assert_match {*db.2.type.string.keys.total:0*} $result
     }
+
+    test {Check RDB with an inline replication command} {
+        # A replica that loads a forkless sync from disk can save RDB_OPCODE_UPDATE (242)
+        # entries: SET k v as a RESP command, then EOF and a zero checksum.
+        set rdb [tmpfile inline-update.rdb]
+        write_binary_file $rdb [binary format a9ca*H* VALKEY081 242 "*3\r\n\$3\r\nSET\r\n\$1\r\nk\r\n\$1\r\nv\r\n" ff0000000000000000]
+        catch {
+            exec $::VALKEY_CHECK_RDB_BIN $rdb
+        } result
+        assert_match {*RDB looks OK!*} $result
+    }
+
+    test {Check RDB rejects an inline replication command before version 81} {
+        set rdb [tmpfile inline-update-old.rdb]
+        write_binary_file $rdb [binary format a9ca*H* REDIS0011 242 "*3\r\n\$3\r\nSET\r\n\$1\r\nk\r\n\$1\r\nv\r\n" ff0000000000000000]
+        catch {
+            exec $::VALKEY_CHECK_RDB_BIN $rdb
+        } result
+        assert_match {*--- RDB ERROR DETECTED ---*} $result
+        assert_no_match {*RDB looks OK*} $result
+    }
 }
 
 tags {"check-rdb network external:skip logreqres:skip"} {

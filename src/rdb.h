@@ -305,6 +305,8 @@ respParseResult parseRespCommandFromReader(size_t (*read_fn)(void *ctx, void *bu
                                            void *ctx,
                                            int *argc_out,
                                            robj ***argv_out);
+size_t rdbRioReader(void *ctx, void *buf, size_t len);
+char *rdbRioReadLine(void *ctx, char *buf, int size);
 struct client *createAOFClient(void);
 loadCommandResult loadCommandFromArgv(client *fakeClient, robj **argv, int argc, loadCommandSource source, sds *err);
 

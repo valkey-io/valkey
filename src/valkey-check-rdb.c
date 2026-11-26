@@ -843,6 +843,20 @@ int redis_check_rdb(char *rdbfilename, FILE *fp) {
             }
             rdbstate.functions_num++;
             continue;
+        } else if (type == RDB_OPCODE_UPDATE && rdbver >= 81) {
+            /* Inline replication command saved during a forkless sync. Parse it
+             * the same way rdbLoad does and skip it. */
+            robj **argv = NULL;
+            int argc = 0;
+            respParseResult pr = parseRespCommandFromReader(rdbRioReader, rdbRioReadLine, rdb, &argc, &argv);
+            if (pr == RESP_PARSE_EOF) goto eoferr;
+            if (pr != RESP_PARSE_OK) {
+                rdbCheckError("Invalid inline replication command in RDB");
+                goto err;
+            }
+            for (int j = 0; j < argc; j++) decrRefCount(argv[j]);
+            zfree(argv);
+            continue; /* Read type again. */
         } else if (rdbIsForeignVersion(rdbver) &&
                    type >= RDB_FOREIGN_TYPE_MIN &&
                    type <= RDB_FOREIGN_TYPE_MAX) {

@@ -31,6 +31,7 @@
 #define __BIO_H
 
 typedef void lazy_free_fn(void *args[]);
+typedef void (*bioFunctionPtr)(void *context);
 
 /* Exported API */
 void bioInit(void);
@@ -43,6 +44,10 @@ void bioCreateFsyncJob(int fd, long long offset, int need_reclaim_cache);
 void bioCreateLazyFreeJob(lazy_free_fn free_fn, int arg_count, ...);
 void bioCreateSaveRDBToDiskJob(connection *conn, int is_dual_channel, compressionAlgo target_algo);
 void bioCreateTlsReloadJob(void);
+/* Run func(context) on the shared bio pool. Tasks run in no fixed order and
+ * may run in parallel. bio never frees context: the callback must free it if
+ * needed. */
+void bioCreateTask(bioFunctionPtr func, void *context);
 void bioCreateClusterConfigSaveJob(sds content, bool do_fsync);
 int inBioThread(void);
 
@@ -55,6 +60,7 @@ enum {
     BIO_RDB_SAVE,       /* Deferred save RDB to disk on replica */
     BIO_TLS_RELOAD,     /* Deferred TLS reload. */
     BIO_CLUSTER_SAVE,   /* Deferred cluster config file save and fsync. */
+    BIO_USER_WORK,      /* Deferred custom user work. */
     BIO_NUM_OPS
 };
 

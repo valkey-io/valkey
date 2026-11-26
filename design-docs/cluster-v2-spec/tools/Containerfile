@@ -1,0 +1,28 @@
+# Toolchain image for TLC, SANY and the PlusCal translator.
+# Holds no spec files: the parent folder is mounted at /work at run time,
+# and the tools run in /work/spec.
+#
+# Build:  make image      (or, from the parent folder:
+#                          podman build -t tla-tools -f tools/Containerfile tools)
+# The build needs the network (apt, the jar download); runs use --network=none.
+FROM docker.io/library/ubuntu:24.04
+
+# Pinned TLA+ tools release and its checksum, from
+# https://github.com/tlaplus/tlaplus/releases/tag/v1.7.4
+ARG TLA_VERSION=v1.7.4
+ARG TLA_SHA1=bee4a54f3ee3d4afc347c3240ec2d9e93b075104
+
+# openjdk-21-jre-headless  TLC only needs a Java runtime (11 or later)
+# curl, ca-certificates    to fetch the jar; curl is removed afterwards
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      openjdk-21-jre-headless ca-certificates curl \
+ && mkdir -p /opt/tla \
+ && curl -fsSL -o /opt/tla/tla2tools.jar \
+      "https://github.com/tlaplus/tlaplus/releases/download/${TLA_VERSION}/tla2tools.jar" \
+ && echo "${TLA_SHA1}  /opt/tla/tla2tools.jar" | sha1sum -c - \
+ && apt-get purge -y curl \
+ && apt-get autoremove -y \
+ && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /work

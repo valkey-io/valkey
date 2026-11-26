@@ -255,7 +255,7 @@ start_server {overrides {save {900 1}} tags {"modules"}} {
         }
     }
 
-    test {test detached thread safe cnotext} {
+    test {test detached thread safe context} {
         r test.log_tsctx "info" "Test message"
         verify_log_message 0 "*<misc> Test message*" 0
     }

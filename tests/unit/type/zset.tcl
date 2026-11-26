@@ -324,7 +324,7 @@ start_server {tags {"zset"}} {
             set err
         } {ERR*}
 
-        test "ZADD INCR LT/GT replies with nill if score not updated - $encoding" {
+        test "ZADD INCR LT/GT replies with nil if score not updated - $encoding" {
             r del ztmp
             r zadd ztmp 28 x
             assert {[r zadd ztmp lt incr 1 x] eq {}}

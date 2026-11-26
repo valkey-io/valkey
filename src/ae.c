@@ -92,6 +92,7 @@ aeEventLoop *aeCreateEventLoop(int setsize) {
     eventLoop->setsize = setsize;
     eventLoop->timeEventHead = NULL;
     eventLoop->earliestTimer = NULL;
+    eventLoop->lastTime = getMonotonicUs();
     eventLoop->timeEventNextId = 1;
     eventLoop->stop = 0;
     eventLoop->maxfd = -1;
@@ -370,6 +371,10 @@ static int64_t usUntilEarliestTimer(aeEventLoop *eventLoop) {
     if (eventLoop->earliestTimer &&
         eventLoop->earliestTimer->id != AE_DELETED_EVENT_ID) {
         monotime now = getMonotonicUs();
+        /* If the clock went backwards since processTimeEvents() last ran,
+         * don't sleep until the old deadlines: return right away and let
+         * processTimeEvents() handle the jump. */
+        if (now < eventLoop->lastTime) return 0;
         return (now >= eventLoop->earliestTimer->when) ? 0
                                                        : eventLoop->earliestTimer->when - now;
     }
@@ -390,6 +395,7 @@ static int64_t usUntilEarliestTimer(aeEventLoop *eventLoop) {
     if (earliest == NULL) return -1;
 
     monotime now = getMonotonicUs();
+    if (now < eventLoop->lastTime) return 0; /* Clock went backwards, see above. */
     return (now >= earliest->when) ? 0 : earliest->when - now;
 }
 
@@ -402,6 +408,16 @@ static int processTimeEvents(aeEventLoop *eventLoop) {
     te = eventLoop->timeEventHead;
     maxId = eventLoop->timeEventNextId - 1;
     monotime now = getMonotonicUs();
+
+    /* The processor clock can jump backwards, e.g. after a checkpoint/restore
+     * onto a host with a shorter uptime. Timers would then be scheduled far in
+     * the future, so process them all now. */
+    if (now < eventLoop->lastTime) {
+        for (aeTimeEvent *t = eventLoop->timeEventHead; t; t = t->next) t->when = 0;
+        eventLoop->earliestTimer = NULL;
+    }
+    eventLoop->lastTime = now;
+
     while (te) {
         long long id;
 

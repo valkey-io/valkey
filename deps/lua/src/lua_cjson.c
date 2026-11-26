@@ -455,17 +455,56 @@ static void json_encode_exception(lua_State *l, json_config_t *cfg, strbuf_t *js
                   lua_typename(l, lua_type(l, lindex)), reason);
 }
 
+/* Hook set by the host (Valkey) so a long cjson.encode of a script-built
+ * value can be interrupted. It returns non-zero when the running script was
+ * killed with SCRIPT KILL / FUNCTION KILL, after pushing the error value to
+ * raise onto the Lua stack, and it also lets the host process events so
+ * other clients get BUSY replies. It stays NULL in the standalone Lua build,
+ * where encoding keeps its old behavior. Encoding runs in a single C call, so
+ * the Lua instruction-count hook never fires while it runs; this check is
+ * what gives the host a chance to act. */
+int (*lua_cjson_encode_interrupt)(lua_State *l) = NULL;
+
+/* Call the interrupt hook once every CJSON_ENCODE_INTERRUPT_STEP units of
+ * work, where one unit is roughly the cost of encoding one value: one encoded
+ * value or one scanned table entry counts 1 (scanned entries are added in
+ * batches of CJSON_ENCODE_INTERRUPT_SCAN_BATCH), and one full chunk of
+ * CJSON_ENCODE_INTERRUPT_STRING_CHUNK escaped string bytes counts
+ * CJSON_ENCODE_INTERRUPT_STRING_CHUNK_UNITS, so every long loop of the
+ * encoder is covered and polls stay a few milliseconds apart. A normal encode
+ * stays well under one step, so it sees no change. If the hook reports a
+ * kill, free the work buffer when it is private and raise the error the hook
+ * pushed, which aborts the encode. */
+#define CJSON_ENCODE_INTERRUPT_STEP 100000
+#define CJSON_ENCODE_INTERRUPT_SCAN_BATCH 64
+#define CJSON_ENCODE_INTERRUPT_STRING_CHUNK 128
+#define CJSON_ENCODE_INTERRUPT_STRING_CHUNK_UNITS 4
+static unsigned long cjson_encode_work;
+static void json_check_encode_interrupt(lua_State *l, json_config_t *cfg, strbuf_t *json,
+                                        unsigned long units)
+{
+    if (lua_cjson_encode_interrupt == NULL) return;
+    cjson_encode_work += units;
+    if (cjson_encode_work < CJSON_ENCODE_INTERRUPT_STEP) return;
+    cjson_encode_work = 0;
+    if (lua_cjson_encode_interrupt(l)) {
+        if (!cfg->encode_keep_buffer)
+            strbuf_free(json);
+        lua_error(l);
+    }
+}
+
 /* json_append_string args:
  * - lua_State
  * - JSON strbuf
  * - String (Lua stack index)
  *
  * Returns nothing. Doesn't remove string from Lua stack */
-static void json_append_string(lua_State *l, strbuf_t *json, int lindex)
+static void json_append_string(lua_State *l, json_config_t *cfg, strbuf_t *json, int lindex)
 {
     const char *escstr;
     const char *str;
-    size_t i, len;
+    size_t i, chunk_end, len;
 
     str = lua_tolstring(l, lindex, &len);
 
@@ -474,7 +513,24 @@ static void json_append_string(lua_State *l, strbuf_t *json, int lindex)
     strbuf_ensure_empty_length(json, len + 2);
 
     strbuf_append_char_unsafe(json, '\"');
-    for (i = 0; i < len; i++) {
+    /* Escape a long string in chunks and poll the interrupt hook after each
+     * full chunk, so a single very long string cannot hold the host past the
+     * script time limit. A short string never reaches the hook; it is covered
+     * by the unit its value counts. */
+    i = 0;
+    while (len - i > CJSON_ENCODE_INTERRUPT_STRING_CHUNK) {
+        chunk_end = i + CJSON_ENCODE_INTERRUPT_STRING_CHUNK;
+        for (; i < chunk_end; i++) {
+            escstr = char2escape[(unsigned char)str[i]];
+            if (escstr)
+                strbuf_append_string(json, escstr);
+            else
+                strbuf_append_char(json, str[i]);
+        }
+        json_check_encode_interrupt(l, cfg, json,
+                                    CJSON_ENCODE_INTERRUPT_STRING_CHUNK_UNITS);
+    }
+    for (; i < len; i++) {
         escstr = char2escape[(unsigned char)str[i]];
         if (escstr)
             strbuf_append_string(json, escstr);
@@ -493,14 +549,19 @@ static int lua_array_length(lua_State *l, json_config_t *cfg, strbuf_t *json)
     double k;
     int max;
     int items;
+    unsigned long scanned;
 
     max = 0;
     items = 0;
+    scanned = 0;
 
     lua_pushnil(l);
     /* table, startkey */
     while (lua_next(l, -2) != 0) {
         /* table, key, value */
+        if ((++scanned & (CJSON_ENCODE_INTERRUPT_SCAN_BATCH - 1)) == 0)
+            json_check_encode_interrupt(l, cfg, json,
+                                        CJSON_ENCODE_INTERRUPT_SCAN_BATCH);
         if (lua_type(l, -2) == LUA_TNUMBER &&
             (k = lua_tonumber(l, -2))) {
             /* Integer >= 1 ? */
@@ -637,7 +698,7 @@ static void json_append_object(lua_State *l, json_config_t *cfg,
             json_append_number(l, cfg, json, -2);
             strbuf_append_mem(json, "\":", 2);
         } else if (keytype == LUA_TSTRING) {
-            json_append_string(l, json, -2);
+            json_append_string(l, cfg, json, -2);
             strbuf_append_char(json, ':');
         } else {
             json_encode_exception(l, cfg, json, -2,
@@ -660,9 +721,11 @@ static void json_append_data(lua_State *l, json_config_t *cfg,
 {
     int len;
 
+    json_check_encode_interrupt(l, cfg, json, 1);
+
     switch (lua_type(l, -1)) {
     case LUA_TSTRING:
-        json_append_string(l, json, -1);
+        json_append_string(l, cfg, json, -1);
         break;
     case LUA_TNUMBER:
         json_append_number(l, cfg, json, -1);
@@ -718,6 +781,7 @@ static int json_encode(lua_State *l)
         strbuf_reset(encode_buf);
     }
 
+    cjson_encode_work = 0;
     json_append_data(l, cfg, 0, encode_buf);
     json = strbuf_string(encode_buf, &len);
 

@@ -3671,7 +3671,7 @@ typedef struct clusterManagerNode {
                           * strings are the source node IDs. */
     int migrating_count; /* Length of the migrating array (migrating slots*2) */
     int importing_count; /* Length of the importing array (importing slots*2) */
-    float weight;        /* Weight used by rebalance */
+    double weight;       /* Weight used by rebalance */
     int balance;         /* Used by rebalance */
 } clusterManagerNode;
 
@@ -7978,7 +7978,13 @@ static int clusterManagerCommandRebalance(int argc, char **argv) {
                 goto cleanup;
             }
             *p = '\0';
-            float w = atof(++p);
+            char *end;
+            double w = valkey_strtod(++p, &end);
+            if (end == p || *end != '\0' || errno == EINVAL || errno == ERANGE || !isfinite(w) || w < 0) {
+                clusterManagerLogErr("*** Invalid weight %s for node %s\n", p, name);
+                result = 0;
+                goto cleanup;
+            }
             clusterManagerNode *n = clusterManagerNodeByAbbreviatedName(name);
             if (n == NULL) {
                 clusterManagerLogErr("*** No such primary node %s\n", name);
@@ -7988,7 +7994,7 @@ static int clusterManagerCommandRebalance(int argc, char **argv) {
             n->weight = w;
         }
     }
-    float total_weight = 0;
+    double total_weight = 0;
     int nodes_involved = 0;
     int use_empty = config.cluster_manager_command.flags & CLUSTER_MANAGER_CMD_FLAG_EMPTY_PRIMARY;
     involved = listCreate();
@@ -8006,6 +8012,11 @@ static int clusterManagerCommandRebalance(int argc, char **argv) {
         total_weight += n->weight;
         nodes_involved++;
         listAddNodeTail(involved, n);
+    }
+    if (!isfinite(total_weight) || total_weight <= 0) {
+        clusterManagerLogErr("*** Total weight must be positive and finite\n");
+        result = 0;
+        goto cleanup;
     }
     weightedNodes = zmalloc(nodes_involved * sizeof(clusterManagerNode *));
     if (weightedNodes == NULL) goto cleanup;
@@ -8027,7 +8038,7 @@ static int clusterManagerCommandRebalance(int argc, char **argv) {
     while ((ln = listNext(&li)) != NULL) {
         clusterManagerNode *n = ln->value;
         weightedNodes[i++] = n;
-        int expected = (int)(((float)CLUSTER_MANAGER_SLOTS / total_weight) * n->weight);
+        int expected = (int)((n->weight / total_weight) * CLUSTER_MANAGER_SLOTS);
         n->balance = n->slots_count - expected;
         total_balance += n->balance;
         /* Compute the percentage of difference between the

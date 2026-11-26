@@ -743,6 +743,56 @@ start_multiple_servers 3 [list overrides $base_conf] {
         wait_for_cluster_state ok
     }
 
+    test {valkey-cli rebalance rejects invalid weights} {
+        set node_id [R 0 cluster myid]
+        foreach weight {-1 nan inf -inf 1e309 1e-999 garbage 1junk {}} {
+            set status [catch {
+                exec $::VALKEY_CLI_BIN --cluster rebalance \
+                    127.0.0.1:[srv 0 port] --cluster-simulate \
+                    --cluster-weight $node_id=$weight
+            } output]
+            assert_equal 1 $status
+            assert_match {*Invalid weight*} $output
+        }
+    }
+
+    test {valkey-cli rebalance rejects zero or non-finite total weight} {
+        foreach weight {0 1e308} {
+            set weights {}
+            foreach id {0 1 2} {
+                lappend weights [R $id cluster myid]=$weight
+            }
+            set status [catch {
+                exec $::VALKEY_CLI_BIN --cluster rebalance \
+                    127.0.0.1:[srv 0 port] --cluster-simulate \
+                    --cluster-weight {*}$weights
+            } output]
+            assert_equal 1 $status
+            assert_match {*Total weight must be positive and finite*} $output
+        }
+    }
+
+    test {valkey-cli rebalance handles very small and large finite weights} {
+        foreach weight {1e-300 1e300} {
+            set weights {}
+            foreach id {0 1 2} {
+                lappend weights [R $id cluster myid]=$weight
+            }
+            set output [exec $::VALKEY_CLI_BIN --cluster rebalance \
+                127.0.0.1:[srv 0 port] --cluster-simulate \
+                --cluster-weight {*}$weights]
+            assert_match {*No rebalancing needed*} $output
+        }
+    }
+
+    test {valkey-cli rebalance permits a zero weight to drain a node} {
+        set node_id [R 0 cluster myid]
+        set output [exec $::VALKEY_CLI_BIN --cluster rebalance \
+            127.0.0.1:[srv 0 port] --cluster-simulate \
+            --cluster-weight $node_id=0]
+        assert_match {*Rebalancing across 3 nodes*} $output
+    }
+
     test {valkey-cli rebalance propagates migration failure} {
         # key9184688 maps to slot 10923, which is initially owned by node 2.
         set key key9184688

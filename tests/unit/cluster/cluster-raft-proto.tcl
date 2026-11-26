@@ -121,12 +121,12 @@ proc raft_connect_fake_node {host cport fake_id fake_addr} {
 proc raft_reply_ae_ack {fd ae_msg repl_offset} {
     set lines [split $ae_msg "\n"]
     set fields [split [lindex $lines 0] " "]
-    # AE <leader-id> <term> <prev-log-idx> <prev-log-term> <commit> <count>
+    # AE <leader-id> <term> <prev-log-idx> <prev-log-term> <commit> <round> <count>
     set term [lindex $fields 2]
     set prev_idx [lindex $fields 3]
-    set count [lindex $fields 6]
+    set count [lindex $fields 7]
     set last_index [expr {$prev_idx + $count}]
-    raft_send $fd "AE_ACK $term 1 $last_index $repl_offset"
+    raft_send $fd "AE_ACK $term 1 $last_index [lindex $fields 6] $repl_offset"
     return $last_index
 }
 
@@ -250,7 +250,7 @@ test "Raft proto: learner join, voter promotion, demotion, and forget" {
         set reply [raft_recv $fd]
         assert_match "HI *" $reply
 
-        set ae "AE $leader_id 1 0 0 2 2\n"
+        set ae "AE $leader_id 1 0 0 2 0 2\n"
         append ae "1 NODE_JOIN $self_id $self_addr voter\n"
         append ae "1 NODE_JOIN $learner_id $learner_addr learner"
         raft_send $fd $ae
@@ -265,7 +265,7 @@ test "Raft proto: learner join, voter promotion, demotion, and forget" {
         close $fp
         assert_match "*$learner_id *learner*" $nodes_conf_text
 
-        set ae "AE $leader_id 1 2 1 3 1\n"
+        set ae "AE $leader_id 1 2 1 3 0 1\n"
         append ae "1 ADD_VOTER $learner_id"
         raft_send $fd $ae
         set reply [raft_recv $fd]
@@ -273,7 +273,7 @@ test "Raft proto: learner join, voter promotion, demotion, and forget" {
         assert_equal 2 [CI 0 cluster_size]
         assert {![string match "*learner*" [raft_cluster_nodes_line [srv 0 client] $learner_id]]}
 
-        set ae "AE $leader_id 1 3 1 4 1\n"
+        set ae "AE $leader_id 1 3 1 4 0 1\n"
         append ae "1 DEL_VOTER $learner_id"
         raft_send $fd $ae
         set reply [raft_recv $fd]
@@ -281,7 +281,7 @@ test "Raft proto: learner join, voter promotion, demotion, and forget" {
         assert_equal 1 [CI 0 cluster_size]
         assert_match "*learner*" [raft_cluster_nodes_line [srv 0 client] $learner_id]
 
-        set ae "AE $leader_id 1 4 1 5 1\n"
+        set ae "AE $leader_id 1 4 1 5 0 1\n"
         append ae "1 NODE_FORGET $learner_id 0"
         raft_send $fd $ae
         set reply [raft_recv $fd]
@@ -342,7 +342,7 @@ test "Raft proto: PRE_VOTE granted after node-timeout even with randomized elect
         # Send AE with NODE_JOIN entries for both nodes to form the cluster.
         set node_addr "127.0.0.1:[srv 0 port]@$cport,,tls-port=0,shard-id=[string repeat a 40]"
         set term 1
-        raft_send $fd1 "AE $leader_id $term 0 0 2 2\n1 NODE_JOIN $leader_id $leader_addr voter\n1 NODE_JOIN $node_id $node_addr voter"
+        raft_send $fd1 "AE $leader_id $term 0 0 2 0 2\n1 NODE_JOIN $leader_id $leader_addr voter\n1 NODE_JOIN $node_id $node_addr voter"
         set reply [raft_recv $fd1]
         assert_match "AE_ACK *" $reply
         assert_equal "follower" [CI 0 cluster_raft_role]
@@ -377,7 +377,7 @@ test "Raft proto: PRE_VOTE lease only counts contact with the leader" {
         raft_send $fd "MEET cluster"
         assert_match "ADD_ME*" [raft_recv $fd]
         set node_addr "127.0.0.1:[srv 0 port]@$cport,,tls-port=0,shard-id=[string repeat a 40]"
-        raft_send $fd "AE $leader_id 1 0 0 2 2\n1 NODE_JOIN $leader_id $leader_addr voter\n1 NODE_JOIN $node_id $node_addr voter"
+        raft_send $fd "AE $leader_id 1 0 0 2 0 2\n1 NODE_JOIN $leader_id $leader_addr voter\n1 NODE_JOIN $node_id $node_addr voter"
         assert_match "AE_ACK *" [raft_recv $fd]
         close $fd
 
@@ -422,7 +422,7 @@ test "Raft proto: INSTALL_SNAPSHOT validation and node removal" {
         set fd [raft_connect_fake_node 127.0.0.1 $cport $leader_id $leader_addr]
         raft_send $fd "MEET cluster"
         assert_match "ADD_ME*" [raft_recv $fd]
-        raft_send $fd "AE $leader_id 1 0 0 3 3\n1 NODE_JOIN $leader_id $leader_addr voter\n1 NODE_JOIN $node_id $node_addr voter\n1 NODE_JOIN $c_id $c_addr voter"
+        raft_send $fd "AE $leader_id 1 0 0 3 0 3\n1 NODE_JOIN $leader_id $leader_addr voter\n1 NODE_JOIN $node_id $node_addr voter\n1 NODE_JOIN $c_id $c_addr voter"
         assert_match "AE_ACK 1 1 *" [raft_recv $fd]
         assert_equal 3 [CI 0 cluster_raft_last_applied]
         raft_send $fd "HELLO $leader_id $leader_addr"
@@ -526,7 +526,7 @@ test "Raft proto: INSTALL_SNAPSHOT validation and node removal" {
         assert_equal OK [R 0 CLUSTER MIGRATESLOTS SLOTSRANGE 0 0 NODE $leader_id]
         set migration_fd [raft_accept $migration_listener]
         test_defer [list close $migration_fd]
-        set ae "AE $leader_id 1 15 1 15 3"
+        set ae "AE $leader_id 1 15 1 15 0 3"
         for {set j 0} {$j < 3} {incr j} {
             append ae "\n1 NODE_INFO $leader_id $leader_addr noflags"
         }
@@ -571,14 +571,14 @@ test "Raft proto: entries are persisted before they are trimmed" {
         raft_send $fd "MEET cluster"
         assert_match "ADD_ME*" [raft_recv $fd]
         set last 2
-        raft_send $fd "AE $leader_id 1 0 0 $last 2\n1 NODE_JOIN $leader_id $leader_addr voter\n1 NODE_JOIN $node_id $node_addr voter"
+        raft_send $fd "AE $leader_id 1 0 0 $last 0 2\n1 NODE_JOIN $leader_id $leader_addr voter\n1 NODE_JOIN $node_id $node_addr voter"
         while {![string match "AE_ACK *" [set reply [raft_recv $fd]]]} {}
 
         # Commit batches of entries. After the second batch, nodes.conf is
         # rewritten. The third batch is only appended to it, and applying it
         # trims the log past the start of that batch.
         foreach count {98 2 90} {
-            set ae "AE $leader_id 1 $last 1 [expr {$last + $count}] $count"
+            set ae "AE $leader_id 1 $last 1 [expr {$last + $count}] 0 $count"
             for {set j 0} {$j < $count} {incr j} {
                 append ae "\n1 NODE_INFO $leader_id $leader_addr noflags"
             }
@@ -633,7 +633,7 @@ test "Raft proto: MEET deferred by a joiner is answered after a snapshot" {
         assert_equal "WELCOME" [raft_recv $fd_d]
 
         # Applying the next NODE_JOIN doesn't touch the deferred MEET again.
-        raft_send $fd "AE $leader_id 1 10 1 11 1\n1 NODE_JOIN $e_id $e_addr learner"
+        raft_send $fd "AE $leader_id 1 10 1 11 0 1\n1 NODE_JOIN $e_id $e_addr learner"
         while {![string match "AE_ACK *" [set reply [raft_recv $fd]]]} {}
         assert_match "AE_ACK 1 1 11 *" $reply
         assert_equal PONG [R 0 PING]
@@ -696,7 +696,7 @@ test "Raft proto: PRE_VOTE denied when candidate log is stale" {
         set reply [raft_recv $fd_seed]
         assert_match "HI *" $reply
 
-        set ae "AE $seed_id 1 0 0 1 1\n"
+        set ae "AE $seed_id 1 0 0 1 0 1\n"
         append ae "1 NODE_JOIN $joined_id $joined_addr voter"
         raft_send $fd_seed $ae
         set reply [raft_recv $fd_seed]
@@ -759,7 +759,7 @@ test "Raft proto: pre-vote timeout does not inflate term without quorum" {
 
             # Commit both nodes into the fake leader's log. The real node must
             # see the fake peer as joined, otherwise pre-vote requests are skipped.
-            set ae "AE $fake_id 2 0 0 2 2\n"
+            set ae "AE $fake_id 2 0 0 2 0 2\n"
             append ae "2 NODE_JOIN $node_id 127.0.0.1:[srv 0 port]@[expr {[srv 0 port] + 10000}],,tls-port=0,shard-id=[string repeat t 40] voter\n"
             append ae "2 NODE_JOIN $fake_id $fake_addr voter"
             raft_send $leader_fd $ae
@@ -827,9 +827,9 @@ test "Raft proto: REPL_OFFSETS updates node replication offset" {
 
         # Send AE to establish ourselves as leader and add the replica
         # via NODE_JOIN in the log.
-        # AE <leader-id> <term> <prev-log-idx> <prev-log-term> <commit> <count>
+        # AE <leader-id> <term> <prev-log-idx> <prev-log-term> <commit> <round> <count>
         # Entry: <term> <type> <data>
-        set ae "AE $leader_id 1 0 0 2 2\n"
+        set ae "AE $leader_id 1 0 0 2 0 2\n"
         append ae "1 NODE_JOIN $replica_id $replica_addr voter\n"
         append ae "1 SET_REPLICA_OF $replica_id $leader_id $leader_shard"
         raft_send $fd $ae
@@ -951,7 +951,7 @@ proc raft_next_ae_from {fd skip_prev} {
         if {![string match "AE *" $reply]} continue
         set fields [raft_ae_header $reply]
         if {[lindex $fields 3] != $skip_prev} {
-            return [list [lindex $fields 3] [lindex $fields 6]]
+            return [list [lindex $fields 3] [lindex $fields 7]]
         }
     }
     return {}
@@ -962,7 +962,7 @@ proc raft_next_ae_from {fd skip_prev} {
 proc raft_ack_until_idle {fd} {
     set last [CI 0 cluster_raft_last_applied]
     set fields {}
-    while {[lindex $fields 3] != $last || [lindex $fields 6] != 0} {
+    while {[lindex $fields 3] != $last || [lindex $fields 7] != 0} {
         set reply [raft_recv $fd 5000]
         if {[string match "AE *" $reply]} {
             set fields [raft_ae_header $reply]
@@ -984,11 +984,11 @@ test "Raft proto: leader backs off next_index to the follower's last index on re
         # Reject with a log 10 entries behind; the leader resends from there.
         set term [CI 0 cluster_raft_current_term]
         set behind [expr {$last - 10}]
-        raft_send $fd "AE_ACK $term 0 $behind 0"
+        raft_send $fd "AE_ACK $term 0 $behind 0 0"
         assert_equal [list $behind 10] [raft_next_ae_from $fd $last]
 
         # A last index past next_index doesn't help; the leader steps back one.
-        raft_send $fd "AE_ACK $term 0 $last 0"
+        raft_send $fd "AE_ACK $term 0 $last 0 0"
         assert_equal [list [expr {$behind - 1}] 11] [raft_next_ae_from $fd $behind]
 
         close $fd
@@ -1016,23 +1016,23 @@ test "Raft proto: successful AE_ACK continues catch-up without a heartbeat" {
         # probing mode, where sending doesn't advance next_index.
         while {![catch {raft_recv $fd 500}]} {}
         set term [CI 0 cluster_raft_current_term]
-        raft_send $fd "AE_ACK $term 0 $last 0"
+        raft_send $fd "AE_ACK $term 0 $last 0 0"
         set reply [raft_recv $fd 1000]
         assert_match "AE *" $reply
         set fields [raft_ae_header $reply]
         assert_equal $last [lindex $fields 3]
-        assert_equal $tail [lindex $fields 6]
+        assert_equal $tail [lindex $fields 7]
 
         # Report partial progress on the probe. The ACK must trigger the
         # next AE, without waiting for a heartbeat or a new proposal.
-        raft_send $fd "AE_ACK $term 1 [expr {$last + 1}] 0"
+        raft_send $fd "AE_ACK $term 1 [expr {$last + 1}] 0 0"
 
         # Heartbeat interval is election_timeout/10 (>= 2s here).
         set reply [raft_recv $fd 1000]
         assert_match "AE *" $reply
         set fields [raft_ae_header $reply]
         assert_equal [expr {$last + 1}] [lindex $fields 3]
-        assert_equal [expr {$tail - 1}] [lindex $fields 6]
+        assert_equal [expr {$tail - 1}] [lindex $fields 7]
 
         close $fd
     }
@@ -1059,7 +1059,7 @@ test "Raft proto: leader doesn't resend entries in flight" {
             if {![string match "AE *" $reply]} continue
             set fields [raft_ae_header $reply]
             assert_equal [expr {$next - 1}] [lindex $fields 3]
-            incr next [lindex $fields 6]
+            incr next [lindex $fields 7]
         }
         assert_equal [list [expr {$last + 100}] 0] [raft_next_ae_from $fd -1]
 
@@ -1095,7 +1095,7 @@ test "Raft proto: outbound link without HI is dropped and reconnected" {
         raft_send $fd1 "MEET cluster"
         assert_match "ADD_ME*" [raft_recv $fd1]
         set node_addr "127.0.0.1:[srv 0 port]@$cport,,tls-port=0,shard-id=[string repeat a 40]"
-        raft_send $fd1 "AE $leader_id 1 0 0 2 2\n1 NODE_JOIN $leader_id $leader_addr voter\n1 NODE_JOIN $node_id $node_addr voter"
+        raft_send $fd1 "AE $leader_id 1 0 0 2 0 2\n1 NODE_JOIN $leader_id $leader_addr voter\n1 NODE_JOIN $node_id $node_addr voter"
         assert_match "AE_ACK *" [raft_recv $fd1]
         assert_equal "follower" [CI 0 cluster_raft_role]
 
@@ -1103,7 +1103,7 @@ test "Raft proto: outbound link without HI is dropped and reconnected" {
         # counting connections on the silent listener.
         set deadline [expr {[clock milliseconds] + 5000}]
         while {[llength $::_raft_silent_accepts] < 2 && [clock milliseconds] < $deadline} {
-            raft_send $fd1 "AE $leader_id 1 2 1 2 0"
+            raft_send $fd1 "AE $leader_id 1 2 1 2 0 0"
             after 200 {set ::_raft_tick 1}
             vwait ::_raft_tick
             catch {read $fd1} ;# Discard AE_ACKs.
@@ -1141,7 +1141,7 @@ test "Raft proto: a new leader doesn't treat the old leader as failed if it vote
 
         # A leads a 2-voter cluster with the node, then goes silent.
         set fd_a [raft_connect_fake_node 127.0.0.1 $cport $a_id $a_addr]
-        raft_send $fd_a "AE $a_id 2 0 0 2 2\n2 NODE_JOIN $node_id $node_addr voter\n2 NODE_JOIN $a_id $a_addr voter"
+        raft_send $fd_a "AE $a_id 2 0 0 2 0 2\n2 NODE_JOIN $node_id $node_addr voter\n2 NODE_JOIN $a_id $a_addr voter"
         assert_match "AE_ACK 2 1 2 *" [raft_recv $fd_a]
         set out_a [raft_accept $listen_a]
         assert_match "HELLO *" [raft_recv $out_a]
@@ -1197,7 +1197,7 @@ test "Raft proto: proposal waits for a new leader instead of expiring" {
         set fd_a [raft_connect_fake_node 127.0.0.1 $cport $a_id $a_addr]
         raft_send $fd_a "MEET cluster"
         assert_match "ADD_ME*" [raft_recv $fd_a]
-        raft_send $fd_a "AE $a_id 1 0 0 3 3\n1 NODE_JOIN $a_id $a_addr voter\n1 NODE_JOIN $node_id $node_addr voter\n1 NODE_JOIN $b_id $b_addr voter"
+        raft_send $fd_a "AE $a_id 1 0 0 3 0 3\n1 NODE_JOIN $a_id $a_addr voter\n1 NODE_JOIN $node_id $node_addr voter\n1 NODE_JOIN $b_id $b_addr voter"
         assert_match "AE_ACK *" [raft_recv $fd_a]
         set out_a [raft_accept $listen_a]
         set out_b [raft_accept $listen_b]
@@ -1217,12 +1217,12 @@ test "Raft proto: proposal waits for a new leader instead of expiring" {
         # resends the proposal to B.
         after 2500
         set fd_b [raft_connect_fake_node 127.0.0.1 $cport $b_id $b_addr]
-        raft_send $fd_b "AE $b_id 2 3 1 3 0"
+        raft_send $fd_b "AE $b_id 2 3 1 3 0 0"
         assert_equal $propose [raft_recv_until $out_b "PROPOSE *"]
 
         # B commits it more than 3x node-timeout after it was first proposed.
         after 1000
-        raft_send $fd_b "AE $b_id 2 3 1 4 1\n2 $entry"
+        raft_send $fd_b "AE $b_id 2 3 1 4 0 1\n2 $entry"
         assert_equal {OK} [$rd read]
         assert_morethan [expr {[clock milliseconds] - $start}] 3000
 
@@ -1274,7 +1274,7 @@ test "Raft proto: SET_REPLICA_OF follows a target that became a replica in its s
             "1 SET_REPLICA_OF $x_id $sx 3 $w_id $sw 0" \
             "1 SET_REPLICA_OF $q_id $sq 0 $x_id $sx 4"
         set n [llength $entries]
-        raft_send $fd "AE $a_id 1 0 0 $n $n\n[join $entries \n]"
+        raft_send $fd "AE $a_id 1 0 0 $n 0 $n\n[join $entries \n]"
         assert_match "AE_ACK *" [raft_recv $fd]
 
         # Z replicates Y, which took over from X in shard sx.
@@ -1285,6 +1285,403 @@ test "Raft proto: SET_REPLICA_OF follows a target that became a replica in its s
         assert_equal $sw [shard_of 0 $x_id]
         assert_equal - [dict get [cluster_get_node_by_id 0 $q_id] slaveof]
         assert_equal $sq [shard_of 0 $q_id]
+        close $fd
+    }
+}
+
+test "Raft proto: one applied entry completes identical proposals" {
+    # Two clients send the same slot change to a follower. The leader's entry
+    # for the first one completes both, since it isn't older than either.
+    start_server {overrides {cluster-enabled yes cluster-protocol raft cluster-node-timeout 1000}} {
+        set cport [expr {[srv 0 port] + 10000}]
+        set node_id [R 0 CLUSTER MYID]
+        set node_addr "127.0.0.1:[srv 0 port]@$cport,,tls-port=0,shard-id=[string repeat a 40]"
+        set a_id [string repeat "d" 40]
+        set listen_a [raft_listen a_cport]
+        set a_addr "127.0.0.1:[expr {$a_cport - 10000}]@$a_cport,,tls-port=0,shard-id=[string repeat b 40]"
+
+        # A forms a 2-node cluster and leads it.
+        set fd_a [raft_connect_fake_node 127.0.0.1 $cport $a_id $a_addr]
+        raft_send $fd_a "MEET cluster"
+        assert_match "ADD_ME*" [raft_recv $fd_a]
+        raft_send $fd_a "AE $a_id 1 0 0 2 0 2\n1 NODE_JOIN $a_id $a_addr voter\n1 NODE_JOIN $node_id $node_addr voter"
+        assert_match "AE_ACK *" [raft_recv $fd_a]
+        set out_a [raft_accept $listen_a]
+        assert_match "HELLO *" [raft_recv $out_a]
+        raft_send $out_a "HI $a_id $a_addr"
+
+        set rd [valkey_deferring_client]
+        $rd cluster addslots 0
+        set propose [raft_recv_until $out_a "PROPOSE SLOT_CHANGE *"]
+        set rd2 [valkey_deferring_client]
+        $rd2 cluster addslots 0
+        assert_equal $propose [raft_recv_until $out_a "PROPOSE SLOT_CHANGE *"]
+
+        set entry [string range $propose [string length "PROPOSE "] end]
+        raft_send $fd_a "AE $a_id 1 2 1 3 0 1\n1 $entry"
+        assert_equal {OK} [$rd read]
+        assert_equal {OK} [$rd2 read]
+
+        $rd close
+        $rd2 close
+        foreach fd [list $fd_a $out_a] {close $fd}
+    }
+}
+
+test "Raft proto: a late UNCHANGED doesn't complete a later identical proposal" {
+    # P1 completes when its entry is applied. The slot moves away and back,
+    # and P2 asks for the same change. A late UNCHANGED for P1 describes the
+    # state before P2 was made, so it doesn't complete P2.
+    start_server {overrides {cluster-enabled yes cluster-protocol raft cluster-node-timeout 1000}} {
+        set cport [expr {[srv 0 port] + 10000}]
+        set node_id [R 0 CLUSTER MYID]
+        set node_addr "127.0.0.1:[srv 0 port]@$cport,,tls-port=0,shard-id=[string repeat a 40]"
+        set a_id [string repeat "d" 40]
+        set listen_a [raft_listen a_cport]
+        set a_addr "127.0.0.1:[expr {$a_cport - 10000}]@$a_cport,,tls-port=0,shard-id=[string repeat b 40]"
+
+        # A forms a 2-node cluster and leads it.
+        set fd_a [raft_connect_fake_node 127.0.0.1 $cport $a_id $a_addr]
+        raft_send $fd_a "MEET cluster"
+        assert_match "ADD_ME*" [raft_recv $fd_a]
+        raft_send $fd_a "AE $a_id 1 0 0 2 0 2\n1 NODE_JOIN $a_id $a_addr voter\n1 NODE_JOIN $node_id $node_addr voter"
+        assert_match "AE_ACK *" [raft_recv $fd_a]
+        set out_a [raft_accept $listen_a]
+        assert_match "HELLO *" [raft_recv $out_a]
+        raft_send $out_a "HI $a_id $a_addr"
+
+        # P1 is committed at index 3. Then the slot moves to A and back.
+        set rd [valkey_deferring_client]
+        $rd cluster addslots 0
+        set propose [raft_recv_until $out_a "PROPOSE SLOT_CHANGE *"]
+        set entry [string range $propose [string length "PROPOSE "] end]
+        raft_send $fd_a "AE $a_id 1 2 1 3 0 1\n1 $entry"
+        assert_equal {OK} [$rd read]
+        set epoch [lindex [split $entry " "] 4]
+        raft_send $fd_a "AE $a_id 1 3 1 5 0 2\n1 SLOT_CHANGE $node_id $epoch $a_id 0 0\n1 SLOT_CHANGE $a_id 0 - 0 0"
+        wait_for_condition 50 100 {
+            [CI 0 cluster_raft_last_applied] == 5
+        } else {
+            fail "entries 4 and 5 not applied"
+        }
+
+        # P2 asks for the same change, then the late UNCHANGED for P1 arrives.
+        $rd cluster addslots 0
+        assert_equal $propose [raft_recv_until $out_a "PROPOSE SLOT_CHANGE *"]
+        raft_send $out_a "UNCHANGED 3 $entry"
+        after 200
+        wait_for_blocked_client
+        assert_equal {} [lindex [R 0 cluster slots] 0]
+
+        # Its own entry completes it.
+        raft_send $fd_a "AE $a_id 1 5 1 6 0 1\n1 $entry"
+        assert_equal {OK} [$rd read]
+        $rd close
+        foreach fd [list $fd_a $out_a] {close $fd}
+    }
+}
+
+test "Raft proto: a proposal the leader says is unchanged completes once applied up to its index" {
+    # The node proposes a slot change that the leader has already committed
+    # but the node hasn't applied yet. The leader replies UNCHANGED with its
+    # last applied index. The node replies OK only after applying that far,
+    # so the client sees the change on the node it sent the command to.
+    start_server {overrides {cluster-enabled yes cluster-protocol raft cluster-node-timeout 1000}} {
+        set cport [expr {[srv 0 port] + 10000}]
+        set node_id [R 0 CLUSTER MYID]
+        set node_addr "127.0.0.1:[srv 0 port]@$cport,,tls-port=0,shard-id=[string repeat a 40]"
+        set a_id [string repeat "d" 40]
+        set listen_a [raft_listen a_cport]
+        set a_addr "127.0.0.1:[expr {$a_cport - 10000}]@$a_cport,,tls-port=0,shard-id=[string repeat b 40]"
+
+        # A forms a 2-node cluster and leads it.
+        set fd_a [raft_connect_fake_node 127.0.0.1 $cport $a_id $a_addr]
+        raft_send $fd_a "MEET cluster"
+        assert_match "ADD_ME*" [raft_recv $fd_a]
+        raft_send $fd_a "AE $a_id 1 0 0 2 0 2\n1 NODE_JOIN $a_id $a_addr voter\n1 NODE_JOIN $node_id $node_addr voter"
+        assert_match "AE_ACK *" [raft_recv $fd_a]
+        set out_a [raft_accept $listen_a]
+        assert_match "HELLO *" [raft_recv $out_a]
+        raft_send $out_a "HI $a_id $a_addr"
+
+        # The node proposes slot 0 to itself.
+        set rd [valkey_deferring_client]
+        $rd cluster addslots 0
+        set propose [raft_recv_until $out_a "PROPOSE SLOT_CHANGE *"]
+        set entry [string range $propose [string length "PROPOSE "] end]
+
+        # A says it's unchanged as of index 3, which the node doesn't have.
+        raft_send $out_a "UNCHANGED 3 $entry"
+        after 200
+        wait_for_blocked_client
+        assert_equal {} [lindex [R 0 cluster slots] 0]
+
+        # An identical proposal made after the UNCHANGED reply. The identical
+        # entry at index 3 is older, so it can't be this proposal's own entry.
+        set rd2 [valkey_deferring_client]
+        $rd2 cluster addslots 0
+        assert_equal $propose [raft_recv_until $out_a "PROPOSE SLOT_CHANGE *"]
+
+        # Index 3 is the identical entry, index 4 moves the slot to A. The
+        # first proposal completes, the second one waits for its own entry.
+        set epoch [lindex [split $entry " "] 4]
+        set to_a "SLOT_CHANGE $node_id $epoch $a_id 0 0"
+        raft_send $fd_a "AE $a_id 1 2 1 4 0 2\n1 $entry\n1 $to_a"
+        assert_equal {OK} [$rd read]
+        assert_equal $a_id [lindex [R 0 cluster slots] 0 2 2]
+        assert_equal 1 [s blocked_clients]
+
+        # Its own entry at index 5 completes it.
+        raft_send $fd_a "AE $a_id 1 4 1 5 0 1\n1 $entry"
+        assert_equal {OK} [$rd2 read]
+        assert_equal $node_id [lindex [R 0 cluster slots] 0 2 2]
+
+        # A slot out of range is also rejected when applying.
+        raft_send $fd_a "AE $a_id 1 5 1 6 0 1\n1 SLOT_CHANGE - 0 $a_id 0 16384"
+        wait_for_condition 50 10 {
+            [CI 0 cluster_raft_last_applied] == 6
+        } else {
+            fail "entry 6 not applied"
+        }
+        assert_equal 1 [CI 0 cluster_slots_assigned]
+
+        $rd close
+        $rd2 close
+        foreach fd [list $fd_a $out_a] {close $fd}
+
+        # After a reset, A forms a new cluster with the node, with a shorter
+        # log. The UNCHANGED index from the old cluster no longer matters.
+        R 0 cluster reset hard
+        set node_id [R 0 CLUSTER MYID]
+        set listen_a [raft_listen a_cport]
+        set a_addr "127.0.0.1:[expr {$a_cport - 10000}]@$a_cport,,tls-port=0,shard-id=[string repeat b 40]"
+        set fd_a [raft_connect_fake_node 127.0.0.1 $cport $a_id $a_addr]
+        raft_send $fd_a "MEET cluster"
+        assert_match "ADD_ME*" [raft_recv $fd_a]
+        raft_send $fd_a "AE $a_id 1 0 0 2 0 2\n1 NODE_JOIN $a_id $a_addr voter\n1 NODE_JOIN $node_id $node_addr voter"
+        assert_match "AE_ACK *" [raft_recv $fd_a]
+        set out_a [raft_accept $listen_a]
+        assert_match "HELLO *" [raft_recv $out_a]
+        raft_send $out_a "HI $a_id $a_addr"
+        set rd [valkey_deferring_client]
+        $rd cluster addslots 0
+        set propose [raft_recv_until $out_a "PROPOSE SLOT_CHANGE *"]
+        raft_send $fd_a "AE $a_id 1 2 1 3 0 1\n1 [string range $propose [string length "PROPOSE "] end]"
+        assert_equal OK [$rd read]
+        $rd close
+        foreach fd [list $fd_a $out_a] {close $fd}
+    }
+}
+
+test "Raft proto: the leader answers UNCHANGED only after a quorum acks a later AE" {
+    # ReadIndex: before answering without an entry, the leader confirms that
+    # it's still the leader, by waiting until a quorum has acked an AE sent
+    # after the proposal arrived. AE carries a round, which AE_ACK echoes.
+    # A long node timeout keeps heartbeats seconds apart, so the first AE
+    # after a proposal is the one it triggers.
+    start_server {overrides {cluster-enabled yes cluster-protocol raft cluster-node-timeout 20000}} {
+        set node_id [R 0 CLUSTER MYID]
+        set f_id [string repeat "f" 40]
+        set fd [raft_join_fake_follower $f_id [string repeat "9" 40]]
+        R 0 cluster addslots 0
+        raft_ack_until_idle $fd
+
+        # Make F a voter, so the quorum is both of us.
+        set rd [valkey_deferring_client]
+        $rd cluster addvoter $f_id
+        assert_equal OK [$rd read]
+        $rd close
+        assert_equal 2 [CI 0 cluster_size]
+        set last [raft_ack_until_idle $fd]
+        set commit [CI 0 cluster_raft_commit_index]
+        set term [CI 0 cluster_raft_current_term]
+
+        # F forwards a SETSLOT NODE for the current owner. The leader sends an
+        # AE with a new round.
+        set entry "SLOT_CHANGE $node_id 1 $node_id 1 0"
+        raft_send $fd "PROPOSE $entry"
+        set round [lindex [raft_ae_header [raft_recv_until $fd "AE *"]] 6]
+
+        # An ACK of an older round doesn't confirm it. A malformed proposal
+        # follows, which gets REJECT right away. If the ACK had confirmed
+        # the read, UNCHANGED would come first on the same link.
+        raft_send $fd "AE_ACK $term 1 $last [expr {$round - 1}] 0"
+        raft_send $fd "PROPOSE SLOT_CHANGE $node_id 1 $node_id 1 16384"
+        while {![string match "REJECT *" [set msg [raft_recv $fd]]]} {
+            assert_no_match "UNCHANGED *" $msg
+        }
+
+        # An ACK of that round confirms it, with nothing appended for it.
+        raft_send $fd "AE_ACK $term 1 $last $round 0"
+        assert_equal "UNCHANGED $commit $entry" [raft_recv_until $fd "UNCHANGED *"]
+        assert_equal $commit [CI 0 cluster_raft_commit_index]
+        close $fd
+    }
+}
+
+test "Raft proto: a read confirmed by the ACK that commits a change isn't unchanged" {
+    # The ACK that confirms the read also commits a change appended after
+    # it. The leader decides again before applying that change, and since it
+    # hasn't applied its whole log, it appends the proposal.
+    start_server {overrides {cluster-enabled yes cluster-protocol raft cluster-node-timeout 20000}} {
+        set node_id [R 0 CLUSTER MYID]
+        set f_id [string repeat "f" 40]
+        set fd [raft_join_fake_follower $f_id [string repeat "9" 40]]
+        R 0 cluster addslots 0
+        raft_ack_until_idle $fd
+
+        # Make F a voter, so the quorum is both of us.
+        set rd [valkey_deferring_client]
+        $rd cluster addvoter $f_id
+        assert_equal OK [$rd read]
+        $rd close
+        set last [raft_ack_until_idle $fd]
+        set term [CI 0 cluster_raft_current_term]
+
+        # F forwards a SETSLOT NODE for the current owner, then a change of
+        # slot 0 to F, which is appended.
+        set entry "SLOT_CHANGE $node_id 1 $node_id 1 0"
+        raft_send $fd "PROPOSE $entry"
+        raft_recv_until $fd "AE *"
+        raft_send $fd "PROPOSE SLOT_CHANGE $node_id 1 $f_id 0 0"
+        while {![string match "*SLOT_CHANGE $node_id 1 $f_id 0 0*" [set ae [raft_recv_until $fd "AE *"]]]} {}
+        set round [lindex [raft_ae_header $ae] 6]
+
+        # One ACK confirms the read and commits the change. The proposal is
+        # appended instead of answered with UNCHANGED.
+        raft_send $fd "AE_ACK $term 1 [expr {$last + 1}] $round 0"
+        while {![string match "*\n* $entry*" [set msg [raft_recv $fd]]]} {
+            assert_no_match "UNCHANGED *" $msg
+        }
+        assert_equal [expr {$last + 1}] [CI 0 cluster_raft_commit_index]
+        assert_equal $f_id [dict get [cluster_get_node_by_id 0 $f_id] id]
+        assert_equal 0 [dict get [cluster_get_node_by_id 0 $f_id] slots]
+        close $fd
+    }
+}
+
+test "Raft proto: the leader completes its proposal only with its own entry" {
+    # A follower forwards the same slot change that a client later sends to
+    # the leader, and an entry that changes it comes in between. Committing
+    # the follower's entry doesn't complete the client's proposal.
+    start_server {overrides {cluster-enabled yes cluster-protocol raft cluster-node-timeout 20000}} {
+        set node_id [R 0 CLUSTER MYID]
+        set f_id [string repeat "f" 40]
+        set fd [raft_join_fake_follower $f_id [string repeat "9" 40]]
+        R 0 cluster addslots 0
+        raft_ack_until_idle $fd
+
+        # Make F a voter, so nothing commits without its ACK.
+        set rd [valkey_deferring_client]
+        $rd cluster addvoter $f_id
+        assert_equal OK [$rd read]
+        $rd close
+        set last [raft_ack_until_idle $fd]
+        set term [CI 0 cluster_raft_current_term]
+
+        # F proposes slot 1 to the node, then to F. Then a client proposes
+        # slot 1 to the node, which is the same as F's first entry.
+        set entry "SLOT_CHANGE - 0 $node_id 0 1"
+        raft_send $fd "PROPOSE $entry"
+        raft_send $fd "PROPOSE SLOT_CHANGE - 0 $f_id 0 1"
+        while {![string match "*SLOT_CHANGE - 0 $f_id 0 1*" [raft_recv_until $fd "AE *"]]} {}
+        set rd [valkey_deferring_client]
+        $rd cluster addslots 1
+        set ae [raft_recv_until $fd "AE *"]
+        assert_equal "1 $entry" [lindex [split $ae "\n"] 1]
+
+        # Committing F's entries doesn't complete it.
+        raft_send $fd "AE_ACK $term 1 [expr {$last + 2}] 0 0"
+        wait_for_condition 50 100 {
+            [CI 0 cluster_raft_last_applied] == $last + 2
+        } else {
+            fail "F's entries weren't applied"
+        }
+        assert_equal 1 [dict get [cluster_get_node_by_id 0 $f_id] slots]
+        assert_equal 1 [s blocked_clients]
+
+        # Its own entry does.
+        raft_send $fd "AE_ACK $term 1 [expr {$last + 3}] 0 0"
+        assert_equal OK [$rd read]
+        $rd close
+        close $fd
+    }
+}
+
+test "Raft proto: a proposal completes after its leader's log tail is replaced" {
+    # The leader's proposal counts its uncommitted log tail in min_index. A
+    # new leader replaces that tail and commits the same change at a lower
+    # index, which completes the proposal.
+    start_server {overrides {cluster-enabled yes cluster-protocol raft cluster-node-timeout 20000}} {
+        set node_id [R 0 CLUSTER MYID]
+        set f_id [string repeat "f" 40]
+        set fd [raft_join_fake_follower $f_id [string repeat "9" 40]]
+        R 0 cluster addslots 0
+        raft_ack_until_idle $fd
+
+        # Make F a voter, so nothing commits without its ACK.
+        set rd [valkey_deferring_client]
+        $rd cluster addvoter $f_id
+        assert_equal OK [$rd read]
+        $rd close
+        set last [raft_ack_until_idle $fd]
+        set term [CI 0 cluster_raft_current_term]
+
+        # Slots 1 and 2 are appended, but not committed.
+        set rd1 [valkey_deferring_client]
+        $rd1 cluster addslots 1
+        set rd2 [valkey_deferring_client]
+        $rd2 cluster addslots 2
+        while {![info exists entry2]} {
+            foreach line [split [raft_recv_until $fd "AE *"] "\n"] {
+                if {[regexp {^[0-9]+ (SLOT_CHANGE .* ([12]))$} $line -> e slot]} {set entry$slot $e}
+            }
+        }
+
+        # F wins a later term and commits slot 2 in place of slot 1.
+        set new_term [expr {$term + 1}]
+        raft_send $fd "AE $f_id $new_term $last $term [expr {$last + 1}] 0 1\n$new_term $entry2"
+        assert_equal OK [$rd2 read]
+        assert_equal 1 [s blocked_clients]
+
+        # Then slot 1, so that no proposal is left pending.
+        raft_send $fd "AE $f_id $new_term [expr {$last + 1}] $new_term [expr {$last + 2}] 0 1\n$new_term $entry1"
+        assert_equal OK [$rd1 read]
+        $rd1 close
+        $rd2 close
+        close $fd
+    }
+}
+
+test "Raft proto: the leader doesn't append a slot change that changes nothing" {
+    start_server {overrides {cluster-enabled yes cluster-protocol raft cluster-node-timeout 1000}} {
+        set node_id [R 0 CLUSTER MYID]
+        set f_id [string repeat "f" 40]
+        set f_shard [string repeat "9" 40]
+        set fd [raft_join_fake_follower $f_id $f_shard]
+        R 0 cluster addslots 0
+        wait_for_condition 50 100 {
+            [lindex [R 0 cluster slots] 0 0] eq 0
+        } else {
+            fail "slot 0 not assigned"
+        }
+        set last [CI 0 cluster_raft_last_applied]
+
+        # A forwarded SETSLOT NODE for the current owner gets UNCHANGED with
+        # the leader's last applied index, and nothing is appended.
+        set entry "SLOT_CHANGE $node_id 1 $node_id 1 0"
+        raft_send $fd "PROPOSE $entry"
+        set reply [raft_recv_until $fd "UNCHANGED *"]
+        assert_equal "UNCHANGED $last $entry" $reply
+
+        # One with a slot out of range is rejected, also after an unchanged one.
+        foreach ranges {16384 {0 16384}} {
+            set entry "SLOT_CHANGE $node_id 1 $node_id 1 $ranges"
+            raft_send $fd "PROPOSE $entry"
+            assert_equal "REJECT rejected $entry" [raft_recv_until $fd "REJECT *"]
+        }
+        after 100
+        assert_equal $last [CI 0 cluster_raft_commit_index]
         close $fd
     }
 }
@@ -1431,7 +1828,7 @@ test "Raft proto: INSTALL_SNAPSHOT is not ACKed past the snapshot" {
  
         # Leader in term 2 sends three noop entries and commits 1 of 3 entries in log
         set fd0 [raft_connect_fake_node 127.0.0.1 $cport $l0_id $l0_addr]
-        raft_send $fd0 "AE $l0_id 2 0 0 1 3\n2 NOOP -\n2 NOOP -\n2 NOOP -"
+        raft_send $fd0 "AE $l0_id 2 0 0 1 0 3\n2 NOOP -\n2 NOOP -\n2 NOOP -"
         assert_match "AE_ACK 2 1 3 *" [raft_recv_until $fd0 "AE_ACK *"]
  
         # Leader in term 3 sends two snapshots that are not installed
@@ -1471,16 +1868,16 @@ test "Raft proto: AE_ACK reports verified prefix under normal AE conditions" {
  
         # Check message on first response, can ack all AEs processed
         set fd0 [raft_connect_fake_node 127.0.0.1 $cport $l0_id $l0_addr]
-        raft_send $fd0 "AE $l0_id 2 0 0 0 3\n2 NOOP -\n2 NOOP -\n2 NOOP -"
+        raft_send $fd0 "AE $l0_id 2 0 0 0 0 3\n2 NOOP -\n2 NOOP -\n2 NOOP -"
         assert_match "AE_ACK 2 1 3 *" [raft_recv_until $fd0 "AE_ACK *"]
 
         # Check message on new term, should only ack 1 this term
         set fd1 [raft_connect_fake_node 127.0.0.1 $cport $l1_id $l1_addr]
-        raft_send $fd1 "AE $l1_id 3 1 2 0 0"
+        raft_send $fd1 "AE $l1_id 3 1 2 0 0 0"
         assert_match "AE_ACK 3 1 1 *" [raft_recv_until $fd1 "AE_ACK *"]
  
         # A later heartbeat should not move the tracked value backwards
-        raft_send $fd1 "AE $l1_id 3 0 0 0 0"
+        raft_send $fd1 "AE $l1_id 3 0 0 0 0 0"
         assert_match "AE_ACK 3 1 1 *" [raft_recv_until $fd1 "AE_ACK *"]
  
         close $fd0
@@ -1505,7 +1902,7 @@ test "Raft proto: no false AE_ACK success after AE bumps term" {
         set fd [raft_connect_fake_node 127.0.0.1 $cport $l1_id $l1_addr]
  
         # Wire stuffing
-        puts -nonewline $fd "[raft_msg "AE $l0_id 2 0 0 0 1\n2 NOOP -"][raft_msg "AE $l1_id 3 1 1 0 0"]"
+        puts -nonewline $fd "[raft_msg "AE $l0_id 2 0 0 0 0 1\n2 NOOP -"][raft_msg "AE $l1_id 3 1 1 0 0 0"]"
         flush $fd
 
         # Check first message, should be false
@@ -1513,7 +1910,7 @@ test "Raft proto: no false AE_ACK success after AE bumps term" {
         assert_equal $l1_id [CI 0 cluster_raft_leader]
  
         # Check subsequent messages, should not have a "true" in term 3
-        raft_send $fd "AE $l1_id 3 1000 3 0 0"
+        raft_send $fd "AE $l1_id 3 1000 3 0 0 0"
         assert_match "AE_ACK 3 0 *" [raft_recv_until $fd "AE_ACK *"]
  
         close $fd
@@ -1538,11 +1935,11 @@ test "Raft proto: NODE_FORGET resets tracking from AE_ACK" {
  
         # Put NODE_FORGET in the log but do not commit
         set fd0 [raft_connect_fake_node 127.0.0.1 $cport $l0_id $l0_addr]
-        raft_send $fd0 "AE $l0_id 3 0 0 0 5\n3 NOOP -\n3 NOOP -\n3 NODE_FORGET $self_id 0\n3 NOOP -\n3 NOOP -"
+        raft_send $fd0 "AE $l0_id 3 0 0 0 0 5\n3 NOOP -\n3 NOOP -\n3 NODE_FORGET $self_id 0\n3 NOOP -\n3 NOOP -"
         assert_match "AE_ACK 3 1 5 *" [raft_recv_until $fd0 "AE_ACK *"]
  
         # Now commit and truncate the log
-        raft_send $fd0 "AE $l0_id 3 5 3 3 0"
+        raft_send $fd0 "AE $l0_id 3 5 3 3 0 0"
         wait_for_condition 50 100 {
             [CI 0 cluster_raft_log_entries] == 3
         } else {
@@ -1551,7 +1948,7 @@ test "Raft proto: NODE_FORGET resets tracking from AE_ACK" {
  
         # From another cluster, check we do not over-ack the log
         set fd1 [raft_connect_fake_node 127.0.0.1 $cport $l1_id $l1_addr]
-        raft_send $fd1 "AE $l1_id 3 0 0 0 0"
+        raft_send $fd1 "AE $l1_id 3 0 0 0 0 0"
         set ack [raft_recv_until $fd1 "AE_ACK 3 1 *"]
         assert_lessthan_equal [lindex $ack 3] [CI 0 cluster_raft_log_entries]
  

@@ -65,11 +65,16 @@ TEST_F(Crc64Test, TestCrc64Concurrent) {
 
     pthread_t threads[CRC64_THREADS];
     crc64ThreadArg args[CRC64_THREADS];
+    int created = 0;
     for (int i = 0; i < CRC64_THREADS; i++) {
         args[i].buf = buf;
         args[i].crc = 0;
-        ASSERT_EQ(pthread_create(&threads[i], NULL, crc64Thread, &args[i]), 0);
+        if (pthread_create(&threads[i], NULL, crc64Thread, &args[i]) != 0) break;
+        created++;
     }
-    for (int i = 0; i < CRC64_THREADS; i++) ASSERT_EQ(pthread_join(threads[i], NULL), 0);
+    /* Join every started worker before any fatal assertion can return, since
+     * the workers write into the stack-allocated args. */
+    for (int i = 0; i < created; i++) EXPECT_EQ(pthread_join(threads[i], NULL), 0);
+    ASSERT_EQ(created, CRC64_THREADS);
     for (int i = 0; i < CRC64_THREADS; i++) EXPECT_EQ(args[i].crc, expected) << "thread " << i;
 }

@@ -128,7 +128,8 @@ void blockClient(client *c, int btype) {
  * In case the command failed internally, ERROR_COMMAND_FAILED should be passed.
  * A value of zero indicate no error was reported after the command was unblocked  */
 void updateStatsOnUnblock(client *c, long blocked_us, long reply_us, int failed_or_rejected) {
-    c->duration += blocked_us + reply_us;
+    (void)blocked_us;
+    c->duration += reply_us;
     c->lastcmd->microseconds += c->duration;
     clusterSlotStatsAddCpuDuration(c, c->duration);
     c->lastcmd->calls++;

@@ -4497,8 +4497,9 @@ start_server {tags {"hashexpire external:skip"}} {
             while {$i < $read_amount} {
                 set curr_read [$rd_replica read]
                 
-                # Skip lines with INFO commands
-                if {[regexp {\"info\"} $curr_read] || [regexp {\"SELECT\"} $curr_read]} {
+                # Skip lines with INFO and SELECT commands, and the pings the
+                # primary sends at regular intervals in the replication stream.
+                if {[regexp {\"info\"} $curr_read] || [regexp {\"SELECT\"} $curr_read] || [regexp {\"ping\"} $curr_read]} {
                     continue
                 }
                 lappend res $curr_read

@@ -5699,3 +5699,20 @@ start_server {tags {"hashexpire aof needs:debug external:skip"} overrides {appen
         }
     }
 }
+
+start_server {tags {hashexpire aof external:skip} overrides {appendonly yes appendfsync always auto-aof-rewrite-percentage 0}} {
+    test {HINCRBY preserves large integers after AOF restart} {
+        set expiry [expr {[clock milliseconds] + 600000}]
+        r hset myhash expiring 9007199254740992 persistent 9007199254740992
+        r hpexpireat myhash $expiry FIELDS 1 expiring
+
+        # Exercise both the HSETEX and HSET propagation paths.
+        assert_equal 9007199254740993 [r hincrby myhash expiring 1]
+        assert_equal 9007199254740993 [r hincrby myhash persistent 1]
+
+        restart_server 0 true false
+
+        assert_equal {9007199254740993 9007199254740993} [r hmget myhash expiring persistent]
+        assert_equal [list $expiry -1] [r hpexpiretime myhash FIELDS 2 expiring persistent]
+    }
+}

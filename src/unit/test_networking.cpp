@@ -28,7 +28,7 @@ typedef struct bulkStrRef {
 
 typedef struct __attribute__((__packed__)) payloadHeader {
     size_t payload_len;
-    size_t reply_len;
+    uint64_t reply_len;
     int16_t slot;
     uint8_t payload_type : 1;
     uint8_t track_bytes : 1;

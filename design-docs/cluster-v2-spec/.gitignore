@@ -1,0 +1,7 @@
+# TLC output, written into spec/ by the Makefile targets
+spec/states/
+spec/*_TTrace_*.tla
+spec/*_TTrace_*.bin
+spec/*.old
+spec/canary.cfg
+spec/canary.out

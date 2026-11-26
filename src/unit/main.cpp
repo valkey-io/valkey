@@ -80,6 +80,26 @@ int main(int argc, char **argv) {
     // The following line must be executed to initialize GoogleTest before running the tests.
     ::testing::InitGoogleMock(&argc, argv);
 
+    // The tests are designed to run one per process, and they do not clean up
+    // all the global state they change. Refuse a run that would execute every
+    // test in one process. The filter is read from GoogleTest, so it also
+    // covers the GTEST_FILTER environment variable.
+    // gtest-parallel lists the tests and then runs each one with its own filter.
+    // Only the positive part, before the first '-', selects tests. If it is
+    // empty, as in "-Suite.Test", GoogleTest treats it as "*". Keep a copy of
+    // the flag: with the Abseil flag backend GTEST_FLAG_GET returns a temporary.
+    std::string filter_flag = GTEST_FLAG_GET(filter);
+    const char *filter = filter_flag.c_str();
+    const char *dash = strchr(filter, '-');
+    size_t positive_len = dash ? (size_t)(dash - filter) : strlen(filter);
+    bool runs_everything = positive_len == 0 || (positive_len == 1 && filter[0] == '*');
+    if (runs_everything && !GTEST_FLAG_GET(list_tests) &&
+        GTEST_FLAG_GET(internal_run_death_test).empty()) {
+        fprintf(stderr, "Unit tests are designed to run one per process. Use 'make test-unit' to run them all, "
+                        "or choose tests with --gtest_filter=Suite.Test (for example to debug one test in gdb).\n");
+        return 2;
+    }
+
     // Set death test style to threadsafe when running under Valgrind
     if (valgrind) {
         GTEST_FLAG_SET(death_test_style, "threadsafe");

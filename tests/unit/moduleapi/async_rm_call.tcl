@@ -222,6 +222,24 @@ foreach cmd {rm_call vm_call_argv } {
             assert_equal [r llen l] {1}
             $rd close
         }
+
+        test "blocking RM_Call abort of WAIT - $cmd" {
+            set rd [valkey_deferring_client]
+
+            $rd client id
+            set client_id [$rd read]
+
+            # There are no replicas, so WAIT stays blocked until the call is aborted.
+            $rd do_${cmd}_async wait 1 0
+            wait_for_blocked_clients_count 1
+
+            r client kill ID $client_id
+            assert_error {*error reading reply*} {$rd read}
+
+            wait_for_blocked_clients_count 0
+            assert_equal {PONG} [r ping]
+            $rd close
+        }
     }
 
     start_server {tags {"modules"}} {

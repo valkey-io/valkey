@@ -150,6 +150,21 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
     set R5_id [R 5 CLUSTER MYID]
     R 0 SET "{aga}2" banana
 
+    test "CLUSTER SETSLOT waiting for the replicas is counted once in the command stats" {
+        # SETSLOT only waits for online replicas.
+        wait_replica_online [Rn 0]
+        R 0 CONFIG RESETSTAT
+        # The primary replicates the command and blocks the client until the
+        # replica acks it, and only then it executes the command.
+        assert_equal {OK} [R 0 CLUSTER SETSLOT 609 MIGRATING $R1_id]
+        wait_for_slot_state 3 "\[609->-$R1_id\]"
+        assert_match {calls=1,*} [cmdrstat cluster\\|setslot [Rn 0]]
+
+        assert_equal {OK} [R 0 CLUSTER SETSLOT 609 STABLE]
+        wait_for_slot_state 3 ""
+        assert_match {calls=2,*} [cmdrstat cluster\\|setslot [Rn 0]]
+    }
+
     test "Slot migration states are replicated" {
         test_defer_fail { normalize_cluster $shard_pairs }
         # Validate initial states

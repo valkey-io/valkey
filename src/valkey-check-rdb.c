@@ -44,7 +44,7 @@
 
 void createSharedObjects(void);
 void rdbLoadProgressCallback(rio *r, const void *buf, size_t len);
-void computeDatasetProfile(int dbid, robj *keyobj, robj *o, long long expiretime);
+void computeDatasetProfile(size_t stats_idx, robj *keyobj, robj *o, long long expiretime);
 
 int rdbCheckMode = 0;
 int rdbCheckStats = 0;
@@ -87,12 +87,15 @@ struct {
     int doing;                     /* The state while reading the RDB. */
     int error_set;                 /* True if error is populated. */
     char error[1024];
-    int databases;
     int format;
 
     /* stats */
-    rdbStats **stats; /* stats group by datatype,encoding,isexpired */
+    rdbStats **stats; /* stats group by datatype,encoding,isexpired, OBJ_TYPE_MAX blocks per DB */
     int stats_num;
+    uint64_t *stats_dbids; /* DB ID of each block group, in order of first use */
+    size_t stats_dbs_num;  /* number of block groups: DB 0 plus each selected DB */
+    dict *stats_dbs_map;   /* DB ID -> position of its block group in stats_dbids */
+    size_t stats_idx;      /* first block of the selected DB, index into stats */
     char *stats_output;
 } rdbstate;
 
@@ -263,12 +266,36 @@ void freeRdbProfile(rdbStats **statss, size_t num) {
     zfree(statss);
 }
 
-void computeDatasetProfile(int dbid, robj *keyobj, robj *o, long long expiretime) {
-    UNUSED(dbid);
+/* Keys are DB IDs stored in the key pointer itself. The default hash and key
+ * compare work on the pointer bits, which is what we want here. */
+static dictType statsDbsMapType = {
+    .entryGetKey = dictEntryGetKey,
+    .entryDestructor = zfree,
+};
+
+/* Return the index in rdbstate.stats of the first block of DB 'dbid'. The
+ * blocks of a DB are allocated the first time the file selects it, so the
+ * cost follows the number of selected DBs and not the highest DB ID. */
+static size_t statsIndexForDb(uint64_t dbid) {
+    dictEntry *existing;
+    dictEntry *de = dictAddRaw(rdbstate.stats_dbs_map, (void *)(uintptr_t)dbid, &existing);
+    if (de == NULL) return dictGetUnsignedIntegerVal(existing) * OBJ_TYPE_MAX;
+
+    size_t n = rdbstate.stats_dbs_num;
+    dictSetUnsignedIntegerVal(de, n);
+    rdbstate.stats_dbids = zrealloc(rdbstate.stats_dbids, sizeof(uint64_t) * (n + 1));
+    rdbstate.stats_dbids[n] = dbid;
+    rdbstate.stats = tryExpandRdbStats(rdbstate.stats, rdbstate.stats_num, (n + 1) * OBJ_TYPE_MAX);
+    rdbstate.stats_num = (n + 1) * OBJ_TYPE_MAX;
+    rdbstate.stats_dbs_num = n + 1;
+    return n * OBJ_TYPE_MAX;
+}
+
+void computeDatasetProfile(size_t stats_idx, robj *keyobj, robj *o, long long expiretime) {
     UNUSED(keyobj);
     char buf[128];
 
-    rdbStats *stats = rdbstate.stats[o->type + dbid * OBJ_TYPE_MAX];
+    rdbStats *stats = rdbstate.stats[stats_idx + o->type];
 
     stats->all_key_size += sdslen(objectGetVal(keyobj));
     stats->keys++;
@@ -480,6 +507,16 @@ void rdbStatsPrintInfo(rdbStats *stats, char *field_string, char *value, size_t 
     }
 }
 
+typedef struct {
+    uint64_t dbid;
+    size_t stats_idx;
+} rdbStatsDb;
+
+static int compareRdbStatsDb(const void *a, const void *b) {
+    const rdbStatsDb *x = a, *y = b;
+    return (x->dbid > y->dbid) - (x->dbid < y->dbid);
+}
+
 /* Show a few stats collected into 'rdbstate' */
 void rdbShowGenericInfo(void) {
     printf("[info] %lu keys read\n", rdbstate.keys);
@@ -505,8 +542,17 @@ void rdbShowGenericInfo(void) {
             }
         }
 
+        /* Report the DBs in ascending ID order, whatever order the file selects them in. */
+        rdbStatsDb *dbs = zmalloc(sizeof(rdbStatsDb) * rdbstate.stats_dbs_num);
+        for (size_t d = 0; d < rdbstate.stats_dbs_num; d++) {
+            dbs[d].dbid = rdbstate.stats_dbids[d];
+            dbs[d].stats_idx = d * OBJ_TYPE_MAX;
+        }
+        qsort(dbs, rdbstate.stats_dbs_num, sizeof(rdbStatsDb), compareRdbStatsDb);
+
         char field_string[80];
-        for (int dbid = 0; dbid <= rdbstate.databases; dbid++) {
+        for (size_t d = 0; d < rdbstate.stats_dbs_num; d++) {
+            const int dbid = (int)dbs[d].dbid;
             for (size_t i = 0; stats_field_string[i] != NULL; i++) {
                 if (rdbstate.format == OUTPUT_FORMAT_TABLE) {
                     snprintf(field_string, sizeof(field_string), "db.%d.%s", dbid, stats_field_string[i]);
@@ -516,7 +562,7 @@ void rdbShowGenericInfo(void) {
                 }
 
                 for (size_t obj_type = 0; obj_type < OBJ_TYPE_MAX; obj_type++) {
-                    const size_t stats_idx = obj_type + dbid * OBJ_TYPE_MAX;
+                    const size_t stats_idx = dbs[d].stats_idx + obj_type;
                     rdbStats *stats = rdbstate.stats[stats_idx];
 
                     if (rdbstate.format == OUTPUT_FORMAT_INFO) {
@@ -544,6 +590,7 @@ void rdbShowGenericInfo(void) {
                     printf("\n");
             }
         }
+        zfree(dbs);
         if (rdbCheckOutput) {
             dup2(saved_stdout, STDOUT_FILENO);
             close(stats_fd);
@@ -741,17 +788,8 @@ int redis_check_rdb(char *rdbfilename, FILE *fp) {
             if ((dbid = rdbLoadLen(rdb, NULL)) == RDB_LENERR) goto eoferr;
             rdbCheckInfo("Selecting DB ID %llu", (unsigned long long)dbid);
             selected_dbid = dbid;
-            if (selected_dbid > rdbstate.databases) {
-                rdbstate.databases = dbid;
-            }
-            /* The stats report covers every selected DB, including ones with no keys. */
-            if (rdbCheckStats) {
-                int max_stats_num = (rdbstate.databases + 1) * OBJ_TYPE_MAX;
-                if (max_stats_num > rdbstate.stats_num) {
-                    rdbstate.stats = tryExpandRdbStats(rdbstate.stats, rdbstate.stats_num, max_stats_num);
-                    rdbstate.stats_num = max_stats_num;
-                }
-            }
+            /* Locate the stats of this DB once here. Keys of the DB reuse the index. */
+            if (rdbCheckStats) rdbstate.stats_idx = statsIndexForDb(dbid);
 
             continue; /* Read type again. */
         } else if (type == RDB_OPCODE_RESIZEDB) {
@@ -870,7 +908,7 @@ int redis_check_rdb(char *rdbfilename, FILE *fp) {
         val = rdbLoadObject(type, rdb, objectGetVal(key), selected_dbid, &error, RDBFLAGS_NONE, 0);
         /* Match the server when loading legacy empty containers. */
         if (val == NULL && error != RDB_LOAD_ERR_EMPTY_KEY) goto eoferr;
-        if (val && rdbCheckStats) computeDatasetProfile(selected_dbid, key, val, expiretime);
+        if (val && rdbCheckStats) computeDatasetProfile(rdbstate.stats_idx, key, val, expiretime);
         /* Check if the key already expired. */
         if (expiretime != -1 && expiretime < now) rdbstate.already_expired++;
         if (expiretime != -1) rdbstate.expires++;
@@ -1003,7 +1041,12 @@ int redis_check_rdb_main(int argc, char **argv, FILE *fp) {
     rdbstate.key_type = -1;
     rdbstate.stats = initRdbStats(OBJ_TYPE_MAX);
     rdbstate.stats_num = OBJ_TYPE_MAX;
-    rdbstate.databases = 0;
+    rdbstate.stats_dbids = zmalloc(sizeof(uint64_t));
+    rdbstate.stats_dbids[0] = 0;
+    rdbstate.stats_dbs_num = 1;
+    rdbstate.stats_dbs_map = dictCreate(&statsDbsMapType);
+    dictSetUnsignedIntegerVal(dictAddRaw(rdbstate.stats_dbs_map, (void *)(uintptr_t)0, NULL), 0);
+    rdbstate.stats_idx = 0;
     rdbstate.functions_num = 0;
     rdbstate.lua_scripts = 0;
 
@@ -1027,5 +1070,7 @@ int redis_check_rdb_main(int argc, char **argv, FILE *fp) {
     }
     if (fp) return (retval == 0) ? C_OK : C_ERR;
     freeRdbProfile(rdbstate.stats, rdbstate.stats_num);
+    zfree(rdbstate.stats_dbids);
+    dictRelease(rdbstate.stats_dbs_map);
     exit(retval);
 }

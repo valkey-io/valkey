@@ -4895,8 +4895,11 @@ int clusterProcessPacket(clusterLink *link) {
          * checks the current state on every heartbeat, so it does not depend
          * on which message first carried the sender's newer epoch. It runs
          * after the ping extensions, so that it uses the shard id the sender
-         * has now, which may be new in this packet. */
-        if (sender && sender_claims_to_be_primary && sender->numslots == 0 && isAnySlotInManualMigratingState())
+         * has now, which may be new in this packet. A delayed packet with an
+         * older epoch than we have for the sender still applies its shard id,
+         * so it must not move migrations into that shard. */
+        if (sender && sender_claims_to_be_primary && sender->numslots == 0 &&
+            sender_claimed_config_epoch >= sender->configEpoch && isAnySlotInManualMigratingState())
             clusterRepairMigrationTargetsOfPrimary(sender, sender_claimed_config_epoch, msg->myslots);
     } else if (type == CLUSTERMSG_TYPE_FAIL) {
         clusterNode *failing;

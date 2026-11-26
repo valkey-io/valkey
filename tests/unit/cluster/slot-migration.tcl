@@ -1174,6 +1174,79 @@ start_cluster 3 5 {tags {tls:skip external:skip cluster} overrides {cluster-allo
     }
 }
 
+# A delayed heartbeat from a slot-less primary, with an older epoch than the
+# observer has for it, still applies the shard id it carries. R6 has moved to
+# another shard at a newer epoch, and the target R7 of the old shard has
+# failed. R6's delayed heartbeat from the old shard must not move slot 609's
+# migration to R6.
+start_cluster 3 5 {tags {tls:skip external:skip cluster} overrides {cluster-allow-replica-migration no cluster-node-timeout 5000} } {
+
+    create_empty_shard 6 7
+    set R0_id [R 0 CLUSTER MYID]
+    set R6_id [R 6 CLUSTER MYID]
+    set R7_id [R 7 CLUSTER MYID]
+
+    test "Migration target is kept when a delayed heartbeat carries an older epoch and shard id" {
+        assert_equal {OK} [R 0 CLUSTER SETSLOT 609 MIGRATING $R6_id]
+        assert_equal {OK} [R 6 CLUSTER SETSLOT 609 IMPORTING $R0_id]
+        wait_for_slot_state 3 "\[609->-$R6_id\]"
+
+        set E6 [dict get [cluster_get_myself 6] config_epoch]
+        set shard_id [R 6 CLUSTER MYSHARDID]
+        set new_shard_id "0123456789abcdef0123456789abcdef01234567"
+
+        fail_server 6 7
+        set E7 [dict get [cluster_get_myself 7] config_epoch]
+        assert {$E7 > $E6}
+        wait_for_slot_state 3 "\[609->-$R7_id\]"
+        wait_for_condition 100 100 {
+            [cluster_node_is_replica_of 3 $R6_id $R7_id]
+        } else {
+            fail "R3 never recorded R6 as a replica of R7"
+        }
+
+        set R6_port [srv -6 port]
+        set R6_cport [expr {$R6_port + 10000}]
+        pause_process [srv -6 pid]
+        test_defer { resume_process [srv -6 pid] }
+
+        # R6 becomes a primary of another shard, first at a lower epoch than
+        # R7's, then at a newer one. R7 is in another shard by then, so the
+        # migration stays with R7.
+        set E_hi [expr {$E7 + 5}]
+        foreach e [list $E6 $E_hi] {
+            send_cluster_packet [srv -3 port] [create_primary_ping $R6_id $R6_port $R6_cport $e $e $new_shard_id]
+        }
+        wait_for_condition 1000 10 {
+            [dict get [cluster_get_node_by_id 3 $R6_id] config_epoch] == $E_hi &&
+            [node_shard_id 3 $R6_id] eq $new_shard_id
+        } else {
+            fail "R3 did not record R6 in its new shard at config epoch $E_hi"
+        }
+        assert_equal "\[609->-$R7_id\]" [get_open_slots 3]
+
+        # The target R7 fails.
+        pause_process [srv -7 pid]
+        test_defer { resume_process [srv -7 pid] }
+        wait_for_condition 1000 50 {
+            [cluster_has_flag [cluster_get_node_by_id 3 $R7_id] fail]
+        } else {
+            fail "R3 never marked R7 as failed"
+        }
+
+        # A delayed heartbeat of R6 from the old shard, at an epoch above R7's
+        # but below the one R3 has for R6.
+        send_cluster_packet [srv -3 port] [create_primary_ping $R6_id $R6_port $R6_cport \
+            [expr {$E7 + 1}] [expr {$E7 + 1}] $shard_id]
+        wait_for_condition 1000 10 {
+            [node_shard_id 3 $R6_id] eq $shard_id
+        } else {
+            fail "R3 did not process the delayed heartbeat"
+        }
+        assert_equal "\[609->-$R7_id\]" [get_open_slots 3]
+    }
+}
+
 # A replica's PING with a FORGOTTEN_NODE extension naming $forgotten.
 proc create_replica_ping_forgetting {sender_name sender_port sender_cport epoch primary_name shard_id forgotten} {
     set CLUSTERMSG_TYPE_PING 0
@@ -1206,6 +1279,10 @@ start_cluster 3 3 {tags {tls:skip external:skip cluster} overrides {cluster-node
         }
         set R3_port [srv -3 port]
         set R3_cport [expr {$R3_port + 10000}]
+        # The MEET advertises R3's real address. If R3 answered R1's handshake,
+        # R1 would delete the handshake node together with this link.
+        pause_process [srv -3 pid]
+        test_defer { resume_process [srv -3 pid] }
         set sock [open_handshake_bound_link 1 $R3_port $R3_cport]
         set hs_id {}
         wait_for_condition 1000 10 {

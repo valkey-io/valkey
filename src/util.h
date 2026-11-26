@@ -31,6 +31,7 @@
 #define VALKEY_UTIL_H
 
 #include <stdint.h>
+#include <time.h>
 #include "sds.h"
 
 /* Anti-warning macro... */
@@ -97,7 +98,7 @@ int double2ll(double d, long long *out);
 int version2num(const char *version);
 int yesnotoi(char *s);
 sds getAbsolutePath(char *filename);
-long getTimeZone(void);
+long utcOffsetFromLocaltime(time_t now);
 int pathIsBaseName(char *path);
 int dirCreateIfMissing(char *dname);
 int dirExists(char *dname);

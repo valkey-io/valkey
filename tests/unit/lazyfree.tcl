@@ -90,4 +90,61 @@ start_server {tags {"lazyfree"}} {
         }
         assert_equal [s lazyfreed_objects] 0
     } {} {needs:config-resetstat}
+
+    test "small stream with a consumer group is freed synchronously" {
+        r config resetstat
+        r xadd s * a b
+        r xgroup create s g 0
+        r xreadgroup GROUP g c STREAMS s >
+        r unlink s
+
+        wait_for_condition 50 100 {
+            [s lazyfree_pending_objects] == 0
+        } else {
+            fail "lazyfree isn't done"
+        }
+        assert_equal [s lazyfreed_objects] 0
+    } {} {needs:config-resetstat}
+
+    test "lazy free a stream whose large PEL is not in the first cgroup" {
+        r config resetstat
+        # Only the middle group "b" has a PEL: groups "a" (first) and "c" (last)
+        # are empty, so sampling a single group underestimates the effort.
+        r xgroup create s a $ MKSTREAM
+        r xgroup create s b $
+        r xgroup create s c $
+        for {set j 0} {$j < 1000} {incr j} {
+            r xadd s * f v
+        }
+        r xreadgroup GROUP b c STREAMS s >
+        # Drop the entries so that only the PEL of "b" is large.
+        r xtrim s MAXLEN 0
+        assert_equal 1000 [lindex [r xpending s b] 0]
+        r unlink s
+
+        # make sure it was lazy freed
+        wait_for_condition 50 100 {
+            [s lazyfree_pending_objects] == 0 && [s lazyfreed_objects] == 1
+        } else {
+            fail "lazyfree isn't done"
+        }
+        assert_equal [s lazyfreed_objects] 1
+    } {} {needs:config-resetstat}
+
+    test "lazy free a stream with many consumers and an empty PEL" {
+        r config resetstat
+        r xgroup create s g $ MKSTREAM
+        for {set j 0} {$j < 1000} {incr j} {
+            r xgroup createconsumer s g c$j
+        }
+        r unlink s
+
+        # make sure it was lazy freed
+        wait_for_condition 50 100 {
+            [s lazyfree_pending_objects] == 0 && [s lazyfreed_objects] == 1
+        } else {
+            fail "lazyfree isn't done"
+        }
+        assert_equal [s lazyfreed_objects] 1
+    } {} {needs:config-resetstat}
 }

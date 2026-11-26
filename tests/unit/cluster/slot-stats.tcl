@@ -829,9 +829,38 @@ start_cluster 1 0 {tags {external:skip cluster} overrides {cluster-databases 16 
     }
 
     test "CLUSTER SLOT-STATS ORDERBY non key-count metric sums keys over databases" {
+        R 0 CONFIG RESETSTAT
         populate_two_dbs $key
         set slot_stats [convert_array_into_dict [R 0 CLUSTER SLOT-STATS ORDERBY cpu-usec LIMIT 16384]]
         assert_equal 3 [dict get [dict get $slot_stats $key_slot] key-count]
+        set limited_stats [convert_array_into_dict [R 0 CLUSTER SLOT-STATS ORDERBY network-bytes-in LIMIT 1]]
+        assert_equal 1 [dict size $limited_stats]
+        assert_equal 3 [dict get [dict get $limited_stats $key_slot] key-count]
+        set near_full_stats [R 0 CLUSTER SLOT-STATS ORDERBY network-bytes-in LIMIT 16383]
+        assert_equal 16383 [llength $near_full_stats]
+        assert_equal $key_slot [lindex $near_full_stats 0 0]
+        assert_equal 3 [dict get [lindex $near_full_stats 0 1] key-count]
+    }
+
+    test "CLUSTER SLOT-STATS finds keys when only one created database is nonempty" {
+        R 0 FLUSHALL
+        R 0 CONFIG RESETSTAT
+        R 0 SELECT 9
+        R 0 SET $key v9
+        R 0 SELECT 2
+        R 0 SET $key v2
+        R 0 DEL $key
+        assert_equal 1 [slot_key_count $key_slot]
+        set ranked [R 0 CLUSTER SLOT-STATS ORDERBY key-count LIMIT 1]
+        assert_equal $key_slot [lindex $ranked 0 0]
+        assert_equal 1 [dict get [lindex $ranked 0 1] key-count]
+        set ranked [R 0 CLUSTER SLOT-STATS ORDERBY network-bytes-in LIMIT 1]
+        assert_equal $key_slot [lindex $ranked 0 0]
+        assert_equal 1 [dict get [lindex $ranked 0 1] key-count]
+        R 0 SELECT 9
+        R 0 DEL $key
+        R 0 SELECT 0
+        assert_equal 0 [slot_key_count $key_slot]
     }
 
     test "CLUSTER SLOT-STATS key-count after DEBUG RELOAD" {
@@ -901,6 +930,56 @@ start_cluster 1 1 {tags {external:skip cluster} overrides {cluster-databases 16}
 
         set slot_stats [convert_array_into_dict [R 1 CLUSTER SLOT-STATS SLOTSRANGE $key_slot $key_slot]]
         assert_equal 3 [dict get [dict get $slot_stats $key_slot] key-count]
+    }
+}
+
+start_cluster 2 1 {tags {external:skip cluster} overrides {cluster-databases 16 cluster-allow-replica-migration no}} {
+    test "CLUSTER SLOT-STATS counts keys in a slot still importing on a replica" {
+        # Slot 16383 starts on R 1. R 2 replicates the destination, R 0.
+        set key_slot 16383
+        R 1 SELECT 9
+        R 1 SET "{6ZJ}1" v9
+        R 1 SET "{6ZJ}2" v9
+        R 1 SELECT 0
+
+        R 0 DEBUG SLOTMIGRATION PREVENT-FAILOVER 1
+        test_defer_fail {R 0 DEBUG SLOTMIGRATION PREVENT-FAILOVER 0}
+        assert_equal OK [R 1 CLUSTER MIGRATESLOTS SLOTSRANGE $key_slot $key_slot NODE [R 0 CLUSTER MYID]]
+        R 2 SELECT 9
+        wait_for_condition 100 100 {
+            [R 2 CLUSTER COUNTKEYSINSLOT $key_slot] == 2
+        } else {
+            fail "Replica did not receive the imported keys"
+        }
+
+        # Let R 2 learn about the new owner over the cluster bus while its
+        # replication link is down, so it has not processed the import finish.
+        R 0 ACL SETUSER default -psync -sync
+        test_defer_fail {R 0 ACL SETUSER default +psync +sync}
+        R 0 CLIENT KILL TYPE replica
+        wait_for_condition 100 100 {
+            [s -2 master_link_status] eq "down"
+        } else {
+            fail "Replica link did not go down"
+        }
+
+        R 0 DEBUG SLOTMIGRATION PREVENT-FAILOVER 0
+        wait_for_condition 100 100 {
+            [llength [R 2 CLUSTER SLOT-STATS SLOTSRANGE $key_slot $key_slot]] == 1
+        } else {
+            fail "Replica did not see its primary take the slot"
+        }
+        assert_equal 0 [R 2 DBSIZE]
+        assert_equal 2 [R 2 CLUSTER COUNTKEYSINSLOT $key_slot]
+        set slot_stats [R 2 CLUSTER SLOT-STATS SLOTSRANGE $key_slot $key_slot]
+        assert_equal 2 [dict get [lindex $slot_stats 0 1] key-count]
+
+        R 0 ACL SETUSER default +psync +sync
+        wait_for_condition 100 100 {
+            [s -2 master_link_status] eq "up" && [R 2 DBSIZE] == 2
+        } else {
+            fail "Replica did not finish the import"
+        }
     }
 }
 

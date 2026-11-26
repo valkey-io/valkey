@@ -2572,6 +2572,11 @@ int VM_BlockedClientMeasureTimeEnd(ValkeyModuleBlockedClient *bc) {
     return VALKEYMODULE_OK;
 }
 
+/* Set while VM_RdbSave() writes to a module stream. */
+static int moduleRdbStreamSaving = 0;
+/* Set while VM_RdbLoad() reads from a module stream. */
+static int moduleRdbStreamLoading = 0;
+
 /* This API allows modules to let the server process background tasks, and some
  * commands during long blocking execution of a module command.
  * The module can call this API periodically.
@@ -2597,6 +2602,9 @@ void VM_Yield(ValkeyModuleCtx *ctx, int flags, const char *busy_reply) {
     static int yield_nesting = 0;
     /* Avoid nested calls to VM_Yield */
     if (yield_nesting) return;
+    /* The dataset is iterated while saving to a module stream, and the events
+     * could change or free it. */
+    if (moduleRdbStreamSaving) return;
     yield_nesting++;
 
     long long now = getMonotonicUs();
@@ -14882,12 +14890,17 @@ int VM_LoadConfigs(ValkeyModuleCtx *ctx) {
  * -------------------------------------------------------------------------- */
 
 #define VALKEYMODULE_RDB_STREAM_FILE 1
+#define VALKEYMODULE_RDB_STREAM_MODULE 2
 
 typedef struct ValkeyModuleRdbStream {
     int type;
 
     union {
         char *filename;
+        struct {
+            ValkeyModuleIOCallbacks callbacks;
+            void *ctx;
+        } io;
     } data;
 } ValkeyModuleRdbStream;
 
@@ -14903,19 +14916,223 @@ ValkeyModuleRdbStream *VM_RdbStreamCreateFromFile(const char *filename) {
     return stream;
 }
 
+/* Create a stream object to save/load RDB to/from module provided I/O
+ * callbacks, for example to store snapshots in a remote storage.
+ *
+ * `callbacks->version` must be set to VALKEYMODULE_IO_CALLBACKS_VERSION. The
+ * callbacks are copied, so the struct doesn't need to outlive this call. `ctx`
+ * is passed as is to every callback and is owned by the module.
+ *
+ * The callbacks are:
+ *
+ * - `write_func`: required by VM_RdbSave(). Must write all `len` bytes and
+ *   return VALKEYMODULE_OK, or return VALKEYMODULE_ERR on failure.
+ * - `read_func`: required by VM_RdbLoad(). Reads up to `len` bytes and returns
+ *   the number of bytes read, 0 on end of stream, or -1 on error.
+ * - `flush_func`: optional. Called after the RDB was fully written. Returns
+ *   VALKEYMODULE_OK, or VALKEYMODULE_ERR to make VM_RdbSave() fail.
+ * - `close_func`: optional. Called once when VM_RdbSave() or VM_RdbLoad() is
+ *   done with the stream, even if no read or write succeeded. It isn't called
+ *   if the call fails before using the stream, i.e. with EINVAL, EBUSY or
+ *   ENOTSUP.
+ *   `commit` is 1 if the operation succeeded and 0 if it failed. When saving,
+ *   a module should only make the written data visible (e.g. complete an
+ *   upload) if `commit` is 1, and returning VALKEYMODULE_ERR makes
+ *   VM_RdbSave() fail. The return value is ignored when loading.
+ *
+ * The callbacks are called synchronously from the thread that calls
+ * VM_RdbSave() or VM_RdbLoad(), usually the main thread, and the server can't
+ * interrupt a callback that is waiting. Callbacks that do network I/O should
+ * apply their own timeouts and fail instead of blocking indefinitely. The
+ * callbacks of a save can't process events, see VM_RdbSave(). To save
+ * without blocking the server, a module can call VM_RdbSave() in a child
+ * created with VM_Fork(). In that case, any network client used by the
+ * callbacks should be created in the child, since threads of the parent don't
+ * exist in the child.
+ *
+ * Returns NULL and sets errno to EINVAL if `callbacks` is NULL or its version
+ * is not supported.
+ *
+ * This function returns a pointer to ValkeyModuleRdbStream which is owned
+ * by the caller. It requires a call to VM_RdbStreamFree() to free
+ * the object. The stream must stay valid until VM_RdbSave() or VM_RdbLoad()
+ * returns, so it must not be freed from the callbacks or from server events
+ * fired during the call. */
+ValkeyModuleRdbStream *VM_RdbStreamCreateFromCallbacks(const ValkeyModuleIOCallbacks *callbacks, void *ctx) {
+    if (!callbacks || callbacks->version == 0 || callbacks->version > VALKEYMODULE_IO_CALLBACKS_VERSION) {
+        errno = EINVAL;
+        return NULL;
+    }
+    ValkeyModuleRdbStream *stream = zcalloc(sizeof(*stream));
+    stream->type = VALKEYMODULE_RDB_STREAM_MODULE;
+    /* Copy the fields one by one rather than the whole struct, since a module
+     * built with an older header passes a smaller struct. Fields added in later
+     * versions must only be copied if `callbacks->version` has them. */
+    stream->data.io.callbacks.version = callbacks->version;
+    stream->data.io.callbacks.write_func = callbacks->write_func;
+    stream->data.io.callbacks.read_func = callbacks->read_func;
+    stream->data.io.callbacks.flush_func = callbacks->flush_func;
+    stream->data.io.callbacks.close_func = callbacks->close_func;
+    stream->data.io.ctx = ctx;
+    return stream;
+}
+
 /* Release an RDB stream object. */
 void VM_RdbStreamFree(ValkeyModuleRdbStream *stream) {
     switch (stream->type) {
     case VALKEYMODULE_RDB_STREAM_FILE: zfree(stream->data.filename); break;
+    case VALKEYMODULE_RDB_STREAM_MODULE: break;
     default: serverAssert(0); break;
     }
     zfree(stream);
+}
+
+/* rio backend for VALKEYMODULE_RDB_STREAM_MODULE streams. It buffers the many
+ * small reads and writes of the RDB code, so the callbacks get large chunks. */
+#define MODULE_RDB_STREAM_BUF_SIZE (64 * 1024)
+
+static int moduleRdbStreamWriteBuffer(rio *r) {
+    ValkeyModuleRdbStream *stream = r->io.module.stream;
+    if (r->io.module.buf_len == 0) return 1;
+    if (stream->data.io.callbacks.write_func(stream->data.io.ctx, r->io.module.buf, r->io.module.buf_len) !=
+        VALKEYMODULE_OK)
+        return 0;
+    r->io.module.buf_len = 0;
+    return 1;
+}
+
+static size_t moduleRdbStreamRioWrite(rio *r, const void *buf, size_t len) {
+    ValkeyModuleRdbStream *stream = r->io.module.stream;
+    if (r->io.module.buf_len + len > MODULE_RDB_STREAM_BUF_SIZE) {
+        if (!moduleRdbStreamWriteBuffer(r)) return 0;
+    }
+    if (len >= MODULE_RDB_STREAM_BUF_SIZE) {
+        if (stream->data.io.callbacks.write_func(stream->data.io.ctx, buf, len) != VALKEYMODULE_OK) return 0;
+    } else {
+        memcpy(r->io.module.buf + r->io.module.buf_len, buf, len);
+        r->io.module.buf_len += len;
+    }
+    r->io.module.pos += len;
+    return 1;
+}
+
+static ssize_t moduleRdbStreamRioReadSome(rio *r, void *buf, size_t len) {
+    ValkeyModuleRdbStream *stream = r->io.module.stream;
+    size_t avail = r->io.module.buf_len - r->io.module.buf_pos;
+    ssize_t nread;
+
+    if (avail == 0 && len >= MODULE_RDB_STREAM_BUF_SIZE) {
+        nread = stream->data.io.callbacks.read_func(stream->data.io.ctx, buf, len);
+        if (nread < 0 || (size_t)nread > len) return -1;
+        r->io.module.pos += nread;
+        return nread;
+    }
+    if (avail == 0) {
+        nread = stream->data.io.callbacks.read_func(stream->data.io.ctx, r->io.module.buf, MODULE_RDB_STREAM_BUF_SIZE);
+        if (nread < 0 || nread > MODULE_RDB_STREAM_BUF_SIZE) return -1;
+        if (nread == 0) return 0;
+        r->io.module.buf_len = nread;
+        r->io.module.buf_pos = 0;
+        avail = nread;
+    }
+    if (len > avail) len = avail;
+    memcpy(buf, r->io.module.buf + r->io.module.buf_pos, len);
+    r->io.module.buf_pos += len;
+    r->io.module.pos += len;
+    return len;
+}
+
+static size_t moduleRdbStreamRioRead(rio *r, void *buf, size_t len) {
+    char *p = buf;
+    while (len) {
+        ssize_t nread = moduleRdbStreamRioReadSome(r, p, len);
+        if (nread <= 0) return 0;
+        p += nread;
+        len -= nread;
+    }
+    return 1;
+}
+
+static off_t moduleRdbStreamRioTell(rio *r) {
+    return r->io.module.pos;
+}
+
+static int moduleRdbStreamRioFlush(rio *r) {
+    ValkeyModuleRdbStream *stream = r->io.module.stream;
+    if (!moduleRdbStreamWriteBuffer(r)) return 0;
+    if (!stream->data.io.callbacks.flush_func) return 1;
+    return stream->data.io.callbacks.flush_func(stream->data.io.ctx) == VALKEYMODULE_OK;
+}
+
+static void moduleRdbStreamInitRio(rio *r, ValkeyModuleRdbStream *stream) {
+    memset(r, 0, sizeof(*r));
+    r->read = moduleRdbStreamRioRead;
+    r->write = moduleRdbStreamRioWrite;
+    r->tell = moduleRdbStreamRioTell;
+    r->flush = moduleRdbStreamRioFlush;
+    r->read_some = moduleRdbStreamRioReadSome;
+    r->io.module.stream = stream;
+    r->io.module.buf = zmalloc(MODULE_RDB_STREAM_BUF_SIZE);
+}
+
+static void moduleRdbStreamFreeRio(rio *r) {
+    zfree(r->io.module.buf);
+    r->io.module.buf = NULL;
+}
+
+/* Call the optional close callback of a module stream. Returns VALKEYMODULE_OK
+ * if there is no callback. */
+static int moduleRdbStreamClose(ValkeyModuleRdbStream *stream, int commit) {
+    if (!stream->data.io.callbacks.close_func) return VALKEYMODULE_OK;
+    return stream->data.io.callbacks.close_func(stream->data.io.ctx, commit);
+}
+
+/* Save the dataset to a module stream, like rdbSaveToFile() does for a file.
+ * Returns C_OK only if the stream was fully written and committed. */
+static int moduleRdbSaveToStream(ValkeyModuleRdbStream *stream) {
+    rio rdb;
+    char *err_op = NULL;
+
+    moduleRdbStreamSaving = 1;
+    startSaving(RDBFLAGS_NONE);
+    moduleRdbStreamInitRio(&rdb, stream);
+    if (rdbSaveRio(rdbCompressionAlgorithm(server.rdb_compression), REPLICA_REQ_NONE, RDB_VERSION, &rdb, NULL, RDBFLAGS_NONE,
+                   NULL) == C_ERR) {
+        err_op = "rdbSaveRio";
+    } else if (rioFlush(&rdb) == 0) {
+        err_op = "flush";
+    }
+    /* Let the module discard the written data if the save failed. */
+    if (moduleRdbStreamClose(stream, err_op == NULL) != VALKEYMODULE_OK && err_op == NULL) {
+        err_op = "close";
+    }
+    moduleRdbStreamFreeRio(&rdb);
+    if (err_op) serverLog(LL_WARNING, "Error saving DB to module stream (%s)", err_op);
+    stopSaving(err_op == NULL);
+    moduleRdbStreamSaving = 0;
+    return err_op ? C_ERR : C_OK;
 }
 
 /* Load RDB file from the `stream`. Dataset will be cleared first and then RDB
  * file will be loaded.
  *
  * `flags` must be zero. This parameter is for future use.
+ *
+ * For a stream created with VM_RdbStreamCreateFromCallbacks(), read errors
+ * and the format errors detected while loading make this function fail with
+ * errno set to EIO, instead of terminating the server. Not all corruptions
+ * are detected: unless `sanitize-dump-payload` is enabled, a value whose
+ * encoding is corrupt may be loaded and crash the server once accessed. Note
+ * that the dataset is cleared first, so it may be partially loaded after a
+ * failure. In that case, the AOF isn't restarted and `appendonly` is set to
+ * `no`, so that the AOF keeps the previous dataset. The module should enable
+ * it again once the dataset was restored. Module data types that don't set
+ * VALKEYMODULE_OPTIONS_HANDLE_IO_ERRORS still terminate the server on errors
+ * while loading their values.
+ *
+ * Fails with errno set to EBUSY when called while saving to or loading from a
+ * stream created with VM_RdbStreamCreateFromCallbacks(), e.g. from its
+ * callbacks or from the loading events.
  *
  * On success VALKEYMODULE_OK is returned; otherwise, VALKEYMODULE_ERR is returned
  * and errno is set accordingly.
@@ -14929,8 +15146,16 @@ void VM_RdbStreamFree(ValkeyModuleRdbStream *stream) {
 int VM_RdbLoad(ValkeyModuleCtx *ctx, ValkeyModuleRdbStream *stream, int flags) {
     UNUSED(ctx);
 
-    if (!stream || flags != 0) {
+    if (!stream || flags != 0 ||
+        (stream->type == VALKEYMODULE_RDB_STREAM_MODULE && !stream->data.io.callbacks.read_func)) {
         errno = EINVAL;
+        return VALKEYMODULE_ERR;
+    }
+
+    /* Loading from a save to a module stream would free the dataset it
+     * iterates, and a nested load would free the state of the outer one. */
+    if (moduleRdbStreamSaving || moduleRdbStreamLoading) {
+        errno = EBUSY;
         return VALKEYMODULE_ERR;
     }
 
@@ -14964,14 +15189,38 @@ int VM_RdbLoad(ValkeyModuleCtx *ctx, ValkeyModuleRdbStream *stream, int flags) {
      * process next message while we are already in the command callback. */
     if (server.current_client) protectClient(server.current_client);
 
-    serverAssert(stream->type == VALKEYMODULE_RDB_STREAM_FILE);
-    int ret = rdbLoad(stream->data.filename, NULL, RDBFLAGS_EMPTY_DATA);
+    int ret, cleared = 0;
+    if (stream->type == VALKEYMODULE_RDB_STREAM_FILE) {
+        ret = rdbLoad(stream->data.filename, NULL, RDBFLAGS_EMPTY_DATA);
+    } else {
+        serverAssert(stream->type == VALKEYMODULE_RDB_STREAM_MODULE);
+        rio rdb;
+        moduleRdbStreamInitRio(&rdb, stream);
+        moduleRdbStreamLoading = 1;
+        ret = rdbLoadStream(&rdb, "module stream", NULL, RDBFLAGS_EMPTY_DATA);
+        cleared = (rdb.flags & RIO_FLAG_DATA_CLEARED) != 0;
+        moduleRdbStreamFreeRio(&rdb);
+        moduleRdbStreamClose(stream, ret == RDB_OK);
+        moduleRdbStreamLoading = 0;
+    }
 
     if (server.current_client) unprotectClient(server.current_client);
 
     /* Here we need to decide whether to enable the AOF based on the aof_enabled,
-     * since the previous stopAppendOnly sets aof_state to AOF_OFF. */
-    if (server.aof_enabled) startAppendOnly();
+     * since the previous stopAppendOnly sets aof_state to AOF_OFF. The close
+     * callback runs after the load, so it may have started the AOF already,
+     * e.g. with CONFIG SET appendonly. A failed load of a module stream that
+     * cleared the dataset doesn't restart it, so that the AOF keeps the
+     * previous dataset rather than a partially loaded one. */
+    if (server.aof_enabled && server.aof_state == AOF_OFF) {
+        if (ret != RDB_OK && cleared) {
+            server.aof_enabled = 0;
+            serverLog(LL_WARNING, "AOF stays disabled after the failed load of the module stream, so that it keeps the "
+                                  "previous dataset.");
+        } else {
+            startAppendOnly();
+        }
+    }
 
     if (ret != RDB_OK) {
         errno = (ret == RDB_NOT_EXIST) ? ENOENT : EIO;
@@ -14986,6 +15235,17 @@ int VM_RdbLoad(ValkeyModuleCtx *ctx, ValkeyModuleRdbStream *stream, int flags) {
  *
  * `flags` must be zero. This parameter is for future use.
  *
+ * For a stream created with VM_RdbStreamCreateFromCallbacks(), the save
+ * succeeds only if all writes, the optional flush and the optional close
+ * callbacks succeed. The close callback is called with `commit` set to 0 when
+ * the save failed, so the module can discard the partially written data.
+ * The callbacks are called while the dataset is iterated, so they can't
+ * process events: VM_Yield() does nothing, and VM_RdbLoad() and VM_RdbSave()
+ * fail with errno set to EBUSY, also from the persistence events fired by the
+ * save. Like the rdb_save callback of a data type, they must not change the
+ * dataset either, e.g. with VM_Call() or the key API. It also fails with EBUSY
+ * while loading from a stream created with VM_RdbStreamCreateFromCallbacks().
+ *
  * On success VALKEYMODULE_OK is returned; otherwise, VALKEYMODULE_ERR is returned
  * and errno is set accordingly.
  *
@@ -14998,15 +15258,28 @@ int VM_RdbLoad(ValkeyModuleCtx *ctx, ValkeyModuleRdbStream *stream, int flags) {
 int VM_RdbSave(ValkeyModuleCtx *ctx, ValkeyModuleRdbStream *stream, int flags) {
     UNUSED(ctx);
 
-    if (!stream || flags != 0) {
+    if (!stream || flags != 0 ||
+        (stream->type == VALKEYMODULE_RDB_STREAM_MODULE && !stream->data.io.callbacks.write_func)) {
         errno = EINVAL;
         return VALKEYMODULE_ERR;
     }
 
-    serverAssert(stream->type == VALKEYMODULE_RDB_STREAM_FILE);
-
-    if (rdbSaveToFile(stream->data.filename) != C_OK) {
+    /* Saving while loading from a module stream would save a partial dataset. */
+    if (moduleRdbStreamSaving || moduleRdbStreamLoading) {
+        errno = EBUSY;
         return VALKEYMODULE_ERR;
+    }
+
+    if (stream->type == VALKEYMODULE_RDB_STREAM_FILE) {
+        if (rdbSaveToFile(stream->data.filename) != C_OK) {
+            return VALKEYMODULE_ERR;
+        }
+    } else {
+        serverAssert(stream->type == VALKEYMODULE_RDB_STREAM_MODULE);
+        if (moduleRdbSaveToStream(stream) != C_OK) {
+            errno = EIO;
+            return VALKEYMODULE_ERR;
+        }
     }
 
     errno = 0;
@@ -16122,6 +16395,7 @@ void moduleRegisterCoreAPI(void) {
     REGISTER_API(LoadConfigs);
     REGISTER_API(RegisterAuthCallback);
     REGISTER_API(RdbStreamCreateFromFile);
+    REGISTER_API(RdbStreamCreateFromCallbacks);
     REGISTER_API(RdbStreamFree);
     REGISTER_API(RdbLoad);
     REGISTER_API(RdbSave);

@@ -1434,6 +1434,22 @@ typedef struct ValkeyModuleReplyHandlersV1 {
 
 #define ValkeyModuleReplyHandlers ValkeyModuleReplyHandlersV1
 
+/* I/O callbacks for an RDB stream created with ValkeyModule_RdbStreamCreateFromCallbacks().
+ * Every callback receives the `ctx` pointer given at stream creation. */
+typedef int (*ValkeyModuleIOWriteFunc)(void *ctx, const void *buf, size_t len);
+typedef ssize_t (*ValkeyModuleIOReadFunc)(void *ctx, void *buf, size_t len);
+typedef int (*ValkeyModuleIOFlushFunc)(void *ctx);
+typedef int (*ValkeyModuleIOCloseFunc)(void *ctx, int commit);
+
+#define VALKEYMODULE_IO_CALLBACKS_VERSION 1
+typedef struct ValkeyModuleIOCallbacks {
+    uint64_t version;
+    ValkeyModuleIOWriteFunc write_func;
+    ValkeyModuleIOReadFunc read_func;
+    ValkeyModuleIOFlushFunc flush_func;
+    ValkeyModuleIOCloseFunc close_func;
+} ValkeyModuleIOCallbacks;
+
 /* ------------------------- End of common defines ------------------------ */
 
 /* ----------- The rest of the defines are only for modules ----------------- */
@@ -2324,6 +2340,9 @@ VALKEYMODULE_API int (*ValkeyModule_RegisterEnumConfig)(ValkeyModuleCtx *ctx,
                                                         void *privdata) VALKEYMODULE_ATTR;
 VALKEYMODULE_API int (*ValkeyModule_LoadConfigs)(ValkeyModuleCtx *ctx) VALKEYMODULE_ATTR;
 VALKEYMODULE_API ValkeyModuleRdbStream *(*ValkeyModule_RdbStreamCreateFromFile)(const char *filename)VALKEYMODULE_ATTR;
+VALKEYMODULE_API ValkeyModuleRdbStream *(*ValkeyModule_RdbStreamCreateFromCallbacks)(
+    const ValkeyModuleIOCallbacks *callbacks,
+    void *ctx)VALKEYMODULE_ATTR;
 VALKEYMODULE_API void (*ValkeyModule_RdbStreamFree)(ValkeyModuleRdbStream *stream) VALKEYMODULE_ATTR;
 VALKEYMODULE_API int (*ValkeyModule_RdbLoad)(ValkeyModuleCtx *ctx,
                                              ValkeyModuleRdbStream *stream,
@@ -2733,6 +2752,7 @@ static int ValkeyModule_Init(ValkeyModuleCtx *ctx, const char *name, int ver, in
     VALKEYMODULE_GET_API(RegisterEnumConfig);
     VALKEYMODULE_GET_API(LoadConfigs);
     VALKEYMODULE_GET_API(RdbStreamCreateFromFile);
+    VALKEYMODULE_GET_API(RdbStreamCreateFromCallbacks);
     VALKEYMODULE_GET_API(RdbStreamFree);
     VALKEYMODULE_GET_API(RdbLoad);
     VALKEYMODULE_GET_API(RdbSave);

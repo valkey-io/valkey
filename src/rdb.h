@@ -231,6 +231,7 @@ int rdbLoadLenByRef(rio *rdb, int *isencoded, uint64_t *lenptr);
 int rdbGetObjectType(robj *o, int rdbver);
 int rdbLoadObjectType(rio *rdb);
 int rdbLoad(char *filename, rdbSaveInfo *rsi, int rdbflags);
+int rdbLoadStream(rio *rdb, const char *name, rdbSaveInfo *rsi, int rdbflags);
 int rdbSaveBackground(int req, char *filename, rdbSaveInfo *rsi, int rdbflags);
 int rdbStartBgsave(int bgsave_type);
 int resolveBgsaveType(void);

@@ -25,6 +25,15 @@
 #define EXPIRE_GT (1 << 2)
 #define EXPIRE_LT (1 << 3)
 
+/* Return values of the commands that modify item expiration. */
+typedef enum {
+    EXPIRATION_MODIFICATION_NOT_EXIST = -2,       /* the provided object is NULL or the item was not found */
+    EXPIRATION_MODIFICATION_SUCCESSFUL = 1,       /* the expiration time was applied or modified */
+    EXPIRATION_MODIFICATION_FAILED_CONDITION = 0, /* a conditional flag (NX / XX / GT / LT) was not met */
+    EXPIRATION_MODIFICATION_FAILED = -1,          /* the modification failed (e.g. HPERSIST on an item without expiration) */
+    EXPIRATION_MODIFICATION_EXPIRE_ASAP = 2,      /* the time was in the past, so the item expired immediately */
+} expiryModificationResult;
+
 /* Return values for expireIfNeeded */
 typedef enum {
     KEY_VALID = 0, /* Could be volatile and not yet expired, non-volatile, or even nonexistent key. */
@@ -43,12 +52,12 @@ typedef enum {
  * separate expiry mechanisms within the same database.
  *
  * KEYS:   Expiry of top-level keys via db->expires.
- * FIELDS: Expiry of hash fields stored in volatile sets (e.g., per-field TTLs).
+ * ITEMS:  Expiry of volatile items (hash fields, set members) via db->keys_with_volatile_items.
  *
  * ACTIVE_EXPIRY_TYPE_COUNT: Number of expiry types, used for sizing arrays and iteration. */
 enum activeExpiryType {
     KEYS,
-    FIELDS,
+    ITEMS,
     ACTIVE_EXPIRY_TYPE_COUNT
 };
 
@@ -64,6 +73,13 @@ typedef struct serverDb serverDb;
 expirationPolicy getExpirationPolicyWithFlags(int flags);
 int parseExtendedExpireArgumentsOrReply(client *c, int *flags, int max_args);
 int convertExpireArgumentToUnixTime(client *c, robj *arg, mstime_t basetime, int unit, mstime_t *unixtime);
+
+/* Per-item TTL primitives of a listpack-encoded object. */
+bool listpackObjectIgnoreTTL(bool ignore);
+void listpackObjectUpdateVolatileCount(robj *o, long delta);
+bool listpackObjectItemIsValid(long long expiry);
+
+robj **createChangedItemsArgv(client *c, size_t size, int dst, int items_index, int first_skipped, int *argc);
 
 /* Handling of expired keys and hash fields */
 ustime_t activeExpireCycle(int type);

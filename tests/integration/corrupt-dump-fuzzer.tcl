@@ -23,6 +23,12 @@ proc generate_collections {suffix elements} {
         $rd lpush list$suffix $val
         $rd zadd zset$suffix $j $val
         $rd sadd set$suffix $val
+        # A set with expiring members, string and integer ones; the TTL outlasts the run.
+        if {$j % 3 == 0} {
+            $rd sadd setttl$suffix $val
+        } else {
+            $rd saddex setttl$suffix EX 100000 MEMBERS 1 $val
+        }
         $rd xadd stream$suffix * item 1 value $val
         $rd phset pathhash$suffix p/$j FIELDS 1 $j $val
     }

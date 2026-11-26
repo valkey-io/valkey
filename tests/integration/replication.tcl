@@ -2362,6 +2362,47 @@ start_server {tags {"repl external:skip tls:skip"} overrides {forkless-infrastru
     }
 }
 
+start_server {tags {"repl external:skip"} overrides {forkless-infrastructure-enabled yes forkless-policy prefer-forkless repl-diskless-sync no save ""}} {
+    set primary [srv 0 client]
+    $primary SADD myset plain
+    $primary SADDEX myset PXAT 4102444800000 MEMBERS 1 volatile
+
+    start_server {overrides {repl-diskless-load disabled}} {
+        set replica [srv 0 client]
+
+        test "Forkless full sync keeps set member TTLs" {
+            $replica replicaof [srv -1 host] [srv -1 port]
+            wait_for_sync $replica
+            assert_equal forkless [s -1 rdb_last_bgsave_type]
+            assert_equal {4102444800000 -1} [$replica SPEXPIRETIME myset MEMBERS 2 volatile plain]
+        }
+    }
+}
+
+start_server {tags {"repl external:skip tls:skip"} overrides {save {} forkless-infrastructure-enabled yes forkless-policy prefer-forkless repl-diskless-sync yes repl-diskless-sync-delay 0}} {
+    test "Forkless full sync for RDB 81 fails on a volatile set and the primary keeps serving" {
+        r SADDEX myset EX 600 MEMBERS 1 m1
+        set loglines [count_log_lines 0]
+        set replica [socket [srv 0 host] [srv 0 port]]
+        fconfigure $replica -translation binary
+        foreach cmd {
+            {REPLCONF capa eof capa psync2 capa inband-repl}
+            {REPLCONF version 9.2.0}
+        } {
+            puts -nonewline $replica "[join $cmd { }]\r\n"
+            flush $replica
+            assert_equal {+OK} [string trim [gets $replica]]
+        }
+        puts -nonewline $replica "PSYNC ? -1\r\n"
+        flush $replica
+        wait_for_log_messages 0 {"*Starting BGSAVE for SYNC with target: replicas sockets*method: forkless*"} $loglines 50 100
+        wait_for_log_messages 0 {"*Can't store key 'myset' (db *) in RDB version 81*"} $loglines 50 100
+        close $replica
+        assert_equal PONG [r PING]
+        assert_equal 1 [r SCARD myset]
+    }
+}
+
 start_server {tags {"repl external:skip tls:skip"} overrides {save ""}} {
     set src [srv 0 client]
     $src set k v
@@ -2937,6 +2978,65 @@ start_server {tags {"repl external:skip needs:debug"} overrides {save "" forkles
 
             # DEBUG DIGEST skips expired fields, so compare the field counts.
             assert_equal 200 [forkless_field_expiry_reaped $replica]
+        }
+    }
+}
+
+# Active set member expiry during a forkless full sync must reach the replica
+# the same way.
+
+# Number of sets s:0..s:199 that have only their 2 persistent members left.
+proc forkless_member_expiry_reaped {client} {
+    set n 0
+    for {set s 0} {$s < 200} {incr s} {
+        if {[$client scard s:$s] == 2} { incr n }
+    }
+    return $n
+}
+
+start_server {tags {"repl external:skip needs:debug"} overrides {save "" forkless-infrastructure-enabled yes forkless-policy prefer-forkless repl-diskless-sync yes repl-diskless-sync-delay 0}} {
+    start_server {overrides {save ""}} {
+        set primary [srv -1 client]
+        set primary_host [srv -1 host]
+        set primary_port [srv -1 port]
+        set replica [srv 0 client]
+
+        test "Active set member expiry during a forkless full sync reaches the replica" {
+            # The filler keys keep the scan from queueing all of the sets at once.
+            $primary debug populate 2000 a 10
+            for {set s 0} {$s < 200} {incr s} {
+                $primary sadd s:$s m0 m1 m2 m3 m4 keep1 keep2
+            }
+            $primary config set rdb-key-save-delay 2000
+            $replica replicaof $primary_host $primary_port
+            wait_for_condition 100 50 {
+                [s -1 current_save_keys_processed] >= 700
+            } else {
+                fail "scan did not progress"
+            }
+            $primary config set rdb-key-save-delay 10000
+            for {set s 0} {$s < 200} {incr s} {
+                $primary spexpire s:$s 100 MEMBERS 5 m0 m1 m2 m3 m4
+            }
+            wait_for_condition 100 100 {
+                [forkless_member_expiry_reaped $primary] >= 100
+            } else {
+                fail "primary did not expire the members"
+            }
+            assert_equal 1 [s -1 rdb_bgsave_in_progress]
+
+            $primary config set rdb-key-save-delay 0
+            wait_for_condition 200 100 {
+                [s -1 rdb_bgsave_in_progress] == 0 &&
+                [status $replica master_link_status] eq "up" &&
+                [forkless_member_expiry_reaped $primary] == 200
+            } else {
+                fail "sync did not finish"
+            }
+            wait_for_ofs_sync $primary $replica
+
+            # SCARD counts members that expired but were not reclaimed.
+            assert_equal 200 [forkless_member_expiry_reaped $replica]
         }
     }
 }

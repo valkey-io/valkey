@@ -166,6 +166,22 @@ start_server {tags {"repl needs:other-server external:skip"}} {
             assert_equal [list value] [$old_replica phget pathhash path field]
         }
     }
+
+    test "An older replica cannot full-sync a primary that holds a volatile set" {
+        if {[version_greater_or_equal $old_replica_version 10.0.0]} {
+            skip "Replica $old_replica_version does support set member expiration"
+        }
+
+        r FLUSHALL
+        r saddex myset ex 600 members 1 m1
+        start_server {start-other-server 1 config "minimal.conf"} {
+            set old_replica [srv 0 client]
+            $old_replica replicaof $primary_host $primary_port
+            # The negotiated RDB version cannot encode volatile sets.
+            wait_for_log_messages -1 [list {*Can't store key 'myset'*}] 0 50 100
+            assert_equal "down" [status $old_replica master_link_status]
+        }
+    }
 }
 
 # Listpacks store, after each element, the length of that element, so that the

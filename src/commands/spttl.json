@@ -1,0 +1,86 @@
+{
+    "SPTTL": {
+        "summary": "Returns the remaining time to live in milliseconds of a set key's member(s) that have an associated expiration.",
+        "complexity": "O(N) where N is the number of specified members.",
+        "group": "set",
+        "since": "10.0.0",
+        "arity": -5,
+        "function": "spttlCommand",
+        "command_flags": [
+            "READONLY",
+            "FAST"
+        ],
+        "acl_categories": [
+            "FAST",
+            "SET",
+            "READ"
+        ],
+        "key_specs": [
+            {
+                "flags": [
+                    "RO",
+                    "ACCESS"
+                ],
+                "begin_search": {
+                    "index": {
+                        "pos": 1
+                    }
+                },
+                "find_keys": {
+                    "range": {
+                        "lastkey": 0,
+                        "step": 1,
+                        "limit": 0
+                    }
+                }
+            }
+        ],
+        "reply_schema": {
+            "description": "List of values associated with the result of getting the remaining time-to-live of the specific members, in the same order as they are requested.",
+            "type": "array",
+            "minItems": 1,
+            "items": {
+                "oneOf": [
+                    {
+                        "description": "Member does not exist in the provided set key, or the set key does not exist.",
+                        "const": -2
+                    },
+                    {
+                        "description": "Member exists in the provided set key, but has no expiration associated with it.",
+                        "const": -1
+                    },
+                    {
+                        "description": "The remaining time to live of the set key member, in milliseconds.",
+                        "type": "integer",
+                        "minimum": 0
+                    }
+                ]
+            }
+        },
+        "arguments": [
+            {
+                "name": "key",
+                "type": "key",
+                "key_spec_index": 0
+            },
+            {
+                "name": "members",
+                "token": "MEMBERS",
+                "type": "block",
+                "arguments": [
+                    {
+                        "name": "nummembers",
+                        "type": "integer",
+                        "multiple": false,
+                        "minimum": 1
+                    },
+                    {
+                        "name": "member",
+                        "type": "member",
+                        "multiple": true
+                    }
+                ]
+            }
+        ]
+    }
+}

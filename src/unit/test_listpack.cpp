@@ -985,6 +985,25 @@ TEST_F(ListpackTest, listpackLpFind) {
     lpFree(lp);
 }
 
+TEST_F(ListpackTest, listpackLpFindStringLengths) {
+    /* lpFind compares strings of up to 64 bytes inline and longer ones with
+     * memcmp. Check every length on both sides of each word boundary, with
+     * the only difference at each position. */
+    unsigned char buf[80];
+    for (uint32_t len = 0; len <= sizeof(buf); len++) {
+        memset(buf, 'a', sizeof(buf));
+        unsigned char *lp = lpNew(0);
+        lp = lpAppend(lp, buf, len);
+        ASSERT_NE(lpFind(lp, lpFirst(lp), buf, len, 0), nullptr) << "len " << len;
+        for (uint32_t i = 0; i < len; i++) {
+            buf[i] = 'b';
+            ASSERT_EQ(lpFind(lp, lpFirst(lp), buf, len, 0), nullptr) << "len " << len << " diff at " << i;
+            buf[i] = 'a';
+        }
+        lpFree(lp);
+    }
+}
+
 TEST_F(ListpackTest, listpackLpFindWithMetadata) {
     /* test lpFind with metadata fields */
     unsigned char *lp;

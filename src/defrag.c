@@ -302,13 +302,6 @@ static void activeDefragSdsDict(dict *d, int val_type) {
     } while (cursor != 0);
 }
 
-static void activeDefragSdsHashtableCallback(void *privdata, void *entry_ref) {
-    UNUSED(privdata);
-    sds *sds_ref = (sds *)entry_ref;
-    sds new_sds = activeDefragSds(*sds_ref);
-    if (new_sds != NULL) *sds_ref = new_sds;
-}
-
 /* Defrag a list of ptr, sds or robj string values */
 static void activeDefragQuickListNode(quicklist *ql, quicklistNode **node_ref) {
     quicklistNode *newnode, *node = *node_ref;
@@ -405,8 +398,7 @@ static void scanHashtableCallbackCountScanned(void *privdata, void *elemref) {
 
 static void scanLaterSet(robj *ob, unsigned long *cursor) {
     serverAssert(ob->type == OBJ_SET && ob->encoding == OBJ_ENCODING_HASHTABLE);
-    hashtable *ht = objectGetVal(ob);
-    *cursor = hashtableScanDefrag(ht, *cursor, activeDefragSdsHashtableCallback, NULL, activeDefragAlloc, HASHTABLE_SCAN_EMIT_REF);
+    *cursor = setTypeScanDefrag(ob, *cursor, activeDefragAlloc);
 }
 
 static void scanLaterHash(robj *ob, unsigned long *cursor) {
@@ -480,12 +472,9 @@ static void defragSet(robj *ob) {
     } else {
         unsigned long cursor = 0;
         do {
-            cursor = hashtableScanDefrag(ht, cursor, activeDefragSdsHashtableCallback, NULL, activeDefragAlloc, HASHTABLE_SCAN_EMIT_REF);
+            cursor = setTypeScanDefrag(ob, cursor, activeDefragAlloc);
         } while (cursor != 0);
     }
-    /* defrag the hashtable struct and tables */
-    hashtable *new_hashtable = hashtableDefragTables(ht, activeDefragAlloc);
-    if (new_hashtable) objectSetVal(ob, new_hashtable);
 }
 
 /* Defrag callback for radix tree iterator, called for each node,
@@ -672,9 +661,7 @@ static void defragKey(defragKeysCtx *ctx, robj **elemref) {
             bool replaced = hashtableReplaceReallocatedEntry(expires_ht, ob, newob);
             serverAssert(replaced);
         }
-        if (newob->type == OBJ_HASH && hashTypeHasVolatileFields(newob)) {
-            /* Check if this is a hash object containing volatile fields.
-             * and update keys_with_volatile_items after defrag. */
+        if (objectHasVolatileItems(newob)) {
             hashtable *keys_with_volatile_items_ht = kvstoreGetHashtable(db->keys_with_volatile_items, slot);
             bool replaced = hashtableReplaceReallocatedEntry(keys_with_volatile_items_ht, ob, newob);
             serverAssert(replaced);

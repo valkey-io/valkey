@@ -250,6 +250,8 @@ static void rdmaMemoryFree(void *ptr, size_t size) {
     }
 }
 
+#define CMD_BUF_LEN (sizeof(ValkeyRdmaCmd) * VALKEY_RDMA_MAX_WQE * 2)
+
 static void rdmaDestroyIoBuf(RdmaContext *ctx) {
     if (ctx->rx.mr) {
         ibv_dereg_mr(ctx->rx.mr);
@@ -258,27 +260,30 @@ static void rdmaDestroyIoBuf(RdmaContext *ctx) {
 
     rdmaMemoryFree(ctx->rx.addr, ctx->rx.length);
     ctx->rx.addr = NULL;
+    ctx->rx.length = 0;
 
     if (ctx->tx.mr) {
         ibv_dereg_mr(ctx->tx.mr);
         ctx->tx.mr = NULL;
     }
 
-    rdmaMemoryFree(ctx->tx.addr, ctx->tx.length);
+    rdmaMemoryFree(ctx->tx.addr, ctx->tx_length);
     ctx->tx.addr = NULL;
+    ctx->tx_length = 0;
+    ctx->tx.length = 0;
 
     if (ctx->cmd_mr) {
         ibv_dereg_mr(ctx->cmd_mr);
         ctx->cmd_mr = NULL;
     }
 
-    rdmaMemoryFree(ctx->cmd_buf, sizeof(ValkeyRdmaCmd) * VALKEY_RDMA_MAX_WQE * 2);
+    rdmaMemoryFree(ctx->cmd_buf, CMD_BUF_LEN);
     ctx->cmd_buf = NULL;
 }
 
 static int rdmaSetupIoBuf(RdmaContext *ctx, struct rdma_cm_id *cm_id) {
     int access = IBV_ACCESS_LOCAL_WRITE;
-    size_t length = sizeof(ValkeyRdmaCmd) * VALKEY_RDMA_MAX_WQE * 2;
+    size_t length = CMD_BUF_LEN;
     ValkeyRdmaCmd *cmd;
     int i;
 
@@ -414,7 +419,8 @@ static int rdmaAdjustSendbuf(RdmaContext *ctx, unsigned int length) {
     /* try to free old MR & buffer */
     if (ctx->tx_length) {
         ibv_dereg_mr(ctx->tx.mr);
-        zlibc_free(ctx->tx.addr);
+        rdmaMemoryFree(ctx->tx.addr, ctx->tx_length);
+        ctx->tx.addr = NULL;
         ctx->tx_length = 0;
     }
 
@@ -425,7 +431,7 @@ static int rdmaAdjustSendbuf(RdmaContext *ctx, unsigned int length) {
     if (!ctx->tx.mr) {
         serverRdmaError(server.neterr, "RDMA: reg send mr failed: %s", strerror(errno));
         serverLog(LL_WARNING, "RDMA: FATAL error, recv corrupted cmd");
-        zlibc_free(ctx->tx.addr);
+        rdmaMemoryFree(ctx->tx.addr, ctx->tx_length);
         ctx->tx.addr = NULL;
         ctx->tx_length = 0;
         return C_ERR;
@@ -553,13 +559,17 @@ static int connRdmaHandleRecv(RdmaContext *ctx, struct rdma_cm_id *cm_id, Valkey
 
     case Keepalive: break;
 
-    case RegisterXferMemory:
+    case RegisterXferMemory: {
+        uint32_t length = ntohl(cmd->memory.length);
         ctx->tx_addr = (char *)(uintptr_t)ntohu64(cmd->memory.addr);
-        ctx->tx.length = ntohl(cmd->memory.length);
         ctx->tx_key = ntohl(cmd->memory.key);
         ctx->tx.offset = 0;
-        rdmaAdjustSendbuf(ctx, ctx->tx.length);
+        if (rdmaAdjustSendbuf(ctx, length) == C_ERR) {
+            return C_ERR;
+        }
+        ctx->tx.length = length;
         break;
+    }
 
     default: serverLog(LL_WARNING, "RDMA: FATAL error, unknown cmd"); return C_ERR;
     }

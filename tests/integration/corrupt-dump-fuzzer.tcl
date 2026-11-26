@@ -16,6 +16,7 @@ if { ! [ catch {
 proc generate_collections {suffix elements} {
     set rd [valkey_deferring_client]
     $rd client reply off
+    $rd bitconvert bitmap$suffix bitmap
     for {set j 0} {$j < $elements} {incr j} {
         # add both string values and integers
         if {$j % 2 == 0} {set val $j} else {set val "_$j"}
@@ -25,6 +26,8 @@ proc generate_collections {suffix elements} {
         $rd sadd set$suffix $val
         $rd xadd stream$suffix * item 1 value $val
         $rd phset pathhash$suffix p/$j FIELDS 1 $j $val
+        # one value per chunk of 2^16 bits, so one container each
+        $rd setbit bitmap$suffix [expr {$j * 70001}] 1
     }
     $rd client reply on
     assert_equal OK [$rd read]
@@ -51,6 +54,14 @@ proc generate_types {} {
     # create other non-collection types
     r incr int
     r set string str
+
+    # bitmaps with run and bitset containers
+    r set bitmapruns [string repeat "\xff" 9000]
+    r bitconvert bitmapruns bitmap
+    set dense ""
+    for {set j 0} {$j < 9000} {incr j} {append dense [binary format c [expr {int(rand() * 256)}]]}
+    r set bitmapdense $dense
+    r bitconvert bitmapdense bitmap
 
     # create bigger objects with 10 items (more than a single ziplist / listpack)
     generate_collections big 10

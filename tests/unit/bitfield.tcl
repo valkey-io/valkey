@@ -250,6 +250,19 @@ start_server {tags {"repl external:skip"}} {
             assert_equal 100 [$slave bitfield_ro bits get u8 0]
         }
 
+        test {BITFIELD: a write that only extends the value is replicated} {
+            $master del bits bits2
+            $master set bits2 ab
+            # Every operation fails, but the keys are created or extended to
+            # cover offset 800: that change must reach the replica.
+            assert_equal {{}} [$master bitfield bits overflow fail incrby u8 800 300]
+            assert_equal {{}} [$master bitfield bits2 overflow fail incrby u8 800 300]
+            wait_for_ofs_sync $master $slave
+            assert_equal 101 [$slave strlen bits]
+            assert_equal 101 [$slave strlen bits2]
+            assert_equal [$master get bits2] [$slave get bits2]
+        }
+
         test {BITFIELD_RO with only key as argument on read-only replica} {
             set res [$slave bitfield_ro bits]
             assert {$res eq {}}

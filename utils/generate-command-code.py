@@ -434,7 +434,7 @@ class Command(object):
         return visit_args(self.args, 1)
 
     def fullname(self):
-        return self.name.replace("-", "_").replace(":", "")
+        return self.name.replace("-", "_").replace(":", "").replace(".", "_")
 
     def return_types_table_name(self):
         return "%s_ReturnInfo" % self.fullname().replace(" ", "_")

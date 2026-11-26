@@ -6,6 +6,7 @@ should be provided by the operating system.
 * **linenoise** is a readline replacement. It is developed by the same authors of Valkey but is managed as a separated project and updated as needed.
 * **lua** is Lua 5.1 with minor changes for security and additional libraries.
 * **LZ4** is the v1.10.0 streaming compression library.
+* **CRoaring** is the C implementation of Roaring bitmaps, used by the `bitmap` data type.
 * **hdr_histogram** Used for per-command latency tracking histograms.
 * **ffc.h** is a C99 port of the fast_float library, used as a replacement for strtod to convert strings to floats efficiently.
 * **gtest-parallel** is a script for running googletest tests in parallel.
@@ -82,6 +83,38 @@ To upgrade LZ4:
    `XXH_NAMESPACE` definition.
 4. Verify that the `LZ4_VERSION_*` macros in `lz4.h` match the imported release
    and update the version in the dependency summary above.
+
+CRoaring
+--------
+
+CRoaring is imported as the single-file amalgamation (`roaring.c` and
+`roaring.h`) of https://github.com/RoaringBitmap/CRoaring, unchanged.
+`Makefile` and `CMakeLists.txt` are maintained locally for the Valkey build,
+which hides the CRoaring symbols to avoid conflicts with modules loaded by
+Valkey.
+
+The vendored copy is built from commit
+`b4cc0c48cd608addf91cf1595b2f268d9b2d2e66` (the merge of
+RoaringBitmap/CRoaring#961, after release 5.5.5), so `ROARING_VERSION` in
+`roaring.h` still reads 5.5.5. Once a release includes that commit, prefer the
+release files.
+
+To upgrade CRoaring to a release:
+
+1. Download `roaring.c` and `roaring.h` from the assets of the release
+   (https://github.com/RoaringBitmap/CRoaring/releases) and replace the
+   vendored files with them.
+2. Replace `LICENSE` with the one of the release, if it changed.
+3. Preserve the local `Makefile` and `CMakeLists.txt`.
+
+To build the files from a commit instead, run the amalgamation script of
+CRoaring at that commit in an empty directory, in the C locale (the order of
+the source files depends on it):
+
+    LC_ALL=C bash /path/to/CRoaring/amalgamation.sh
+
+At a release tag, this gives the release files, but for the timestamp in their
+first lines.
 
 Lua
 ---

@@ -45,15 +45,21 @@ MEET_REJECTED
     Merging clusters is not supported. The CLUSTER MEET client
     receives an error.
 
-AE <leader-id> <term> <prev-log-idx> <prev-log-term> <commit> <count>
+AE <leader-id> <term> <prev-log-idx> <prev-log-term> <commit> <round> <count>
     AppendEntries. Carries log entries from leader to followers.
     Followed by <count> entry lines: <term> <type> <data>.
-    With zero entries, serves as a heartbeat.
+    With zero entries, serves as a heartbeat. <round> counts the leader's
+    AE broadcasts, for ReadIndex (see UNCHANGED).
 
-AE_ACK <term> <success> <last-log-index> <repl-offset>
+AE_ACK <term> <success> <verified-log-index> <round> <repl-offset>
     Response to AE. Reports whether entries were accepted, the
-    follower's last log index for matchIndex tracking, and the
-    node's replication offset.
+    follower's last verified log index for matchIndex tracking, the last
+    AE round it got from this leader, and the node's replication offset.
+
+INSTALL_SNAPSHOT <leader-id> <term> <last-index> <last-term>
+    Sent by the leader instead of AE to a follower that needs entries
+    the leader has trimmed. Followed by the node lines of the leader's
+    state. See InstallSnapshot below.
 
 VOTE_REQ <candidate-id> <term> <last-log-index> <last-log-term>
     RequestVote. Sent by candidates during elections.
@@ -72,7 +78,33 @@ PRE_VOTE <term> <granted>
 
 PROPOSE <entry>
     Forwards a proposal from a follower to the leader. The entry
-    uses the same format as log entries (type followed by data).
+    uses the same format as log entries (type followed by data). The
+    proposer completes the proposal when it applies an identical entry
+    that isn't older than the proposal: one after everything committed
+    or reported as unchanged when the proposal was made (on the leader,
+    after its whole log). One such entry completes every identical
+    proposal. A follower can still match an older identical entry that
+    was committed before the proposal, if it hadn't learned that yet.
+
+REJECT <reason> <entry>
+    Reply to PROPOSE when the leader's pre-validation fails. <reason> is
+    "conflict" (stale shard epoch; the proposer retries with fresh
+    epochs), "transfer" (the leader is handing off leadership; the
+    proposer retries with the new leader) or "rejected" (the client gets
+    an error). The entry is included so the proposer can match it.
+
+UNCHANGED <index> <entry>
+    Reply to PROPOSE for an entry that wouldn't change anything, as found
+    by the leader's pre-validation: a SLOT_CHANGE for the current owner,
+    a SET_REPLICA_OF that is already in effect, or a NODE_FORGET of an
+    unknown node. If the leader has applied its whole log, it doesn't
+    append the entry. It sends UNCHANGED once a quorum has acked an AE
+    round sent after the proposal arrived, which shows that it was still
+    the leader, so that its state was the latest committed one
+    (ReadIndex, Raft thesis 6.4). If its state has changed by then, or it
+    hadn't applied its whole log, it appends the entry, which also
+    succeeds when applied. The proposer replies OK to its client once it
+    has applied up to <index>, the leader's last applied index.
 
 FAILOVER_PREPARE
     Sent by a replica to its primary to request a coordinated failover.
@@ -955,7 +987,8 @@ Only `STALE_SHARD_EPOCH_REJECTION_MSG` triggers retry. Other errors
 
 When the leader rejects a forwarded proposal at pre-validation, it sends
 a `REJECT <reason> <type> <data...>` message back. The reason is a token:
-`conflict` (stale epoch, retryable) or `syntax` (permanent error).
+`conflict` (stale epoch, retryable), `transfer` (retried with the new
+leader) or `rejected` (permanent error).
 
 ### Entries that don't carry an epoch
 

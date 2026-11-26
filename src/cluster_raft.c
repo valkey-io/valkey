@@ -38,6 +38,7 @@
 #include "server.h"
 #include "hotkeys.h"
 #include "cluster.h"
+#include "cluster_migrateslots.h"
 #include "cluster_bus.h"
 #include "cluster_state.h"
 #include "cluster_link.h"
@@ -53,6 +54,7 @@ typedef enum {
     RAFT_RESULT_STALE_EPOCH,     /* Rejected due to stale shard epoch (retryable). */
     RAFT_RESULT_REJECTED,        /* Rejected for other reasons (terminal). */
     RAFT_RESULT_LEADER_TRANSFER, /* Retry after the leader has changed. */
+    RAFT_RESULT_UNCHANGED,       /* Valid, but applying it wouldn't change anything. */
 } RaftProposalResult;
 
 /* Human-readable error messages returned to clients via callbacks. */
@@ -69,6 +71,7 @@ typedef enum {
 static inline const char *raftProposalResultMsg(RaftProposalResult result) {
     switch (result) {
     case RAFT_RESULT_OK: return NULL;
+    case RAFT_RESULT_UNCHANGED: return NULL;
     case RAFT_RESULT_STALE_EPOCH: return STALE_SHARD_EPOCH_REJECTION_MSG;
     case RAFT_RESULT_REJECTED: return GENERIC_PROPOSAL_REJECTION_MSG;
     case RAFT_RESULT_LEADER_TRANSFER: return GENERIC_PROPOSAL_REJECTION_MSG;
@@ -154,7 +157,20 @@ typedef struct {
     mstime_t propose_time; /* Last time it was sent to the leader, for expiry */
     int retries;           /* Remaining epoch-retry attempts */
     int deferred;          /* Waiting for epoch advance before re-propose */
+    uint64_t wait_index;   /* Got UNCHANGED: complete once applied up to this */
+    uint64_t min_index;    /* Lowest index our entry can have, see clusterRaftCompletePendingProposal() */
 } raftPendingProposal;
+
+/* Leader: a proposal that pre-validation found unchanged, waiting until a
+ * quorum has acked an AE sent after it arrived (ReadIndex, Raft thesis 6.4),
+ * so that no newer leader can have committed anything else. */
+typedef struct {
+    uint64_t round;                 /* AE round that a quorum must ack */
+    uint64_t term;                  /* Our term when it arrived */
+    uint8_t type;                   /* Entry type and data, as proposed */
+    sds data;                       /* (see above) */
+    char proposer[CLUSTER_NAMELEN]; /* Node that forwarded it, all zeros for our own */
+} raftPendingRead;
 
 /* A pending meet tracks a CLUSTER MEET client waiting for the NODE_JOIN
  * to be committed. Matched by target ip:cport. */
@@ -178,6 +194,11 @@ typedef struct {
     /* Volatile Raft state */
     enum raftRole role;
     uint64_t commit_index;
+    uint64_t ae_ack_term;         /* Term of the leader we have verified our log against */
+    uint64_t ae_ack_index;        /* Last verified log index, for sending in AE_ACK */
+    uint64_t ae_round;            /* Leader: AE broadcasts sent, echoed in AE_ACK for ReadIndex */
+    uint64_t leader_round;        /* Follower: last AE round received from the leader */
+    uint64_t max_unchanged_index; /* Highest index in an UNCHANGED reply we got */
 
     /* Log */
     raftLogEntry **log;
@@ -188,6 +209,7 @@ typedef struct {
 
     /* Pending proposals waiting for commit. */
     list *pending_proposals; /* list of raftPendingProposal */
+    list *pending_reads;     /* Leader: list of raftPendingRead */
 
     /* Pending MEET callbacks waiting for NODE_JOIN commit. */
     list *pending_meets;  /* CLUSTER MEET commands waiting for OK reply */
@@ -210,6 +232,7 @@ typedef struct {
     unsigned int todo_send_ae_ack : 1;
     unsigned int todo_send_vote_response : 1;
     unsigned int todo_broadcast_vote_request : 1;
+    unsigned int slot_change_pending : 1;
     uint64_t persist_log_from;     /* First index to persist in next batch */
     uint64_t last_rewrite_applied; /* last_applied at last full rewrite */
 
@@ -224,7 +247,9 @@ typedef struct {
     int votes_received;
     int pre_votes_received;
     mstime_t election_timeout;            /* Randomized timeout */
-    mstime_t last_heartbeat;              /* Last time we heard from leader */
+    mstime_t election_timer_start;        /* Follower or candidate */
+    mstime_t last_heartbeat_sent;         /* Leader: last AE broadcast */
+    mstime_t last_leader_contact;         /* Last AE or snapshot from a leader, for the lease */
     mstime_t pre_vote_started;            /* Last time we started a pre-vote round */
     mstime_t last_repl_offsets_broadcast; /* Last REPL_OFFSETS broadcast */
     mstime_t joiner_since;                /* When we became a joiner (for timeout) */
@@ -275,6 +300,7 @@ typedef struct {
     mstime_t last_ack_time;               /* Last time we received AE_ACK from this peer */
     mstime_t last_snapshot_time;          /* Last time we sent INSTALL_SNAPSHOT to this peer */
     uint64_t last_snapshot_index;         /* Last index of that snapshot */
+    uint64_t acked_round;                 /* Highest AE round this peer acked, for ReadIndex */
     unsigned int pending_fail_change : 1; /* NODE_FAIL or NODE_RECOVER in flight */
     unsigned int replicating : 1;         /* Acked an AE: pipeline the next ones */
 } clusterNodeRaftData;
@@ -410,7 +436,12 @@ static clusterMsgSendBlock *clusterRaftBuildAllOffsetsMsg(void) {
 
 static void clusterRaftPropose(sds entry, void *ctx, void (*callback)(void *ctx, const char *error));
 static void clusterRaftDeferPendingProposals(void);
-static void clusterRaftCompletePendingProposal(int type, sds data, RaftProposalResult result);
+static void clusterRaftCompletePendingProposal(int type, sds data, RaftProposalResult result, uint64_t index);
+static void clusterRaftCompleteUnchangedProposals(void);
+static bool clusterRaftLeaderStateIsCurrent(void);
+static void clusterRaftAddPendingRead(int type, sds data, clusterNode *proposer);
+static void clusterRaftProcessPendingReads(void);
+static void raftPendingReadFree(void *ptr);
 static RaftProposalResult clusterRaftPreValidate(int type, sds data);
 static void clusterRaftAutoFailoverCallback(void *ctx, const char *error);
 static void clusterRaftSlotChange(slotRange *ranges, int numranges, clusterNode *target, void *ctx, void (*callback)(void *ctx, const char *error));
@@ -436,6 +467,7 @@ static raftLogEntry *raftLogGet(uint64_t index);
 static uint64_t raftLogLastIndex(void);
 static uint64_t raftLogTermAt(uint64_t index);
 static void raftLogTruncateFrom(uint64_t index);
+static void clusterRaftClampMinIndex(uint64_t index);
 static int clusterRaftPersistNewLogEntries(uint64_t from);
 static uint64_t raftLogLastTerm(void);
 static int clusterRaftCanGrantVote(clusterRaftState *rs, uint64_t candidate_last_index, uint64_t candidate_last_term);
@@ -443,6 +475,8 @@ static void clusterRaftStartElection(void);
 static clusterNode *clusterRaftSelectTransferTarget(void);
 static int clusterRaftRequestLeaderTransfer(void);
 static void clusterRaftMaybeSendTimeoutNow(void);
+static void raftSetVerifiedIndex(uint64_t msg_term, uint64_t verified_index, bool force);
+static int clusterRaftLeaderHasFreshQuorum(mstime_t now);
 
 static void clusterRaftRandomizeElectionTimeout(void) {
     mstime_t base = server.cluster_node_timeout;
@@ -452,6 +486,47 @@ static void clusterRaftRandomizeElectionTimeout(void) {
 
 static int clusterRaftQuorum(void) {
     return server.cluster->size / 2 + 1;
+}
+
+static bool clusterRaftIsSlotChangePending(void) {
+    clusterRaftState *rs = RAFT_STATE();
+    if (!rs->slot_change_pending && clusterIsAnySlotExportFailoverGranted())
+        rs->slot_change_pending = 1;
+    return rs->slot_change_pending;
+}
+
+static int clusterRaftLogFullyApplied(void) {
+    clusterRaftState *rs = RAFT_STATE();
+    return rs->last_applied >= raftLogLastIndex();
+}
+
+/* Track the protocol hold; the migration code owns the actual write pause.
+ * Export timeout or cancellation must not clear an unresolved handoff.
+ * Arm only at FAILOVER-GRANTED: earlier pauses cannot be followed by a
+ * proposal, and a sibling still snapshotting is not a granted handoff. */
+static void clusterRaftSyncSlotChangePending(void) {
+    clusterRaftState *rs = RAFT_STATE();
+    if (!rs->slot_change_pending && !getPausedActionsWithPurpose(PAUSE_DURING_SLOT_MIGRATION)) return;
+    if (!rs->slot_change_pending && clusterIsAnySlotExportFailoverGranted()) rs->slot_change_pending = 1;
+    if (!rs->slot_change_pending) return;
+    if (!clusterIsAnySlotExportFailoverGranted() && rs->role == RAFT_ROLE_LEADER && clusterRaftLogFullyApplied() &&
+        clusterRaftLeaderHasFreshQuorum(monotonicMs())) {
+        rs->slot_change_pending = 0;
+    }
+}
+
+static void clusterRaftOnSlotOwnershipApplied(void) {
+    clusterUpdateSlotExportsOnOwnershipChange();
+    clusterUpdateSlotImportsOnOwnershipChange();
+    if (RAFT_STATE()->slot_change_pending && !clusterIsAnySlotExportFailoverGranted() && clusterRaftLogFullyApplied())
+        RAFT_STATE()->slot_change_pending = 0;
+}
+
+static void clusterRaftReleaseSlotChangePendingIfCaughtUp(void) {
+    clusterRaftState *rs = RAFT_STATE();
+    if (!rs->slot_change_pending || clusterIsAnySlotExportFailoverGranted()) return;
+    if (!clusterRaftLogFullyApplied()) return;
+    rs->slot_change_pending = 0;
 }
 
 /* True if there are any nodes other than myself without the JOINING flag. */
@@ -490,10 +565,9 @@ static void clusterRaftStepDown(mstime_t now, const char *reason) {
     if (rs->role != RAFT_ROLE_LEARNER && rs->role != RAFT_ROLE_JOINER)
         rs->role = RAFT_ROLE_FOLLOWER;
     rs->votes_received = 0;
-    memset(rs->voted_for, 0, CLUSTER_NAMELEN);
     memset(rs->leader, 0, CLUSTER_NAMELEN);
     clusterRaftRandomizeElectionTimeout();
-    rs->last_heartbeat = now;
+    rs->election_timer_start = now;
     rs->todo_save_config = 1;
     if (rs->role != old_role)
         serverLog(LL_NOTICE, "Stepping down: %s.", reason);
@@ -533,11 +607,14 @@ static void clusterRaftSingletonStepDown(void) {
     memset(rs->leader, 0, CLUSTER_NAMELEN);
     memset(rs->voted_for, 0, CLUSTER_NAMELEN);
     clusterRaftRandomizeElectionTimeout();
-    rs->last_heartbeat = monotonicMs();
+    rs->election_timer_start = monotonicMs();
     /* Clear singleton log — the leader's log is authoritative. */
     raftLogTruncateFrom(1);
     rs->last_applied = 0;
     rs->commit_index = 0;
+    raftSetVerifiedIndex(rs->current_term, rs->last_applied, true);
+    /* Indexes in our old log say nothing about the new cluster's log. */
+    rs->max_unchanged_index = 0;
 }
 
 /* Propose NODE_JOIN + SLOT_CHANGE for ourselves. Called once, before the
@@ -719,6 +796,7 @@ static int clusterRaftProcessHi(clusterLink *link, int argc, sds *argv) {
         } else if (sender != link->node) {
             clusterNode *handshake = link->node;
             link->node = sender;
+            if (sender->link) freeClusterLink(sender->link);
             sender->link = link;
             handshake->link = NULL;
             clusterDelNode(handshake);
@@ -940,10 +1018,11 @@ static void clusterRaftPropose(sds entry, void *ctx, void (*callback)(void *ctx,
 
     sds data = sp ? sdsnew(sp + 1) : sdsempty();
 
+    RaftProposalResult pre_result = RAFT_RESULT_OK;
     if (rs->role == RAFT_ROLE_LEADER) {
         /* Pre-validate on the leader to reject obviously stale/invalid proposals. */
-        RaftProposalResult pre_result = clusterRaftPreValidate(type, data);
-        if (pre_result != RAFT_RESULT_OK) {
+        pre_result = clusterRaftPreValidate(type, data);
+        if (pre_result != RAFT_RESULT_OK && pre_result != RAFT_RESULT_UNCHANGED) {
             if (callback) callback(ctx, raftProposalResultMsg(pre_result));
             sdsfree(data);
             return;
@@ -960,6 +1039,15 @@ static void clusterRaftPropose(sds entry, void *ctx, void (*callback)(void *ctx,
         pp->ctime = monotonicMs();
         pp->propose_time = pp->ctime;
         pp->deferred = 0;
+        pp->wait_index = 0;
+        /* Our entry will come after everything that's committed, and after
+         * what a leader already said was unchanged. On the leader, after
+         * its whole log. */
+        if (rs->role == RAFT_ROLE_LEADER) {
+            pp->min_index = raftLogLastIndex() + 1;
+        } else {
+            pp->min_index = (rs->commit_index > rs->max_unchanged_index ? rs->commit_index : rs->max_unchanged_index) + 1;
+        }
         /* Entry types carrying shard epochs get automatic retry. */
         switch (type) {
         case RAFT_ENTRY_FAILOVER:
@@ -977,6 +1065,10 @@ static void clusterRaftPropose(sds entry, void *ctx, void (*callback)(void *ctx,
 
     if (rs->role == RAFT_ROLE_LEADER && clusterRaftTransferSent()) {
         /* Kept pending, and retried after the transfer. */
+        sdsfree(data);
+    } else if (pre_result == RAFT_RESULT_UNCHANGED) {
+        /* Completed without an entry, once a quorum confirms our leadership. */
+        clusterRaftAddPendingRead(type, data, NULL);
         sdsfree(data);
     } else if (rs->role == RAFT_ROLE_LEADER) {
         /* If we're a singleton leader with an empty log that hasn't committed
@@ -1181,7 +1273,17 @@ static bool parseSlotChangeEpochs(sds *argv, int argc, slotChangeEpochInfo *info
     return (argc > 4);
 }
 
+/* True if we're the leader and have applied our whole log, so a proposal that
+ * wouldn't change our state can be answered without appending it, once a
+ * quorum confirms that we're still the leader, see clusterRaftAddPendingRead(). */
+static bool clusterRaftLeaderStateIsCurrent(void) {
+    clusterRaftState *rs = RAFT_STATE();
+    return rs->role == RAFT_ROLE_LEADER && rs->last_applied == raftLogLastIndex() && !clusterRaftTransferSent();
+}
+
 /* Pre-validate a proposal on the leader before appending to the log.
+ * Returns RAFT_RESULT_UNCHANGED for SLOT_CHANGE, SET_REPLICA_OF and
+ * NODE_FORGET that wouldn't change anything, if our state is current.
  * Reuses the apply functions in validate_only mode.
  * Returns RAFT_RESULT_OK if valid, or RAFT_RESULT_STALE_EPOCH /
  * RAFT_RESULT_REJECTED describing why it failed. */
@@ -1209,7 +1311,10 @@ static RaftProposalResult clusterRaftPreValidate(int type, sds data) {
     default:
         break;
     }
-    if (result != RAFT_RESULT_OK && result != RAFT_RESULT_LEADER_TRANSFER) {
+    /* Only trusted with our state up to date. Otherwise, e.g. for A-B-A where
+     * B is appended but not yet applied, the second A would look unchanged. */
+    if (result == RAFT_RESULT_UNCHANGED && !clusterRaftLeaderStateIsCurrent()) result = RAFT_RESULT_OK;
+    if (result != RAFT_RESULT_OK && result != RAFT_RESULT_LEADER_TRANSFER && result != RAFT_RESULT_UNCHANGED) {
         serverLog(LL_NOTICE, "Leader pre-validation: rejecting %s proposal (%s). data: %s",
                   raftEntryTypeName(type), raftProposalResultMsg(result), data);
     }
@@ -1238,6 +1343,16 @@ static int clusterRaftProcessPropose(clusterLink *link, int argc, sds *argv) {
 
     /* Pre-validate on the leader to reject stale/invalid proposals. */
     RaftProposalResult pre_result = clusterRaftPreValidate(type, data);
+
+    /* Nothing to append, once a quorum confirms our leadership. */
+    if (pre_result == RAFT_RESULT_UNCHANGED && link && link->node) {
+        clusterRaftAddPendingRead(type, data, link->node);
+        sdsfree(data);
+        sdsfree(entry);
+        return 1;
+    }
+    if (pre_result == RAFT_RESULT_UNCHANGED) pre_result = RAFT_RESULT_OK;
+
     if (pre_result == RAFT_RESULT_LEADER_TRANSFER && !clusterRaftRequestLeaderTransfer()) {
         serverLog(LL_NOTICE, "Rejecting NODE_FORGET for myself: no eligible voter for leadership transfer.");
         pre_result = RAFT_RESULT_REJECTED;
@@ -1271,6 +1386,154 @@ static int clusterRaftProcessPropose(clusterLink *link, int argc, sds *argv) {
     return 1;
 }
 
+static void raftPendingReadFree(void *ptr) {
+    raftPendingRead *r = ptr;
+    sdsfree(r->data);
+    zfree(r);
+}
+
+/* Answer a proposal that pre-validation found unchanged, once a quorum has
+ * acked an AE sent after it arrived. This is ReadIndex (Raft thesis 6.4):
+ *
+ *   "The leader needs to make sure it hasn't been superseded by a newer
+ *   leader of which it is unaware. It issues a new round of heartbeats and
+ *   waits for their acknowledgments from a majority of the cluster."
+ *
+ * The thesis doesn't say how to tell which acknowledgments belong to that
+ * round. An AE_ACK doesn't refer to a particular AE, since a follower acks
+ * once for everything it has processed, so each AE carries the number of
+ * broadcasts the leader has made (ae_round) and AE_ACK echoes the last one
+ * the follower got. A read registered with round R is confirmed when a
+ * quorum has acked R or later, i.e. an AE sent after the read arrived. All
+ * reads registered before the next broadcast share its round. */
+static void clusterRaftAddPendingRead(int type, sds data, clusterNode *proposer) {
+    clusterRaftState *rs = RAFT_STATE();
+    raftPendingRead *r = zcalloc(sizeof(*r));
+    r->round = rs->ae_round + 1;
+    r->term = rs->current_term;
+    r->type = type;
+    r->data = sdsdup(data);
+    if (proposer) memcpy(r->proposer, proposer->name, CLUSTER_NAMELEN);
+    listAddNodeTail(rs->pending_reads, r);
+    rs->todo_broadcast_ae = 1; /* Resolved in beforeSleep if we're the only voter. */
+}
+
+/* Reply to the node that forwarded a proposal, on the link it came from. */
+static void clusterRaftReplyProposer(const char *proposer, sds msg) {
+    clusterNode *node = clusterLookupNode(proposer, CLUSTER_NAMELEN);
+    clusterLink *link = node ? (node->inbound_link ? node->inbound_link : node->link) : NULL;
+    if (link) {
+        clusterRaftSendMsg(link, msg);
+    } else {
+        sdsfree(msg);
+    }
+}
+
+/* Decide a confirmed read again with our current state, which may have
+ * changed since it arrived. */
+static void clusterRaftResolvePendingRead(raftPendingRead *r) {
+    clusterRaftState *rs = RAFT_STATE();
+    bool local = r->proposer[0] == '\0';
+    RaftProposalResult result = clusterRaftPreValidate(r->type, r->data);
+    if (result == RAFT_RESULT_OK) {
+        /* Changed since, so append it after all. */
+        uint64_t idx = raftLogLastIndex() + 1;
+        raftLogAppend(raftLogCreate(rs->current_term, idx, r->type, sdsdup(r->data)));
+        serverLog(LL_NOTICE, "Leader appended proposed %s (index %llu).", raftEntryTypeName(r->type),
+                  (unsigned long long)idx);
+        if (clusterRaftHasPeerMembers()) rs->todo_broadcast_ae = 1;
+    } else if (local) {
+        if (result == RAFT_RESULT_UNCHANGED) result = RAFT_RESULT_OK;
+        clusterRaftCompletePendingProposal(r->type, r->data, result, 0);
+    } else if (result == RAFT_RESULT_UNCHANGED) {
+        sds msg = wireNewMsg("UNCHANGED");
+        msg = sdscatfmt(msg, " %U %s %S", (unsigned long long)rs->last_applied, raftEntryTypeName(r->type), r->data);
+        clusterRaftReplyProposer(r->proposer, wireFinishMsg(msg));
+    } else {
+        sds msg = wireNewMsg("REJECT");
+        msg = sdscatfmt(msg, " %s %s %S", raftProposalResultWireReason(result), raftEntryTypeName(r->type), r->data);
+        clusterRaftReplyProposer(r->proposer, wireFinishMsg(msg));
+    }
+}
+
+/* Resolve the reads that a quorum has confirmed. If we're no longer the
+ * leader, drop them: the proposers retry with the new leader. During a
+ * leadership transfer, wait, since resolving a read may append. */
+static void clusterRaftProcessPendingReads(void) {
+    clusterRaftState *rs = RAFT_STATE();
+    if (listLength(rs->pending_reads) == 0) return;
+    if (clusterRaftTransferSent()) return;
+    listIter li;
+    listNode *ln;
+    listRewind(rs->pending_reads, &li);
+    while ((ln = listNext(&li)) != NULL) {
+        raftPendingRead *r = listNodeValue(ln);
+        if (rs->role != RAFT_ROLE_LEADER || r->term != rs->current_term) {
+            listDelNode(rs->pending_reads, ln);
+            continue;
+        }
+        int acked = nodeIsVoter(myself) ? 1 : 0;
+        dictIterator *di = dictGetSafeIterator(server.cluster->nodes);
+        dictEntry *de;
+        while ((de = dictNext(di)) != NULL) {
+            clusterNode *node = dictGetVal(de);
+            if (node != myself && nodeIsVoter(node) && RAFT_NODE(node)->acked_round >= r->round) acked++;
+        }
+        dictReleaseIterator(di);
+        if (acked < clusterRaftQuorum()) continue;
+        listUnlinkNode(rs->pending_reads, ln);
+        clusterRaftResolvePendingRead(r);
+        raftPendingReadFree(r);
+        zfree(ln);
+    }
+}
+
+/* Complete the proposals the leader answered with UNCHANGED, once we've applied up
+ * to the leader's state at that time, so the caller sees the change. */
+static void clusterRaftCompleteUnchangedProposals(void) {
+    clusterRaftState *rs = RAFT_STATE();
+    listIter li;
+    listNode *ln;
+    listRewind(rs->pending_proposals, &li);
+    while ((ln = listNext(&li)) != NULL) {
+        raftPendingProposal *pp = listNodeValue(ln);
+        if (!pp->wait_index || pp->wait_index > rs->last_applied) continue;
+        if (pp->callback) pp->callback(pp->ctx, NULL);
+        sdsfree(pp->data);
+        zfree(pp);
+        listDelNode(rs->pending_proposals, ln);
+    }
+}
+
+/* UNCHANGED <leader-last-applied> <type> <data...>: the leader didn't append
+ * our proposal, because it wouldn't change anything. */
+static int clusterRaftProcessUnchanged(clusterLink *link, int argc, sds *argv) {
+    if (argc < 3) return 1;
+    clusterRaftState *rs = RAFT_STATE();
+    if (!link->node || memcmp(link->node->name, rs->leader, CLUSTER_NAMELEN) != 0) return 1;
+    uint64_t index = strtoull(argv[1], NULL, 10);
+    int type = raftEntryTypeByName(argv[2]);
+    if (type < 0 || index == 0) return 1;
+    if (index > rs->max_unchanged_index) rs->max_unchanged_index = index;
+    sds data = (argc > 3) ? sdsjoinsds(argv + 3, argc - 3, " ", 1) : sdsempty();
+    listIter li;
+    listNode *ln;
+    listRewind(rs->pending_proposals, &li);
+    while ((ln = listNext(&li)) != NULL) {
+        raftPendingProposal *pp = listNodeValue(ln);
+        /* A late reply to an earlier identical proposal describes a state
+         * before this one was made, like an older entry on apply. */
+        if (index + 1 < pp->min_index) continue;
+        if (!pp->wait_index && pp->type == type && !sdscmp(pp->data, data)) {
+            pp->wait_index = index;
+            break;
+        }
+    }
+    sdsfree(data);
+    clusterRaftCompleteUnchangedProposals();
+    return 1;
+}
+
 /* Handle a REJECT message from the leader. The leader sends this when it
  * rejects a forwarded PROPOSE. We match it against our
  * pending_proposals and fire the callback with an error so the client
@@ -1292,7 +1555,7 @@ static int clusterRaftProcessReject(clusterLink *link, int argc, sds *argv) {
 
     RaftProposalResult result = raftProposalResultFromWire(reason);
 
-    clusterRaftCompletePendingProposal(type, data, result);
+    clusterRaftCompletePendingProposal(type, data, result, 0);
     sdsfree(data);
     return 1;
 }
@@ -1326,6 +1589,8 @@ static int clusterRaftMaybeStepDown(uint64_t term) {
     clusterRaftState *rs = RAFT_STATE();
     if (term > rs->current_term) {
         rs->current_term = term;
+        /* Only a new term clears our vote: we vote at most once per term. */
+        memset(rs->voted_for, 0, CLUSTER_NAMELEN);
         clusterRaftStepDown(monotonicMs(), "observed higher term");
         return 1;
     }
@@ -1448,12 +1713,27 @@ static raftLogEntry *raftLogGet(uint64_t index) {
     return e->index == index ? e : NULL;
 }
 
+/* The log has no entries from index on, so a pending proposal's own entry
+ * can be appended there, even if its min_index counted entries we had. */
+static void clusterRaftClampMinIndex(uint64_t index) {
+    clusterRaftState *rs = RAFT_STATE();
+    if (!rs->pending_proposals) return;
+    listIter li;
+    listNode *ln;
+    listRewind(rs->pending_proposals, &li);
+    while ((ln = listNext(&li)) != NULL) {
+        raftPendingProposal *pp = listNodeValue(ln);
+        if (pp->min_index > index) pp->min_index = index;
+    }
+}
+
 /* Truncate the log from the given index onwards (inclusive). */
 static void raftLogTruncateFrom(uint64_t index) {
     clusterRaftState *rs = RAFT_STATE();
     while (rs->log_count > 0 && rs->log[rs->log_count - 1]->index >= index) {
         raftLogFree(rs->log[--rs->log_count]);
     }
+    clusterRaftClampMinIndex(index);
     /* Truncated entries may already be on disk; a full rewrite is needed
      * to remove them. */
     rs->todo_save_config = 1;
@@ -1513,10 +1793,13 @@ static void clusterRaftClearOptionalNodeInfo(clusterNode *node) {
     node->replica_priority = 0;
 }
 
-/* Find a pending proposal matching type+data, fire its callback, and remove it.
- * Called both when an entry is applied (from raftLogApply) and when the leader
- * sends a REJECT for a forwarded proposal. */
-static void clusterRaftCompletePendingProposal(int type, sds data, RaftProposalResult result) {
+/* Complete pending proposals matching type+data. For an applied entry, the
+ * result comes from applying it, and it completes every one whose min_index
+ * it isn't below, so that the entry isn't older than the proposal. An older
+ * identical entry would otherwise complete a newer proposal whose own entry
+ * isn't committed yet. Without an index (a REJECT, or a read on the leader),
+ * the result belongs to one proposal, so only the first one is completed. */
+static void clusterRaftCompletePendingProposal(int type, sds data, RaftProposalResult result, uint64_t index) {
     clusterRaftState *rs = RAFT_STATE();
     if (listLength(rs->pending_proposals) == 0) return;
 
@@ -1525,27 +1808,30 @@ static void clusterRaftCompletePendingProposal(int type, sds data, RaftProposalR
     listRewind(rs->pending_proposals, &li);
     while ((ln = listNext(&li)) != NULL) {
         raftPendingProposal *pp = listNodeValue(ln);
-        if (pp->type == type && !sdscmp(pp->data, data)) {
-            /* Resent to the new leader by the retry on leader change. */
-            if (result == RAFT_RESULT_LEADER_TRANSFER) return;
-            /* On stale epoch with retries remaining: mark deferred.
-             * The epoch update happens at retry time when the epoch has
-             * actually advanced (checked by raftRefreshEpochInData). */
-            if (result == RAFT_RESULT_STALE_EPOCH && pp->retries > 0) {
-                pp->retries--;
-                pp->deferred = 1;
-                /* The epoch may already have advanced before this rejection
-                 * arrived. Retry in case it did; raftRefreshEpochInData()
-                 * skips it otherwise. */
-                rs->todo_retry_deferred = 1;
-                return;
-            }
+        /* One that got UNCHANGED is done. Identical proposals are
+         * interchangeable, so this completes another one. */
+        if (pp->wait_index) continue;
+        if (index && index < pp->min_index) continue;
+        if (pp->type != type || sdscmp(pp->data, data)) continue;
+        /* Resent to the new leader by the retry on leader change. */
+        if (result == RAFT_RESULT_LEADER_TRANSFER) return;
+        /* On stale epoch with retries remaining: mark deferred.
+         * The epoch update happens at retry time when the epoch has
+         * actually advanced (checked by raftRefreshEpochInData). */
+        if (result == RAFT_RESULT_STALE_EPOCH && pp->retries > 0) {
+            pp->retries--;
+            pp->deferred = 1;
+            /* The epoch may already have advanced before this rejection
+             * arrived. Retry in case it did; raftRefreshEpochInData()
+             * skips it otherwise. */
+            rs->todo_retry_deferred = 1;
+        } else {
             if (pp->callback) pp->callback(pp->ctx, raftProposalResultMsg(result));
             sdsfree(pp->data);
             zfree(pp);
             listDelNode(rs->pending_proposals, ln);
-            break;
         }
+        if (!index) break;
     }
 }
 
@@ -1589,6 +1875,9 @@ static void raftLogApply(raftLogEntry *e) {
             if (joined && (!existing || (joined->flags & CLUSTER_NODE_JOINING))) {
                 first_join = true;
                 joined->flags &= ~CLUSTER_NODE_JOINING;
+                /* A node joins as a primary. A node created by our own MEET
+                 * handshake has no role yet. */
+                if (!(joined->flags & CLUSTER_NODE_REPLICA)) joined->flags |= CLUSTER_NODE_PRIMARY;
                 if (learner) {
                     joined->flags |= CLUSTER_NODE_LEARNER;
                 } else {
@@ -1808,7 +2097,12 @@ static void raftLogApply(raftLogEntry *e) {
     }
 
     /* Check pending proposals for a match and remove it. */
-    clusterRaftCompletePendingProposal(e->type, e->data, entry_result);
+    clusterRaftCompletePendingProposal(e->type, e->data, entry_result, e->index);
+
+    if (e->type == RAFT_ENTRY_SLOT_CHANGE && entry_result == RAFT_RESULT_OK) {
+        /* Complete our import callback before revalidating ownership. */
+        clusterRaftOnSlotOwnershipApplied();
+    }
 }
 
 /* Apply all committed but unapplied log entries. */
@@ -1825,12 +2119,13 @@ static void raftApplyCommitted(void) {
         rs->snapshot_term = e->term;
         raftLogApply(e);
     }
+    clusterRaftCompleteUnchangedProposals();
 }
 
 /* --------------------------------------------------------------------------
  * AE (AppendEntries) message
  *
- * Header line: AE <leader-id> <term> <prev-log-idx> <prev-log-term> <commit> <count>
+ * Header line: AE <leader-id> <term> <prev-log-idx> <prev-log-term> <commit> <round> <count>
  * Entry lines: <term> <type> <data>
  * -------------------------------------------------------------------------- */
 
@@ -1897,11 +2192,13 @@ static void clusterRaftSendAppendEntries(clusterLink *link, clusterNode *node) {
     sds msg = wireNewMsg("AE");
     msg = sdscatlen(msg, " ", 1);
     msg = sdscatlen(msg, myself->name, CLUSTER_NAMELEN);
-    msg = sdscatfmt(msg, " %U %U %U %U %i",
+    msg = sdscatfmt(msg, " %U %U %U %U %U %i",
                     (unsigned long long)rs->current_term,
                     (unsigned long long)prev_index,
                     (unsigned long long)prev_term,
-                    (unsigned long long)rs->commit_index, count);
+                    (unsigned long long)rs->commit_index,
+                    (unsigned long long)rs->ae_round,
+                    count);
     msg = sdscatsds(msg, entries);
     sdsfree(entries);
     msg = wireFinishMsg(msg);
@@ -1913,6 +2210,7 @@ static void clusterRaftSendAppendEntries(clusterLink *link, clusterNode *node) {
 }
 
 static void clusterRaftBroadcastAppendEntries(void) {
+    RAFT_STATE()->ae_round++;
     dictIterator *di = dictGetSafeIterator(server.cluster->nodes);
     dictEntry *de;
     while ((de = dictNext(di)) != NULL) {
@@ -1925,12 +2223,17 @@ static void clusterRaftBroadcastAppendEntries(void) {
     dictReleaseIterator(di);
 }
 
-/* AE_ACK <term> <success> <last-log-index> */
-static void clusterRaftSendAppendEntriesResponse(clusterLink *link, uint64_t term, int success) {
+/* Send an AppendEntries response to the leader. Because we do not pair up AE
+ * calls and replies, we need to send additional info so the leader tracks
+ * progress accurately, namely the index that we have safely verified. This is
+ * not necessarily the last log entry, because it may be from a stale tail.
+ * Format: AE_ACK <term> <success> <verified-log-index> <round> <repl-offset> */
+static void clusterRaftSendAppendEntriesResponse(clusterLink *link, uint64_t term, uint64_t verified_index, int success) {
     long long offset = nodeIsReplica(myself) ? replicationGetReplicaOffset() : server.primary_repl_offset;
     sds msg = wireNewMsg("AE_ACK");
-    msg = sdscatfmt(msg, " %U %i %U %I", (unsigned long long)term, success,
-                    (unsigned long long)raftLogLastIndex(), (long long)offset);
+    msg = sdscatfmt(msg, " %U %i %U %U %I", (unsigned long long)term, success,
+                    (unsigned long long)verified_index, (unsigned long long)RAFT_STATE()->leader_round,
+                    (long long)offset);
     msg = wireFinishMsg(msg);
     clusterRaftSendMsg(link, msg);
 }
@@ -1941,25 +2244,43 @@ static void clusterRaftSetLeader(const char *leader_id) {
     clusterRaftState *rs = RAFT_STATE();
     if (memcmp(rs->leader, leader_id, CLUSTER_NAMELEN) == 0) return;
     memcpy(rs->leader, leader_id, CLUSTER_NAMELEN);
+    rs->leader_round = 0; /* Rounds are per leader. */
     if (listLength(rs->pending_proposals) > 0) rs->todo_retry_proposals = 1;
 }
 
+/* Store the maximum log index that we have verified, and no more, for sending
+ * with AE_ACK. This may be called repeatedly before clusterRaftBeforeSleep()
+ * is called. It is the caller's responsibility to correctly provide the
+ * verified index. Ordinarily, this should only progress forward, however we
+ * may need to force the value e.g. during NODE_FORGET */
+static void raftSetVerifiedIndex(uint64_t msg_term, uint64_t verified_index, bool force) {
+    clusterRaftState *rs = RAFT_STATE();
+    if ((rs->ae_ack_term < msg_term) || force) {
+        rs->ae_ack_term = msg_term;
+        rs->ae_ack_index = 0;
+    }
+    if ((rs->ae_ack_index < verified_index) || force) {
+        rs->ae_ack_index = verified_index;
+    }
+}
+
 static int clusterRaftProcessAppendEntries(clusterLink *link, int argc, sds *argv, sds *entry_lines, int entry_line_count) {
-    /* argv: AE <leader-id> <term> <prev-log-idx> <prev-log-term> <commit> <count> */
-    if (argc < 7) return 1;
+    /* argv: AE <leader-id> <term> <prev-log-idx> <prev-log-term> <commit> <round> <count> */
+    if (argc < 8) return 1;
     if (sdslen(argv[1]) != CLUSTER_NAMELEN) return 1;
-    serverLog(LL_DEBUG, "Received AE from %.40s: term=%s prev=%s commit=%s count=%s",
-              argv[1], argv[2], argv[3], argv[5], argv[6]);
+    serverLog(LL_DEBUG, "Received AE from %.40s: term=%s prev=%s commit=%s round=%s count=%s",
+              argv[1], argv[2], argv[3], argv[5], argv[6], argv[7]);
 
     clusterRaftState *rs = RAFT_STATE();
     uint64_t msg_term = strtoull(argv[2], NULL, 10);
     uint64_t prev_log_index = strtoull(argv[3], NULL, 10);
     uint64_t prev_log_term = strtoull(argv[4], NULL, 10);
     uint64_t leader_commit = strtoull(argv[5], NULL, 10);
-    int entry_count = atoi(argv[6]);
+    uint64_t round = strtoull(argv[6], NULL, 10);
+    int entry_count = atoi(argv[7]);
 
     if (msg_term < rs->current_term) {
-        clusterRaftSendAppendEntriesResponse(link, rs->current_term, 0);
+        clusterRaftSendAppendEntriesResponse(link, rs->current_term, raftLogLastIndex(), 0);
         return 1;
     }
 
@@ -1967,14 +2288,16 @@ static int clusterRaftProcessAppendEntries(clusterLink *link, int argc, sds *arg
 
     /* Accept heartbeat. */
     if (rs->role != RAFT_ROLE_JOINER && rs->role != RAFT_ROLE_LEARNER) rs->role = RAFT_ROLE_FOLLOWER;
-    rs->last_heartbeat = monotonicMs();
+    rs->election_timer_start = monotonicMs();
+    rs->last_leader_contact = rs->election_timer_start;
     clusterRaftSetLeader(argv[1]);
+    rs->leader_round = round;
 
     /* Log consistency check: verify prev_log_index/term match. Entries have
      * term >= 1, so 0 means we don't know the entry and never matches. */
     uint64_t local_prev_term = raftLogTermAt(prev_log_index);
     if (prev_log_index > 0 && (local_prev_term == 0 || local_prev_term != prev_log_term)) {
-        clusterRaftSendAppendEntriesResponse(link, rs->current_term, 0);
+        clusterRaftSendAppendEntriesResponse(link, rs->current_term, raftLogLastIndex(), 0);
         return 1;
     }
 
@@ -2023,6 +2346,7 @@ static int clusterRaftProcessAppendEntries(clusterLink *link, int argc, sds *arg
         if (rs->commit_index > raftLogLastIndex()) rs->commit_index = raftLogLastIndex();
     }
     raftApplyCommitted();
+    clusterRaftReleaseSlotChangePendingIfCaughtUp();
 
     /* Forgotten: this link is unbound. Do not ACK. */
     if (!link->node) {
@@ -2031,7 +2355,14 @@ static int clusterRaftProcessAppendEntries(clusterLink *link, int argc, sds *arg
     }
 
     /* Defer AE_ACK until after persistence in beforeSleep. This ensures
-     * entries are on stable storage before the leader counts our ACK. */
+     * entries are on stable storage before the leader counts our ACK. If we
+     * have no entries sent, we have verified our prev_log_index and term.
+     * Otherwise, we can verify up to the new index applied */
+    if (entry_line_count == 0) {
+        raftSetVerifiedIndex(msg_term, prev_log_index, false);
+    } else {
+        raftSetVerifiedIndex(msg_term, new_index - 1, false);
+    }
     rs->todo_send_ae_ack = 1;
     return 1;
 }
@@ -2074,8 +2405,8 @@ static void clusterRaftAdvanceCommitIndex(void) {
 }
 
 static int clusterRaftProcessAppendEntriesResponse(clusterLink *link, int argc, sds *argv) {
-    /* argv: AE_ACK <term> <success> <last-log-index> [<repl-offset>] */
-    if (argc < 4) return 1;
+    /* argv: AE_ACK <term> <success> <verified-log-index> <round> <repl-offset> */
+    if (argc < 6) return 1;
     serverLog(LL_DEBUG, "Received AE_ACK: term=%s success=%s last_index=%s from %.40s",
               argv[1], argv[2], argv[3], link->node ? link->node->name : "?");
 
@@ -2083,7 +2414,8 @@ static int clusterRaftProcessAppendEntriesResponse(clusterLink *link, int argc, 
     uint64_t msg_term = strtoull(argv[1], NULL, 10);
     int success = atoi(argv[2]);
     uint64_t follower_last_index = strtoull(argv[3], NULL, 10);
-    long long follower_repl_offset = (argc >= 5) ? strtoll(argv[4], NULL, 10) : 0;
+    uint64_t round = strtoull(argv[4], NULL, 10);
+    long long follower_repl_offset = strtoll(argv[5], NULL, 10);
 
     clusterRaftMaybeStepDown(msg_term);
     if (rs->role != RAFT_ROLE_LEADER) return 1;
@@ -2093,6 +2425,11 @@ static int clusterRaftProcessAppendEntriesResponse(clusterLink *link, int argc, 
     if (!node) return 1;
     clusterNodeRaftData *rd = RAFT_NODE(node);
     rd->last_ack_time = monotonicMs();
+    /* The peer accepted us as leader when it processed this AE round. */
+    if (round > rd->acked_round) {
+        rd->acked_round = round;
+        clusterRaftProcessPendingReads();
+    }
     /* Keep node->repl_offset in sync for CLUSTER SLOTS/SHARDS on the leader. */
     long long prev_offset = node->repl_offset;
     node->repl_offset = follower_repl_offset;
@@ -2117,6 +2454,7 @@ static int clusterRaftProcessAppendEntriesResponse(clusterLink *link, int argc, 
 
     if (success) {
         /* Follower accepted — update matchIndex/nextIndex. */
+        uint64_t prev_match = rd->match_index;
         rd->match_index = follower_last_index;
         if (!rd->replicating || rd->next_index < follower_last_index + 1)
             rd->next_index = follower_last_index + 1;
@@ -2143,6 +2481,13 @@ static int clusterRaftProcessAppendEntriesResponse(clusterLink *link, int argc, 
         /* If commit advanced, broadcast so followers learn the new commit. */
         if (rs->last_applied > prev_commit) {
             rs->todo_broadcast_ae = 1;
+        }
+        /* This ACK made progress and the peer is still behind: don't wait for a heartbeat. */
+        if (rs->role == RAFT_ROLE_LEADER && !rs->todo_broadcast_ae &&
+            !(node->flags & CLUSTER_NODE_JOINING) &&
+            follower_last_index > prev_match &&
+            rd->next_index <= raftLogLastIndex()) {
+            clusterRaftSendAppendEntries(node->link, node);
         }
     } else {
         /* Follower rejected — back off nextIndex, at most to just past its last entry. */
@@ -2200,21 +2545,26 @@ static int clusterRaftProcessInstallSnapshot(clusterLink *link, int argc, sds *a
     char old_shard_id[CLUSTER_NAMELEN];
     memcpy(old_shard_id, myself->shard_id, CLUSTER_NAMELEN);
     if (rs->role != RAFT_ROLE_JOINER && rs->role != RAFT_ROLE_LEARNER) rs->role = RAFT_ROLE_FOLLOWER;
-    rs->last_heartbeat = monotonicMs();
+    rs->election_timer_start = monotonicMs();
+    rs->last_leader_contact = rs->election_timer_start;
     clusterRaftSetLeader(argv[1]);
 
-    /* If we're already past the snapshot, ignore. */
+    /* If we're already past the snapshot, ignore.
+     * We can ack up to our commit index as far as this function knows */
     if (snap_index <= rs->last_applied) {
+        raftSetVerifiedIndex(msg_term, rs->commit_index, false);
         rs->todo_send_ae_ack = 1;
         return 1;
     }
 
     /* If our log has the snapshot's last entry, keep the entries after it,
      * which we may have acknowledged, and just commit up to the snapshot
-     * (Raft paper, section 7). */
+     * (Raft paper, section 7). We can ack up to our commit index as far as
+     * this function knows */
     if (raftLogTermAt(snap_index) == snap_term) {
         if (snap_index > rs->commit_index) rs->commit_index = snap_index;
         raftApplyCommitted();
+        raftSetVerifiedIndex(msg_term, rs->commit_index, false);
         rs->todo_send_ae_ack = 1;
         return 1;
     }
@@ -2240,14 +2590,14 @@ static int clusterRaftProcessInstallSnapshot(clusterLink *link, int argc, sds *a
             serverLog(LL_WARNING, "Rejecting INSTALL_SNAPSHOT from %.40s: invalid node line: %s",
                       argv[1], config_lines[i]);
             dictRelease(seen);
-            clusterRaftSendAppendEntriesResponse(link, rs->current_term, 0);
+            clusterRaftSendAppendEntriesResponse(link, rs->current_term, raftLogLastIndex(), 0);
             return 1;
         }
     }
     if (!sender_included) {
         serverLog(LL_WARNING, "Rejecting INSTALL_SNAPSHOT from %.40s: the sender isn't included", argv[1]);
         dictRelease(seen);
-        clusterRaftSendAppendEntriesResponse(link, rs->current_term, 0);
+        clusterRaftSendAppendEntriesResponse(link, rs->current_term, raftLogLastIndex(), 0);
         return 1;
     }
 
@@ -2267,6 +2617,7 @@ static int clusterRaftProcessInstallSnapshot(clusterLink *link, int argc, sds *a
     rs->log_count = 0;
     rs->log_trim_index = 0;
     rs->log_trim_term = 0;
+    clusterRaftClampMinIndex(snap_index + 1);
 
     /* clusterLoadNodeLine() only adds flags and replica links to a node that
      * already exists. Reset them first so that the snapshot fully defines the
@@ -2373,6 +2724,7 @@ static int clusterRaftProcessInstallSnapshot(clusterLink *link, int argc, sds *a
     rs->last_applied = snap_index;
     rs->commit_index = snap_index;
     rs->snapshot_term = snap_term;
+    clusterRaftCompleteUnchangedProposals();
 
     serverLog(LL_NOTICE, "Installed snapshot from %.40s (index=%llu, term=%llu).",
               argv[1], (unsigned long long)snap_index, (unsigned long long)snap_term);
@@ -2395,10 +2747,13 @@ static int clusterRaftProcessInstallSnapshot(clusterLink *link, int argc, sds *a
         rs->todo_full_sync = 1;
         myself->repl_offset = 0; /* As when applying SET_REPLICA_OF. */
     }
+    /* We can ack up to our commit index as far as this function knows */
+    raftSetVerifiedIndex(msg_term, rs->commit_index, false);
     rs->todo_send_ae_ack = 1;
     rs->todo_update_replication = 1;
     rs->todo_update_slot_coverage = 1;
     clearCachedClusterSlotsResponse();
+    clusterRaftOnSlotOwnershipApplied();
     /* If our primary is failed, schedule a failover, as applying its
      * NODE_FAIL would have done. */
     if (nodeIsReplica(myself) && myself->replicaof && nodeFailed(myself->replicaof) && !nodeCantFailover(myself)) {
@@ -2449,17 +2804,22 @@ static void clusterRaftSendPreVoteResponse(clusterLink *link, uint64_t term, int
 }
 
 static int clusterRaftCanGrantVote(clusterRaftState *rs, uint64_t candidate_last_index, uint64_t candidate_last_term) {
+    /* Learners vote too. A candidate only counts its own voters.
+     * The candidate may have a different view of who is a voter. */
     if (rs->role == RAFT_ROLE_JOINER) return 0;
-    if (nodeIsLearner(myself)) return 0;
 
-    /* Deny vote if we recently heard from the leader (leader lease).
-     * Use the base node-timeout, not the randomized election timeout —
-     * the randomization is for staggering elections, not for lease duration. */
+    /* Deny vote if we are the leader or recently heard from it (leader
+     * lease, Raft thesis 4.2.3). Only contact with the leader counts, not
+     * our own election timer, which also restarts on startup and after a
+     * pre-vote round. Use the base node-timeout, not the randomized election
+     * timeout — the randomization is for staggering elections, not for lease
+     * duration. */
+    if (rs->role == RAFT_ROLE_LEADER) return 0;
     mstime_t now = monotonicMs();
     mstime_t lease = server.cluster_node_timeout;
     if (lease < 1000) lease = 1000;
-    if (rs->leader[0] != '\0' &&
-        now - rs->last_heartbeat < lease) {
+    if (rs->leader[0] != '\0' && rs->last_leader_contact != 0 &&
+        now - rs->last_leader_contact < lease) {
         return 0;
     }
 
@@ -2497,6 +2857,9 @@ static int clusterRaftProcessPreVoteRequest(clusterLink *link, int argc, sds *ar
 static int clusterRaftProcessPreVoteResponse(clusterLink *link, int argc, sds *argv) {
     /* argv: PRE_VOTE <term> <granted> */
     if (argc < 3) return 1;
+
+    /* Any reply shows that the peer is alive, see clusterRaftBecomeLeader(). */
+    if (link->node) RAFT_NODE(link->node)->last_ack_time = monotonicMs();
 
     clusterRaftState *rs = RAFT_STATE();
     uint64_t msg_term = strtoull(argv[1], NULL, 10);
@@ -2545,7 +2908,7 @@ static int clusterRaftProcessRequestVote(clusterLink *link, int argc, sds *argv)
                    clusterRaftCanGrantVote(rs, candidate_last_index, candidate_last_term)) {
             granted = 1;
             memcpy(rs->voted_for, argv[1], CLUSTER_NAMELEN);
-            rs->last_heartbeat = monotonicMs(); /* Reset election timer */
+            rs->election_timer_start = monotonicMs(); /* Reset election timer */
             rs->todo_save_config = 1;
             serverLog(LL_NOTICE, "Voted for %.40s in term %llu.", argv[1], (unsigned long long)msg_term);
         }
@@ -2586,12 +2949,17 @@ static void clusterRaftBecomeLeader(void) {
         RAFT_NODE(peer)->next_index = last + 1;
         RAFT_NODE(peer)->match_index = 0;
         RAFT_NODE(peer)->replicating = 0;
+        RAFT_NODE(peer)->acked_round = 0;
         RAFT_NODE(peer)->pending_fail_change = 0;
         /* For the old leader, backdate last_ack_time to when we last
          * heard from it, so failure detection kicks in faster. This
-         * matters if the old leader is also a primary. */
+         * matters if the old leader is also a primary. Its vote replies
+         * count too: if it voted for us, it's alive. 0 means never
+         * checked, so use now if we haven't heard from it. */
         if (memcmp(peer->name, old_leader, CLUSTER_NAMELEN) == 0) {
-            RAFT_NODE(peer)->last_ack_time = rs->last_heartbeat;
+            mstime_t contact = rs->last_leader_contact;
+            if (RAFT_NODE(peer)->last_ack_time > contact) contact = RAFT_NODE(peer)->last_ack_time;
+            RAFT_NODE(peer)->last_ack_time = contact ? contact : monotonicMs();
         } else {
             RAFT_NODE(peer)->last_ack_time = monotonicMs();
         }
@@ -2602,12 +2970,16 @@ static void clusterRaftBecomeLeader(void) {
     uint64_t noop_idx = raftLogLastIndex() + 1;
     raftLogAppend(raftLogCreate(rs->current_term, noop_idx, RAFT_ENTRY_NOOP, sdsempty()));
     /* Immediate heartbeat to assert leadership. */
+    rs->last_heartbeat_sent = monotonicMs();
     clusterRaftBroadcastAppendEntries();
 }
 
 static int clusterRaftProcessRequestVoteResponse(clusterLink *link, int argc, sds *argv) {
     /* argv: VOTE <term> <granted> */
     if (argc < 3) return 1;
+
+    /* Any reply shows that the peer is alive, see clusterRaftBecomeLeader(). */
+    if (link->node) RAFT_NODE(link->node)->last_ack_time = monotonicMs();
 
     clusterRaftState *rs = RAFT_STATE();
     uint64_t msg_term = strtoull(argv[1], NULL, 10);
@@ -2663,7 +3035,7 @@ static void clusterRaftStartElection(void) {
     memcpy(rs->voted_for, myself->name, CLUSTER_NAMELEN);
     rs->votes_received = 1; /* Vote for self */
     clusterRaftRandomizeElectionTimeout();
-    rs->last_heartbeat = monotonicMs();
+    rs->election_timer_start = monotonicMs();
     rs->todo_save_config = 1;
     /* Defer sending RequestVote until after the term bump and self-vote
      * are persisted. Otherwise a crash could allow double-voting. */
@@ -2687,9 +3059,11 @@ static void clusterRaftInit(void) {
     server.cluster->protocol_data = rs;
     rs->role = RAFT_ROLE_FOLLOWER;
     clusterRaftRandomizeElectionTimeout();
-    rs->last_heartbeat = monotonicMs();
+    rs->election_timer_start = monotonicMs();
     rs->pending_proposals = listCreate();
     rs->pending_meets = listCreate();
+    rs->pending_reads = listCreate();
+    listSetFreeMethod(rs->pending_reads, raftPendingReadFree);
     rs->deferred_meets = listCreate();
     listSetFreeMethod(rs->deferred_meets, sdsfreeVoid);
     rs->my_last_committed_info = sdsempty();
@@ -2816,6 +3190,7 @@ static void clusterRaftSendProposal(raftPendingProposal *pp, clusterLink *leader
     if (rs->role == RAFT_ROLE_LEADER) {
         uint64_t idx = raftLogLastIndex() + 1;
         raftLogAppend(raftLogCreate(rs->current_term, idx, pp->type, sdsdup(pp->data)));
+        pp->min_index = idx;
         serverLog(LL_NOTICE, "Leader appended retried %s (index %llu).",
                   raftEntryTypeName(pp->type), (unsigned long long)idx);
         rs->todo_broadcast_ae = 1;
@@ -2856,6 +3231,9 @@ static void clusterRaftRetryProposals(int include_pending) {
     while ((ln = listNext(&li)) != NULL) {
         raftPendingProposal *pp = listNodeValue(ln);
 
+        /* Already answered, waiting for us to catch up. */
+        if (pp->wait_index) continue;
+
         /* For deferred entries, update to latest shard epoch */
         if (pp->deferred) {
             if (!raftRefreshEpochInData(pp->type, &pp->data)) continue;
@@ -2864,6 +3242,10 @@ static void clusterRaftRetryProposals(int include_pending) {
 
             if (rs->role == RAFT_ROLE_LEADER) {
                 RaftProposalResult pre_result = clusterRaftPreValidate(pp->type, pp->data);
+                if (pre_result == RAFT_RESULT_UNCHANGED) {
+                    clusterRaftAddPendingRead(pp->type, pp->data, NULL);
+                    continue;
+                }
                 if (pre_result != RAFT_RESULT_OK) {
                     if (pp->callback) pp->callback(pp->ctx, raftProposalResultMsg(pre_result));
                     sdsfree(pp->data);
@@ -2911,6 +3293,8 @@ static void clusterRaftCron(void) {
     mstime_t now = monotonicMs();
 
     clusterRaftAssertLearnerRole();
+    /* Synchronize the handoff hold after slot-migration timeout handling. */
+    clusterRaftSyncSlotChangePending();
 
     clusterRaftReapJoiningStubs();
 
@@ -2958,7 +3342,7 @@ static void clusterRaftCron(void) {
         /* Follower/candidate: check election timeout. */
         if (nodeIsVoter(myself) &&
             (rs->role == RAFT_ROLE_FOLLOWER || rs->role == RAFT_ROLE_CANDIDATE) &&
-            now - rs->last_heartbeat > rs->election_timeout) {
+            now - rs->election_timer_start > rs->election_timeout) {
             clusterRaftStartPreVote();
         }
 
@@ -2966,7 +3350,7 @@ static void clusterRaftCron(void) {
             now - rs->pre_vote_started > rs->election_timeout) {
             rs->role = RAFT_ROLE_FOLLOWER;
             clusterRaftRandomizeElectionTimeout();
-            rs->last_heartbeat = now;
+            rs->election_timer_start = now;
         }
 
         if (rs->role == RAFT_ROLE_LEADER &&
@@ -3029,8 +3413,8 @@ static void clusterRaftCron(void) {
             /* Send periodic heartbeats. */
             mstime_t heartbeat_interval = rs->election_timeout / 10;
             if (heartbeat_interval < 100) heartbeat_interval = 100;
-            if (now - rs->last_heartbeat > heartbeat_interval) {
-                rs->last_heartbeat = now;
+            if (now - rs->last_heartbeat_sent > heartbeat_interval) {
+                rs->last_heartbeat_sent = now;
                 clusterRaftBroadcastAppendEntries();
             }
 
@@ -3131,6 +3515,7 @@ static void clusterRaftCheckSlotCoverage(void) {
 static void clusterRaftBeforeSleep(bool blocked) {
     UNUSED(blocked);
     clusterRaftState *rs = RAFT_STATE();
+    clusterRaftSyncSlotChangePending();
 
     if (rs->todo_connect_nodes) {
         rs->todo_connect_nodes = 0;
@@ -3196,13 +3581,15 @@ static void clusterRaftBeforeSleep(bool blocked) {
         myself->repl_offset = replicationGetReplicaOffset();
     }
 
+    /* We need to send only a verified response
+     * If our term has been bumped, we should not send a verified ack from a past term */
     if (rs->todo_send_ae_ack) {
         rs->todo_send_ae_ack = 0;
         clusterNode *leader = clusterLookupNode(rs->leader, CLUSTER_NAMELEN);
         /* AE arrives on the inbound link (leader connects to us). */
         clusterLink *link = leader ? (leader->inbound_link ? leader->inbound_link : leader->link) : NULL;
-        if (link) {
-            clusterRaftSendAppendEntriesResponse(link, rs->current_term, 1);
+        if (link && rs->ae_ack_term == rs->current_term) {
+            clusterRaftSendAppendEntriesResponse(link, rs->ae_ack_term, rs->ae_ack_index, 1);
         }
     }
 
@@ -3233,6 +3620,7 @@ static void clusterRaftBeforeSleep(bool blocked) {
         rs->todo_broadcast_ae = 0;
         if (rs->role == RAFT_ROLE_LEADER) clusterRaftBroadcastAppendEntries();
     }
+    clusterRaftProcessPendingReads();
 
     if (rs->todo_retry_deferred || rs->todo_retry_proposals) {
         int include_pending = rs->todo_retry_proposals;
@@ -3329,6 +3717,7 @@ static void clusterRaftHandleServerShutdown(void) {
     }
     listRelease(rs->pending_meets);
     listRelease(rs->deferred_meets);
+    listRelease(rs->pending_reads);
     /* Free raft log. */
     for (uint64_t i = 0; i < rs->log_count; i++) {
         sdsfree(rs->log[i]->data);
@@ -3398,6 +3787,8 @@ static int clusterRaftProcessMessage(struct clusterLink *link) {
         ret = clusterRaftProcessPropose(link, argc, argv);
     } else if (!strcasecmp(argv[0], "REJECT")) {
         ret = clusterRaftProcessReject(link, argc, argv);
+    } else if (!strcasecmp(argv[0], "UNCHANGED")) {
+        ret = clusterRaftProcessUnchanged(link, argc, argv);
     } else if (!strcasecmp(argv[0], "AE")) {
         ret = clusterRaftProcessAppendEntries(link, argc, argv, lines + 1, line_count - 1);
     } else if (!strcasecmp(argv[0], "INSTALL_SNAPSHOT")) {
@@ -3529,16 +3920,22 @@ static void clusterRaftUnblockMeet(clusterNode *node) {
     sdsfree(addr);
 }
 
+/* The AEs sent to a follower on its outbound link are lost with it, so resend
+ * from its last acknowledged entry. Done when the link is freed, since a new
+ * link may take long to connect, e.g. a TLS handshake with a paused process. */
+static void clusterRaftOnLinkFree(struct clusterLink *link) {
+    if (link->node->link != link) return;
+    clusterNodeRaftData *rd = RAFT_NODE(link->node);
+    if (rd->replicating) {
+        rd->replicating = 0;
+        rd->next_index = rd->match_index + 1;
+    }
+}
+
 static void clusterRaftPostConnect(struct clusterLink *link) {
     if (myself->ip[0] == '\0' && server.cluster_announce_ip == NULL) {
         connAddrSockName(link->conn, myself->ip, sizeof(myself->ip), NULL);
         serverLog(LL_NOTICE, "IP address for this node updated to %s", myself->ip);
-    }
-    /* AEs queued on the old link are lost. */
-    clusterNodeRaftData *rd = link->node ? RAFT_NODE(link->node) : NULL;
-    if (rd && rd->replicating) {
-        rd->replicating = 0;
-        rd->next_index = rd->match_index + 1;
     }
     clusterRaftSendGreeting(link, "HELLO");
     if (link->node && nodeInHandshake(link->node)) {
@@ -4165,27 +4562,45 @@ static RaftProposalResult clusterRaftApplySlotChange(sds data, int validate_only
         goto reject;
     }
 
-    if (validate_only) goto done;
+    /* Range fields are argv[range_start_arg] through argv[argc-1]: "0-5460"
+     * or "5461". Check them all before changing anything, also when applying,
+     * so that every node rejects a malformed entry. */
+    for (int i = info.range_start_arg; i < argc; i++) {
+        char *p = strchr(argv[i], '-');
+        int start = atoi(argv[i]);
+        int end = p ? atoi(p + 1) : start;
+        if (start < 0 || end >= CLUSTER_SLOTS || start > end) goto reject;
+    }
+
+    if (validate_only) {
+        /* Unchanged if every slot already has the target as owner, e.g. when
+         * valkey-cli sends CLUSTER SETSLOT NODE to every node. */
+        bool unchanged = info.target_node || !strcmp(argv[2], "-");
+        for (int i = info.range_start_arg; i < argc && unchanged; i++) {
+            char *p = strchr(argv[i], '-');
+            int start = atoi(argv[i]);
+            int end = p ? atoi(p + 1) : start;
+            for (int j = start; j <= end && unchanged; j++) {
+                if (server.cluster->slots[j] != info.target_node) unchanged = false;
+            }
+        }
+        if (unchanged) result = RAFT_RESULT_UNCHANGED;
+        goto done;
+    }
 
     bool my_shard_had_slots = clusterNodeGetPrimary(myself)->numslots > 0;
 
-    /* Range fields are argv[range_start_arg] through argv[argc-1]. */
     for (int i = info.range_start_arg; i < argc; i++) {
-        int start, end;
         char *p = strchr(argv[i], '-');
-        if (p) {
-            *p = '\0';
-            start = atoi(argv[i]);
-            end = atoi(p + 1);
-        } else {
-            start = end = atoi(argv[i]);
-        }
+        int start = atoi(argv[i]);
+        int end = p ? atoi(p + 1) : start;
         for (int j = start; j <= end; j++) {
             clusterNode *old_owner = server.cluster->slots[j];
             if (old_owner == info.target_node) continue;
-            clusterRaftUpdateLocalSlotState(j, old_owner, info.target_node);
             if (old_owner) clusterDelSlot(j);
             if (info.target_node) clusterAddSlot(info.target_node, j);
+            /* Publish ownership before cleanup so its DELs are not exported. */
+            clusterRaftUpdateLocalSlotState(j, old_owner, info.target_node);
         }
     }
 
@@ -4270,7 +4685,14 @@ static RaftProposalResult clusterRaftApplySetReplica(sds data, int validate_only
         }
     }
 
-    if (validate_only) goto done;
+    if (validate_only) {
+        /* Unchanged if the node already replicates the (resolved) primary, or
+         * is already a primary in the target shard. */
+        bool unchanged = primary ? nodeIsReplica(replica) && replica->replicaof == primary
+                                 : nodeIsPrimary(replica) && !memcmp(replica->shard_id, target_shard, CLUSTER_NAMELEN);
+        if (unchanged) result = RAFT_RESULT_UNCHANGED;
+        goto done;
+    }
 
     if (replica == myself) rs->todo_save_config = 1;
 
@@ -4352,11 +4774,20 @@ static RaftProposalResult clusterRaftApplyFailover(sds data, int validate_only) 
 
     if (validate_only) goto done;
 
-    /* Transfer slots from old primary to new primary. */
+    /* Transfer slots, and migrating/importing markers that point at the old
+     * primary, to the new primary. */
     for (int j = 0; j < CLUSTER_SLOTS; j++) {
         if (server.cluster->slots[j] == primary) {
             clusterDelSlot(j);
             clusterAddSlot(replica, j);
+        }
+        if (getImportingSlotSource(j) == primary) {
+            setImportingSlotSource(j, replica);
+            rs->todo_save_config = 1;
+        }
+        if (getMigratingSlotDest(j) == primary) {
+            setMigratingSlotDest(j, replica);
+            rs->todo_save_config = 1;
         }
     }
 
@@ -4455,19 +4886,27 @@ static RaftProposalResult clusterRaftApplyDelVoter(sds data, int validate_only) 
 
     clusterNode *node = clusterLookupNode(argv[0], CLUSTER_NAMELEN);
     if (!node || (node->flags & CLUSTER_NODE_JOINING) || nodeIsLearner(node) ||
-        server.cluster->size <= 1 ||
-        memcmp(node->name, rs->leader, CLUSTER_NAMELEN) == 0) {
+        server.cluster->size <= 1) {
         sdsfreesplitres(argv, argc);
         return RAFT_RESULT_REJECTED;
     }
 
     if (validate_only) {
+        /* Not checked on apply, where nodes may know different leaders. */
+        bool is_leader = memcmp(node->name, rs->leader, CLUSTER_NAMELEN) == 0;
         sdsfreesplitres(argv, argc);
-        return RAFT_RESULT_OK;
+        return is_leader ? RAFT_RESULT_REJECTED : RAFT_RESULT_OK;
     }
 
     node->flags |= CLUSTER_NODE_LEARNER;
-    if (node == myself) rs->role = RAFT_ROLE_LEARNER;
+    if (node == myself) {
+        /* Elected before applying it: send the commit, then step down. */
+        if (rs->role == RAFT_ROLE_LEADER) {
+            clusterRaftBroadcastAppendEntries();
+            clusterRaftStepDown(monotonicMs(), "removed from the voters");
+        }
+        rs->role = RAFT_ROLE_LEARNER;
+    }
     server.cluster->size--;
     rs->todo_save_config = 1;
     sdsfreesplitres(argv, argc);
@@ -4510,6 +4949,7 @@ static void clusterRaftForgetMyself(void) {
      * have left. Drop them so a restart cannot apply them as a singleton. */
     rs->commit_index = rs->last_applied;
     raftLogTruncateFrom(rs->last_applied + 1);
+    raftSetVerifiedIndex(rs->current_term, rs->last_applied, true);
     rs->todo_save_config = 1;
 }
 
@@ -4526,7 +4966,10 @@ static RaftProposalResult clusterRaftApplyNodeForget(sds data, int validate_only
 
     clusterNode *node = clusterLookupNode(argv[0], sdslen(argv[0]));
     /* Already forgotten: success (idempotent; may be a no-op log entry). */
-    if (!node) goto done;
+    if (!node) {
+        if (validate_only) result = RAFT_RESULT_UNCHANGED;
+        goto done;
+    }
 
     uint64_t epoch = strtoull(argv[1], NULL, 10);
     if (!clusterValidateShardEpoch(node->shard_id, epoch)) {
@@ -4841,7 +5284,11 @@ static void clusterRaftResetCluster(int hard) {
         listDelNode(rs->pending_meets, ln);
     }
     listEmpty(rs->deferred_meets);
+    listEmpty(rs->pending_reads);
+    rs->max_unchanged_index = 0;
     rs->current_term = 0;
+    rs->ae_ack_index = 0;
+    rs->ae_ack_term = 0;
     memset(rs->leader, 0, CLUSTER_NAMELEN);
     memset(rs->voted_for, 0, CLUSTER_NAMELEN);
     rs->commit_index = 0;
@@ -4893,7 +5340,8 @@ static int clusterRaftSpecialCommand(client *c) {
         addReply(c, shared.ok);
         return 1;
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "bumpepoch") && c->argc == 2) {
-        addReply(c, shared.ok);
+        /* No config epochs in Raft. Reply like gossip for tools and tests. */
+        addReplyStatusFormat(c, "BUMPED %llu", (unsigned long long)clusterGetShardEpoch(myself->shard_id));
         return 1;
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "addvoter") && c->argc == 3) {
         void *h = blockClientAsync(c);
@@ -4935,6 +5383,7 @@ clusterBusType clusterRaftBus = {
     .validateMessageHeader = clusterRaftValidateMessageHeader,
     .processMessage = clusterRaftProcessMessage,
     .postConnect = clusterRaftPostConnect,
+    .onLinkFree = clusterRaftOnLinkFree,
     .publishMessageLengthValid = clusterRaftPublishMessageLengthValid,
     .propagatePublish = clusterRaftPropagatePublish,
     .sendModuleMessage = clusterRaftSendModuleMessage,
@@ -4955,6 +5404,7 @@ clusterBusType clusterRaftBus = {
     .initNodeData = clusterRaftInitNodeData,
     .freeNodeData = clusterRaftFreeNodeData,
     .slotChange = clusterRaftSlotChange,
+    .isSlotChangePending = clusterRaftIsSlotChangePending,
     .cancelManualFailover = clusterRaftCancelManualFailover,
     .cancelAutomaticFailover = clusterRaftCancelAutomaticFailover,
     .forgetNode = clusterRaftForgetNode,

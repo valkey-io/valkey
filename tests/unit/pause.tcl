@@ -51,6 +51,7 @@ start_server {tags {"pause network"}} {
         #   more restrictive than the second 'PAUSE WRITE' and pause-client feature
         #   preserve most restrictive configuration among multiple settings.
         set rd [valkey_deferring_client]
+        test_defer {$rd close}
         $rd SET FOO BAR
 
         set test_start_time [clock milliseconds]

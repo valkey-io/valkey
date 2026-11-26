@@ -244,4 +244,27 @@ test "Raft: CLUSTER FORGET of a live node must not reappear via HELLO" {
     }
 }
 
+test "Raft: a proposal that changes nothing is answered without a log entry" {
+    start_multiple_servers 3 {overrides {cluster-enabled yes cluster-protocol raft cluster-node-timeout 2000}} {
+        raft_form_cluster 2 3
+        foreach n {0 1 2} { R $n cluster addslots $n }
+        wait_for_condition 50 100 {
+            [CI 0 cluster_slots_assigned] == 3 &&
+            [CI 1 cluster_raft_last_applied] == [CI 0 cluster_raft_last_applied] &&
+            [CI 2 cluster_raft_last_applied] == [CI 0 cluster_raft_last_applied]
+        } else {
+            fail "slots not applied everywhere"
+        }
+        set applied [CI 0 cluster_raft_last_applied]
+
+        # SETSLOT NODE for the owner, on the leader, a follower and a learner.
+        foreach n {0 1 2} {
+            foreach slot {0 1 2} {
+                assert_equal OK [R $n cluster setslot $slot node [R $slot cluster myid]]
+            }
+        }
+        assert_equal $applied [CI 0 cluster_raft_last_applied]
+    }
+}
+
 } ;# tags

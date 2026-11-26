@@ -190,7 +190,7 @@ proc do_node_restart {idx} {
 }
 
 # Disable replica migration to prevent empty nodes from joining other shards.
-start_cluster 3 3 {tags {logreqres:skip external:skip cluster network cluster-raft:skip} overrides {cluster-allow-replica-migration no cluster-node-timeout 15000 cluster-databases 16}} {
+start_cluster 3 3 {tags {logreqres:skip external:skip cluster network} overrides {cluster-allow-replica-migration no cluster-node-timeout 15000 cluster-databases 16}} {
 
     set node0_id [R 0 CLUSTER MYID]
     set node1_id [R 1 CLUSTER MYID]
@@ -1493,8 +1493,12 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster network cluster-ra
             assert_match {*Unpaused before migration completed*} [dict get [get_migration_by_name 0 $jobname] message]
             assert_match {*Connection lost to source*} [dict get [get_migration_by_name 2 $jobname] message]
 
-            # Validate no longer paused
-            assert_match "none" [s -0 paused_reason]
+            # The migration cron releases the pause after the protocol hold ends.
+            wait_for_condition 100 10 {
+                [s -0 paused_reason] eq "none"
+            } else {
+                fail "Source remained paused after export timeout"
+            }
 
             # Cleanup for the next test
             set_debug_prevent_failover 0
@@ -1521,7 +1525,11 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster network cluster-ra
             wait_for_migration_field 0 $jobname state cancelled
             wait_for_migration_field 2 $jobname state failed
 
-            assert_match "none" [s -0 paused_reason]
+            wait_for_condition 100 10 {
+                [s -0 paused_reason] eq "none"
+            } else {
+                fail "Source remained paused after export cancellation"
+            }
 
             # Cleanup for the next test
             set_debug_prevent_failover 0
@@ -1562,7 +1570,11 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster network cluster-ra
             wait_for_migration_field 0 $jobname state success
             wait_for_migration_field 2 $jobname state success
             wait_for_migration 2 0
-            assert_match "none" [s -0 paused_reason]
+            wait_for_condition 100 10 {
+                [s -0 paused_reason] eq "none"
+            } else {
+                fail "Source remained paused after export completion"
+            }
 
             # Read the result from the blocked clients (-MOVED)
             assert_error "MOVED 0 *:*" {$blpop_client read}
@@ -2534,7 +2546,7 @@ start_cluster 3 0 {tags {logreqres:skip external:skip cluster network}} {
     }
 }
 
-start_cluster 3 6 {tags {logreqres:skip external:skip cluster network cluster-raft:skip}} {
+start_cluster 3 6 {tags {logreqres:skip external:skip cluster network}} {
     set node0_id [R 0 CLUSTER MYID]
     set node1_id [R 1 CLUSTER MYID]
     set node2_id [R 2 CLUSTER MYID]
@@ -2588,7 +2600,7 @@ start_cluster 3 6 {tags {logreqres:skip external:skip cluster network cluster-ra
     }
 }
 
-start_cluster 3 0 {tags {logreqres:skip external:skip cluster network cluster-raft:skip}} {
+start_cluster 3 0 {tags {logreqres:skip external:skip cluster network}} {
 
     set node0_id [R 0 CLUSTER MYID]
     set node1_id [R 1 CLUSTER MYID]
@@ -2654,7 +2666,7 @@ start_cluster 3 0 {tags {logreqres:skip external:skip cluster network cluster-ra
 
 }
 
-start_cluster 3 3 {tags {logreqres:skip external:skip cluster cluster-raft:skip aofrw network} overrides {appendonly yes auto-aof-rewrite-percentage 0}} {
+start_cluster 3 3 {tags {logreqres:skip external:skip cluster aofrw network} overrides {appendonly yes auto-aof-rewrite-percentage 0}} {
     set node0_id [R 0 CLUSTER MYID]
     set node1_id [R 1 CLUSTER MYID]
     set node2_id [R 2 CLUSTER MYID]
@@ -2801,7 +2813,7 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster cluster-raft:skip 
         assert_match "500" [R 5 CLUSTER COUNTKEYSINSLOT 16383]
         assert_equal $slots_start [R 0 CLUSTER SLOTS]
         assert_match "OK" [R 2 FLUSHDB SYNC]
-    } {} {cluster-raft:skip} ;# TODO: investigate AOF + migration with raft
+    }
 }
 
 start_cluster 3 0 {tags {logreqres:skip external:skip cluster network} overrides {cluster-require-full-coverage no slot-migration-max-failover-repl-bytes 0 repl-timeout 3600}} {

@@ -90,6 +90,7 @@ int freeClusterLink(clusterLink *link) {
 
     /* Detach from node regardless of whether we free now or defer. */
     if (link->node) {
+        if (clusterCurrentBus->onLinkFree) clusterCurrentBus->onLinkFree(link);
         if (link->node->link == link) {
             serverAssert(!link->inbound);
             link->node->link = NULL;

@@ -42,6 +42,11 @@ typedef struct clusterBusType {
      * implementation typically sends an initial message (e.g. PING). */
     void (*postConnect)(struct clusterLink *link);
 
+    /* Called when a link that belongs to a node is freed, for whatever reason
+     * and whichever side closed it, while link->node is still set. Messages
+     * queued on it or in flight are lost. Optional. */
+    void (*onLinkFree)(struct clusterLink *link);
+
     /* Called after a config change updates myself's metadata (IP, ports,
      * hostname, flags, etc.). The protocol implementation should arrange for
      * the change to be persisted and propagated. The `updated` argument is a
@@ -119,6 +124,12 @@ typedef struct clusterBusType {
      * broadcast in the legacy protocol). The ctx pointer is passed through
      * to the callback, which is called when the change is applied. */
     void (*slotChange)(slotRange *ranges, int numranges, clusterNode *target, void *ctx, void (*callback)(void *ctx, const char *error));
+
+    /* True while a slot change affecting our slots may still be applied, e.g.
+     * after granting a slot handover whose outcome isn't decided yet. Callers
+     * that must not act on the current slot ownership until then, like the
+     * slot migration pause, wait while it's true. NULL means never. */
+    bool (*isSlotChangePending)(void);
 
     /* Clean up any protocol-specific manual failover state. Called when the
      * node's role changes and any in-progress manual failover state is no

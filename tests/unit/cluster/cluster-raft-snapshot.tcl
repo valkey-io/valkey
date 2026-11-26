@@ -113,6 +113,16 @@ start_cluster 3 0 {overrides {cluster-protocol raft cluster-node-timeout 3000}} 
         set f_id [R $f cluster myid]
         set installed_before [count_log_message -$f "Installed snapshot"]
 
+        # Make sure the follower has acked an AE, so that the leader sends it
+        # entries without waiting for ACKs. Then the leader only falls back to
+        # a snapshot once it has given up the link to the paused follower.
+        R $l config set cluster-announce-hostname "host-d-start.com"
+        wait_for_condition 100 50 {
+            [CI $f cluster_raft_last_applied] == [CI $l cluster_raft_last_applied]
+        } else {
+            fail "follower did not catch up before the pause"
+        }
+
         # The leader sends a snapshot to the paused follower, which only gets
         # it into its socket buffer.
         pause_process [srv -$f pid]

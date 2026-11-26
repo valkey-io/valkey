@@ -259,24 +259,41 @@ void restoreCommand(client *c) {
     }
 
     rioInitWithBuffer(&payload, objectGetVal(c->argv[3]));
-    type = rdbLoadObjectType(&payload);
+    type = rdbLoadObjectType(&payload, rdbver);
     if (type == -1) {
         addReplyError(c, "Bad data format");
         return;
     }
 
-    /* If it's a foreign RDB format, only accept old data types that we know
-     * existed in the past and that don't clash with new types added later. */
-    if (rdbIsForeignVersion(rdbver) && type >= RDB_FOREIGN_TYPE_MIN) {
+    /* Foreign formats may use old shared types or explicitly supported foreign
+     * types, but must not be interpreted using Valkey's newer type namespace. */
+    if (rdbIsForeignVersion(rdbver) && type >= RDB_FOREIGN_TYPE_MIN &&
+        !rdbIsSupportedForeignType(rdbver, type)) {
         addReplyErrorFormat(c, "Unsupported foreign data type: %d", type);
         return;
     }
 
-    obj = rdbLoadObject(type, &payload, objectGetVal(key), c->db->id, NULL, RDBFLAGS_NONE, 0);
+    bool discarded_idmp = false;
+    obj = rdbLoadObject(type,
+                        &payload,
+                        objectGetVal(key),
+                        c->db->id,
+                        NULL,
+                        RDBFLAGS_NONE,
+                        0,
+                        &discarded_idmp);
+    /* A truncated foreign trailer must not consume the DUMP version/checksum
+     * as metadata, nor leave unparsed IDMP state behind. */
+    if (obj && type == RDB_TYPE_REDIS_STREAM_LISTPACKS_4 &&
+        rioTell(&payload) != (off_t)(sdslen(objectGetVal(c->argv[3])) - 10)) {
+        decrRefCount(obj);
+        obj = NULL;
+    }
     if (obj == NULL) {
         addReplyError(c, "Bad data format");
         return;
     }
+    if (discarded_idmp) rdbLogDiscardedRedisStreamIdmp(objectGetVal(key));
 
     /* Remove the old key if needed. */
     int deleted = 0;
@@ -309,6 +326,15 @@ void restoreCommand(client *c) {
             decrRefCount(ttl_obj);
             rewriteClientCommandArgument(c, c->argc, shared.absttl);
         }
+    }
+    if (rdbIsForeignVersion(rdbver)) {
+        rio native_payload;
+        createDumpPayload(&native_payload, obj, key, c->db->id);
+        robj *native_dump =
+            createStringObject(native_payload.io.buffer.ptr, sdslen(native_payload.io.buffer.ptr));
+        rewriteClientCommandArgument(c, 3, native_dump);
+        decrRefCount(native_dump);
+        sdsfree(native_payload.io.buffer.ptr);
     }
     objectSetLRUOrLFU(obj, lfu_freq, lru_idle);
     signalModifiedKey(c, c->db, key);

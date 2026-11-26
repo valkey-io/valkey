@@ -3894,9 +3894,13 @@ int clusterProcessPingExtensions(clusterMsg *hdr, clusterLink *link, clusterNode
         } else if (type == CLUSTERMSG_EXT_TYPE_FORGOTTEN_NODE) {
             clusterMsgPingExtForgottenNode *forgotten_node_ext = &(ext->ext[0].forgotten_node);
             clusterNode *n = clusterLookupNode(forgotten_node_ext->name, CLUSTER_NAMELEN);
-            if (n == sender) {
+            /* The link can still be bound to a handshake node that is not
+             * 'sender'. Deleting that node would free the link whose buffer
+             * we are reading, so reject it like the sender itself. */
+            if (n && (n == sender || n == link->node)) {
                 serverLog(LL_WARNING,
-                          "Received invalid FORGOTTEN_NODE extension from node %.40s naming itself; closing link",
+                          "Received invalid FORGOTTEN_NODE extension from node %.40s naming itself or its link's node; "
+                          "closing link",
                           sender->name);
                 freeClusterLink(link);
                 return 0;

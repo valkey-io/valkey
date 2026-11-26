@@ -1156,8 +1156,10 @@ start_cluster 3 5 {tags {tls:skip external:skip cluster} overrides {cluster-allo
         } else {
             fail "R3 did not create a handshake node for the MEET"
         }
-        # R7 claims a newer epoch, from a shard of its own, on that link.
-        set E_new [expr {$E6 + 1}]
+        # R7 claims a newer epoch, from a shard of its own, on that link. It
+        # must be newer than the epoch R3 already records for R7, so that the
+        # wait below shows R3 processed this claim.
+        set E_new [expr {max($E6, [dict get [cluster_get_node_by_id 3 $R7_id] config_epoch]) + 1}]
         puts -nonewline $sock [create_primary_ping $R7_id $R7_port $R7_cport $E_new $E_new $new_shard_id]
         flush $sock
         wait_for_condition 1000 10 {
@@ -1169,6 +1171,57 @@ start_cluster 3 5 {tags {tls:skip external:skip cluster} overrides {cluster-allo
         close $sock
         assert_equal "\[609->-$R6_id\]" [get_open_slots 3]
         assert_equal $new_shard_id [node_shard_id 3 $R7_id]
+    }
+}
+
+# A replica's PING with a FORGOTTEN_NODE extension naming $forgotten.
+proc create_replica_ping_forgetting {sender_name sender_port sender_cport epoch primary_name shard_id forgotten} {
+    set CLUSTERMSG_TYPE_PING 0
+    set CLUSTERMSG_EXT_TYPE_FORGOTTEN_NODE 2
+    set CLUSTERMSG_EXT_TYPE_SHARDID 3
+    # Two extensions, and the EXT_DATA message flag (1 << 2).
+    set packet [create_primary_header $CLUSTERMSG_TYPE_PING $sender_name $sender_port $sender_cport \
+        $epoch $epoch 2 4 2 $primary_name]
+    # Forgotten node extension: the node name, then the blacklist TTL.
+    append packet [binary format ISS [expr {8 + 40 + 8}] $CLUSTERMSG_EXT_TYPE_FORGOTTEN_NODE 0]
+    append packet $forgotten [binary format W 60]
+    set datalen [expr {(([string length $shard_id] + 1 + 7) / 8) * 8}]
+    append packet [binary format ISS [expr {8 + $datalen}] $CLUSTERMSG_EXT_TYPE_SHARDID 0]
+    append packet $shard_id [string repeat "\x00" [expr {$datalen - [string length $shard_id]}]]
+    return [finish_cluster_packet $packet]
+}
+
+# A known node's PING on an inbound link still bound to a handshake node names
+# that handshake node in a FORGOTTEN_NODE extension. Deleting the handshake
+# node would free the link whose packet is being read, so the receiver must
+# close the link instead.
+start_cluster 3 3 {tags {tls:skip external:skip cluster} overrides {cluster-node-timeout 5000} } {
+    test "FORGOTTEN_NODE naming the handshake node of the receiving link closes the link" {
+        set R0_id [R 0 CLUSTER MYID]
+        set R3_id [R 3 CLUSTER MYID]
+        wait_for_condition 100 100 {
+            [cluster_node_is_replica_of 1 $R3_id $R0_id]
+        } else {
+            fail "R1 never recorded R3 as a replica of R0"
+        }
+        set R3_port [srv -3 port]
+        set R3_cport [expr {$R3_port + 10000}]
+        set sock [open_handshake_bound_link 1 $R3_port $R3_cport]
+        set hs_id {}
+        wait_for_condition 1000 10 {
+            [regexp {(?n)^([0-9a-f]{40}) \S+ handshake } [R 1 CLUSTER NODES] -> hs_id]
+        } else {
+            close $sock
+            fail "R1 did not create a handshake node for the MEET"
+        }
+        set loglines [count_log_lines -1]
+        set epoch [dict get [cluster_get_myself 0] config_epoch]
+        puts -nonewline $sock [create_replica_ping_forgetting $R3_id $R3_port $R3_cport $epoch $R0_id \
+            [R 0 CLUSTER MYSHARDID] $hs_id]
+        flush $sock
+        wait_for_log_messages -1 [list "*naming itself or its link's node; closing link*"] $loglines 1000 10
+        close $sock
+        assert_equal PONG [R 1 PING]
     }
 }
 

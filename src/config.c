@@ -2873,12 +2873,14 @@ static int updateLuaEnableInsecureApi(const char **err) {
 }
 
 int updateRequirePass(const char **err) {
-    UNUSED(err);
     /* The old "requirepass" directive just translates to setting
      * a password to the default user. The only thing we do
      * additionally is to remember the cleartext password in this
      * case, for backward compatibility. */
-    ACLUpdateDefaultUserPassword(server.requirepass);
+    if (ACLUpdateDefaultUserPassword(server.requirepass) != C_OK) {
+        *err = "The password could not be hashed because the crypto provider failed to compute SHA-256";
+        return 0;
+    }
     return 1;
 }
 

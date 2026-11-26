@@ -121,6 +121,7 @@ void getRandomHexChars(char *p, size_t len);
 void getRandomBytes(unsigned char *p, size_t len);
 int getSecureRandomHexChars(char *p, size_t len);
 int getSecureRandomBytes(unsigned char *p, size_t len);
+int digestSHA256(unsigned char *digest, const void *data, size_t len);
 long long ustime(void);
 mstime_t mstime(void);
 void writePointerWithPadding(unsigned char *buf, const void *ptr);

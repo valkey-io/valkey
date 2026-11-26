@@ -1012,6 +1012,78 @@ start_server {tags {pathhash needs:debug} overrides {appendonly yes aof-use-rdb-
         assert_equal none [r type empty-tree]
         assert_equal 0 [r phpathcount empty-tree]
     }
+
+    test {AOF rewrite batches Path Hash fields and restart restores every payload} {
+        r flushall
+        set old_limit [lindex [r config get hash-max-listpack-entries] 1]
+        test_defer {r config set hash-max-listpack-entries $old_limit}
+        # Keep the smaller payloads listpack-encoded and promote only the
+        # 600-field payload, regardless of the server's global configuration.
+        r config set hash-max-listpack-entries 512
+        set expected [dict create]
+        set expected_batches [dict create]
+        set promoted_path {}
+        foreach count {1 63 64 65 600} {
+            set path "[binary format H* 007061ff]${count}[binary format H* 00]"
+            if {$count == 600} {set promoted_path $path}
+            for {set i 0} {$i < $count} {incr i} {
+                set field "[binary format H* 0066ff]${count}:${i}[binary format H* 00]"
+                set value "[binary format H* 0076ff]${count}:${i}[binary format H* fe]"
+                r phset tree $path fields 1 $field $value
+                dict set expected $path $field $value
+            }
+            switch $count {
+                1 - 63 - 64 {dict set expected_batches $path $count}
+                65 {dict set expected_batches $path {64 1}}
+                600 {dict set expected_batches $path [linsert [lrepeat 9 64] end 24]}
+            }
+        }
+        set digest_before [r debug digest-value tree]
+        r bgrewriteaof
+        waitForBgrewriteaof r
+
+        set fp [open [get_base_aof_path r] r]
+        fconfigure $fp -translation binary
+        fconfigure $fp -blocking 1
+        set actual_batches [dict create]
+        set command_count 0
+        set saw_batched_command 0
+        while {![eof $fp]} {
+            set command [read_from_aof $fp]
+            if {[llength $command] == 0 || [lindex $command 0] ne {phset}} continue
+            assert_equal tree [lindex $command 1]
+            assert_equal fields [string tolower [lindex $command 3]]
+            set numfields [lindex $command 4]
+            assert_equal [expr {5 + $numfields * 2}] [llength $command]
+            assert {$numfields >= 1 && $numfields <= 64}
+            if {$numfields > 1} {set saw_batched_command 1}
+            dict lappend actual_batches [lindex $command 2] $numfields
+            incr command_count
+        }
+        close $fp
+        assert_equal 15 $command_count
+        assert_equal 1 $saw_batched_command
+        assert_equal [dict size $expected_batches] [dict size $actual_batches]
+        dict for {path batches} $expected_batches {
+            assert_equal $batches [dict get $actual_batches $path]
+        }
+
+        restart_server 0 true false
+        assert_equal $digest_before [r debug digest-value tree]
+        assert_equal [dict size $expected] [r phpathcount tree]
+        dict for {path payload} $expected {
+            set expected_pairs {}
+            dict for {field value} $payload {
+                lappend expected_pairs [list $field $value]
+            }
+            set actual_pairs {}
+            foreach {field value} [r phgetall tree $path] {
+                lappend actual_pairs [list $field $value]
+            }
+            assert_equal [lsort -index 0 $expected_pairs] [lsort -index 0 $actual_pairs]
+        }
+        assert_equal 600 [expr {[llength [r phgetall tree $promoted_path]] / 2}]
+    } {} {external:skip}
 }
 
 start_server {tags {pathhash external:skip}} {

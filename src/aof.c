@@ -1853,7 +1853,6 @@ int loadSingleAppendOnlyFile(char *filename) {
 
 loaded_ok: /* DB loaded, cleanup and return success (AOF_OK or AOF_TRUNCATED). */
     loadingIncrProgress(ftello(fp) - last_progress_report_size);
-    server.aof_state = old_aof_state;
     goto cleanup;
 
 readerr: /* Read error. If feof(fp) is true, fall through to unexpected EOF. */
@@ -1913,6 +1912,9 @@ oomerr: /* An argument too large to allocate. */
     /* fall through to cleanup. */
 
 cleanup:
+    /* Restore the AOF state on every exit, not only on success: after a failed
+     * DEBUG LOADAOF the server keeps running, and writes must still reach the AOF. */
+    server.aof_state = old_aof_state;
     if (fakeClient) freeClient(fakeClient);
     server.current_client = old_cur_client;
     server.executing_client = old_exec_client;

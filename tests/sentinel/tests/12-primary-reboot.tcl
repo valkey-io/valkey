@@ -42,6 +42,16 @@ test "Primary reboot in very short time" {
     
     R $master_id debug populate 10000
     R $master_id bgsave
+    # The instances run with save "", so if the SIGTERM below comes while the
+    # BGSAVE child is still writing, shutdown kills the child and no RDB is
+    # written. The rebooted primary then starts empty and answers PONG at
+    # once, so Sentinel never sees a long reboot and does not fail over.
+    wait_for_condition 1000 50 {
+        [RI $master_id rdb_bgsave_in_progress] == 0
+    } else {
+        fail "BGSAVE did not finish"
+    }
+    assert_equal ok [RI $master_id rdb_last_bgsave_status]
     R $master_id config set key-load-delay 1500
     R $master_id config set loading-process-events-interval-bytes 1024
     R $master_id config rewrite
@@ -54,6 +64,7 @@ test "Primary reboot in very short time" {
 	}
     }
 
+    set old_id $master_id
     kill_instance valkey $master_id
     reboot_instance valkey $master_id
     
@@ -70,7 +81,7 @@ test "Primary reboot in very short time" {
 
     # Make sure the instance load all the dataset
     while 1 {
-        catch {[$link ping]} retval
+        catch {R $old_id ping} retval
         if {[string match {*LOADING*} $retval]} {
             after 100
             continue

@@ -511,7 +511,7 @@ struct fullScanIterator {
      * original ordering. */
     int iter_db;
 
-    // Iterator for the DB orig_to_cur_db[iter_db]
+    // Iterator for the DB fullScanIteratorCurrentDb(it, iter_db)
     kvstore *kvs;     // keep track of kvs associated with iter_dbi
     int kvs_didx;     // hashtable index within the kvstore
     size_t ht_cursor; // cursor for scanning hashtable

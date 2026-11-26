@@ -57,6 +57,15 @@ proc raft_recv {fd {timeout 5000}} {
     return $payload
 }
 
+# Read messages until one matches the pattern and return it.
+proc raft_recv_until {fd pattern {timeout 5000}} {
+    set deadline [expr {[clock milliseconds] + $timeout}]
+    while {1} {
+        set msg [raft_recv $fd [expr {max(1, $deadline - [clock milliseconds])}]]
+        if {[string match $pattern $msg]} {return $msg}
+    }
+}
+
 tags {tls:skip external:skip cluster singledb} {
 
 # Listen on a random port for one connection. Sets the listen port in the
@@ -293,6 +302,83 @@ test "Raft proto: learner join, voter promotion, demotion, and forget" {
     }
 }
 
+
+test "Raft proto: DEL_VOTER applies when the node it removes is the leader" {
+    start_server {overrides {cluster-enabled yes cluster-protocol raft cluster-node-timeout 1000}} {
+        set cport [expr {[srv 0 port] + 10000}]
+        set self_id [R 0 CLUSTER MYID]
+        set self_addr "127.0.0.1:[srv 0 port]@$cport,,tls-port=0,shard-id=[string repeat 1 40]"
+        set leader_id [string repeat "2" 40]
+        set leader_addr "127.0.0.1:9997@19997,,tls-port=0,shard-id=[string repeat 3 40]"
+        set removed_id [string repeat "4" 40]
+        set removed_addr "127.0.0.1:9996@19996,,tls-port=0,shard-id=[string repeat 5 40]"
+
+        set fd [raft_connect_fake_node 127.0.0.1 $cport $leader_id $leader_addr]
+        set ae "AE $leader_id 1 0 0 3 4\n"
+        append ae "1 NODE_JOIN $self_id $self_addr voter\n"
+        append ae "1 NODE_JOIN $leader_id $leader_addr voter\n"
+        append ae "1 NODE_JOIN $removed_id $removed_addr voter\n"
+        append ae "1 DEL_VOTER $removed_id"
+        raft_send $fd $ae
+        assert_match "AE_ACK 1 1 4 *" [raft_recv $fd]
+        assert_equal 3 [CI 0 cluster_size]
+
+        # The removed node is elected and commits DEL_VOTER with its no-op.
+        set fd_removed [raft_connect_fake_node 127.0.0.1 $cport $removed_id $removed_addr]
+        raft_send $fd_removed "AE $removed_id 2 4 1 5 1\n2 NOOP "
+        assert_match "AE_ACK 2 1 5 *" [raft_recv $fd_removed]
+        assert_equal 2 [CI 0 cluster_size]
+
+        close $fd_removed
+        close $fd
+    }
+}
+
+test "Raft proto: a leader that applies DEL_VOTER for itself steps down" {
+    start_server {overrides {cluster-enabled yes cluster-protocol raft cluster-node-timeout 500}} {
+        set cport [expr {[srv 0 port] + 10000}]
+        set self_id [R 0 CLUSTER MYID]
+        set self_addr "127.0.0.1:[srv 0 port]@$cport,,tls-port=0,shard-id=[string repeat 1 40]"
+        set fake_id [string repeat "2" 40]
+
+        # Listen for the link the server campaigns on.
+        set fake_cport 0
+        set fd [raft_listen_and_accept fake_cport 5000 {
+            set fake_addr "127.0.0.1:[expr {$fake_cport - 10000}]@${fake_cport},,tls-port=0,shard-id=[string repeat 3 40]"
+            set leader_fd [raft_connect_fake_node 127.0.0.1 $cport $fake_id $fake_addr]
+            set ae "AE $fake_id 2 0 0 2 3\n"
+            append ae "2 NODE_JOIN $self_id $self_addr voter\n"
+            append ae "2 NODE_JOIN $fake_id $fake_addr voter\n"
+            append ae "2 DEL_VOTER $self_id"
+            raft_send $leader_fd $ae
+            assert_match "AE_ACK 2 1 3 *" [raft_recv $leader_fd]
+        }]
+        assert_match "HELLO *" [raft_recv $fd]
+        raft_send $fd "HI $fake_id $fake_addr"
+
+        # Elect the server, then commit DEL_VOTER by acking its no-op.
+        raft_recv_until $fd "PRE_VOTE_REQ $self_id 3 3 2"
+        raft_send $fd "PRE_VOTE 3 1"
+        raft_recv_until $fd "VOTE_REQ $self_id 3 3 2"
+        raft_send $fd "VOTE 3 1"
+        raft_recv_until $fd "AE $self_id 3 3 2 * 1\n3 NOOP*"
+        raft_send $fd "AE_ACK 3 1 4 0"
+        raft_recv_until $fd "AE $self_id 3 4 3 4 0"
+        assert_equal "learner" [CI 0 cluster_raft_role]
+        assert_equal 1 [CI 0 cluster_size]
+
+        # Without that commit, we still need its vote, but only once per term.
+        raft_send $leader_fd "VOTE_REQ $fake_id 3 4 3"
+        assert_equal "VOTE 3 0" [raft_recv_until $leader_fd "VOTE *"]
+        raft_send $leader_fd "PRE_VOTE_REQ $fake_id 4 4 3"
+        assert_equal "PRE_VOTE 4 1" [raft_recv_until $leader_fd "PRE_VOTE *"]
+        raft_send $leader_fd "VOTE_REQ $fake_id 4 4 3"
+        assert_equal "VOTE 4 1" [raft_recv_until $leader_fd "VOTE *"]
+
+        close $fd
+        close $leader_fd
+    }
+}
 
 test "Raft proto: PRE_VOTE denied while leader lease is active" {
     start_server {overrides {cluster-enabled yes cluster-protocol raft cluster-node-timeout 1000}} {
@@ -1114,15 +1200,6 @@ test "Raft proto: outbound link without HI is dropped and reconnected" {
         foreach fd $::_raft_silent_accepts {catch {close $fd}}
         close $listen_fd
         close $fd1
-    }
-}
-
-# Read messages until one matches the pattern and return it.
-proc raft_recv_until {fd pattern {timeout 5000}} {
-    set deadline [expr {[clock milliseconds] + $timeout}]
-    while {1} {
-        set msg [raft_recv $fd [expr {max(1, $deadline - [clock milliseconds])}]]
-        if {[string match $pattern $msg]} {return $msg}
     }
 }
 

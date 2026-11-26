@@ -565,7 +565,6 @@ static void clusterRaftStepDown(mstime_t now, const char *reason) {
     if (rs->role != RAFT_ROLE_LEARNER && rs->role != RAFT_ROLE_JOINER)
         rs->role = RAFT_ROLE_FOLLOWER;
     rs->votes_received = 0;
-    memset(rs->voted_for, 0, CLUSTER_NAMELEN);
     memset(rs->leader, 0, CLUSTER_NAMELEN);
     clusterRaftRandomizeElectionTimeout();
     rs->election_timer_start = now;
@@ -1590,6 +1589,8 @@ static int clusterRaftMaybeStepDown(uint64_t term) {
     clusterRaftState *rs = RAFT_STATE();
     if (term > rs->current_term) {
         rs->current_term = term;
+        /* Only a new term clears our vote: we vote at most once per term. */
+        memset(rs->voted_for, 0, CLUSTER_NAMELEN);
         clusterRaftStepDown(monotonicMs(), "observed higher term");
         return 1;
     }
@@ -2787,8 +2788,9 @@ static void clusterRaftSendPreVoteResponse(clusterLink *link, uint64_t term, int
 }
 
 static int clusterRaftCanGrantVote(clusterRaftState *rs, uint64_t candidate_last_index, uint64_t candidate_last_term) {
+    /* Learners vote too. A candidate only counts its own voters.
+     * The candidate may have a different view of who is a voter. */
     if (rs->role == RAFT_ROLE_JOINER) return 0;
-    if (nodeIsLearner(myself)) return 0;
 
     /* Deny vote if we are the leader or recently heard from it (leader
      * lease, Raft thesis 4.2.3). Only contact with the leader counts, not
@@ -4868,19 +4870,27 @@ static RaftProposalResult clusterRaftApplyDelVoter(sds data, int validate_only) 
 
     clusterNode *node = clusterLookupNode(argv[0], CLUSTER_NAMELEN);
     if (!node || (node->flags & CLUSTER_NODE_JOINING) || nodeIsLearner(node) ||
-        server.cluster->size <= 1 ||
-        memcmp(node->name, rs->leader, CLUSTER_NAMELEN) == 0) {
+        server.cluster->size <= 1) {
         sdsfreesplitres(argv, argc);
         return RAFT_RESULT_REJECTED;
     }
 
     if (validate_only) {
+        /* Not checked on apply, where nodes may know different leaders. */
+        bool is_leader = memcmp(node->name, rs->leader, CLUSTER_NAMELEN) == 0;
         sdsfreesplitres(argv, argc);
-        return RAFT_RESULT_OK;
+        return is_leader ? RAFT_RESULT_REJECTED : RAFT_RESULT_OK;
     }
 
     node->flags |= CLUSTER_NODE_LEARNER;
-    if (node == myself) rs->role = RAFT_ROLE_LEARNER;
+    if (node == myself) {
+        /* Elected before applying it: send the commit, then step down. */
+        if (rs->role == RAFT_ROLE_LEADER) {
+            clusterRaftBroadcastAppendEntries();
+            clusterRaftStepDown(monotonicMs(), "removed from the voters");
+        }
+        rs->role = RAFT_ROLE_LEARNER;
+    }
     server.cluster->size--;
     rs->todo_save_config = 1;
     sdsfreesplitres(argv, argc);

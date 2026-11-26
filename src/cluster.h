@@ -51,6 +51,8 @@ void clusterInit(void);
 void clusterInitLast(void);
 void clusterCron(void);
 void clusterBeforeSleep(void);
+void clusterCheckStall(void);
+int clusterCheckCommandStall(void);
 int verifyClusterConfigWithData(void);
 void clusterHandleServerShutdown(bool auto_failover);
 

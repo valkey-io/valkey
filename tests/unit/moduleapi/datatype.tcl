@@ -138,4 +138,107 @@ start_server {tags {"modules"}} {
         r datatype.set $large_key 111 bar
         assert_morethan [r memory usage $large_key] 100000
     }
+
+    test {DEL on a module type without free callback does not crash} {
+        r flushall
+
+        r typecb.setnofree key value
+        assert_equal 1 [r del key]
+
+        r typecb.setnofree key value
+        assert_equal OK [r flushdb]
+        r typecb.setnofree key value
+        assert_equal OK [r flushall]
+
+        r typecb.setnofree key value
+        r pexpire key 1
+        wait_for_condition 100 10 {
+            [r exists key] == 0
+        } else {
+            fail "Key didn't expire."
+        }
+
+        assert_equal {PONG} [r ping]
+    }
+
+    test {DUMP of a module type without rdb_save callback does not crash} {
+        r typecb.setnosave key value
+        assert_error {ERR module type has no rdb_save callback} {r dump key}
+        assert_equal {PONG} [r ping]
+    }
+
+    test {DEBUG OBJECT on a module type without rdb_save callback does not crash} {
+        r typecb.setnosave key value
+        assert_error "ERR module type has no rdb_save callback" {r debug object key}
+        assert_match {Value at*} [r debug object key fast]
+        assert_equal {PONG} [r ping]
+    }
+
+    test {BGSAVE with a module type without rdb_save callback does not crash the child} {
+        r flushall
+
+        set loglines [count_log_lines 0]
+        r typecb.setnosave key value
+        r bgsave
+        waitForBgsave r
+        assert_equal {err} [status r rdb_last_bgsave_status]
+        verify_log_message 0 "*Module type 'no__save_' has no rdb_save callback, cannot serialize*" $loglines
+        verify_log_message 0 "*Background saving error*" $loglines
+        assert_equal {PONG} [r ping]
+    }
+
+    test {AOF rewrite with RDB preamble does not crash on a missing rdb_save callback} {
+        r flushall
+        r config set appendonly yes
+        r config set aof-use-rdb-preamble yes
+        waitForBgrewriteaof r
+
+        set loglines [count_log_lines 0]
+        r typecb.setnosave key value
+        r bgrewriteaof
+        waitForBgrewriteaof r
+        assert_equal {err} [status r aof_last_bgrewrite_status]
+        verify_log_message 0 "*Module type 'no__save_' has no rdb_save callback, cannot serialize*" $loglines
+        verify_log_message 0 "*Background AOF rewrite terminated with error*" $loglines
+        assert_equal {PONG} [r ping]
+    }
+
+    test {AOF rewrite does not crash on a missing aof_rewrite callback} {
+        r flushall
+        r config set appendonly yes
+        r config set aof-use-rdb-preamble no
+        waitForBgrewriteaof r
+
+        set loglines [count_log_lines 0]
+        r set plainkey plainvalue
+        r typecb.setnorewrite modulekey modulevalue
+        r bgrewriteaof
+        waitForBgrewriteaof r
+        assert_equal {err} [status r aof_last_bgrewrite_status]
+        verify_log_message 0 "*Module type 'no__rwrt_' has no aof_rewrite callback, cannot rewrite*" $loglines
+        verify_log_message 0 "*Background AOF rewrite terminated with error*" $loglines
+        assert_equal {PONG} [r ping]
+    }
+
+    test {RESTORE of a module type without rdb_load callback does not crash} {
+        r flushall
+        r typecb.setnoload key value
+        set payload [r dump key]
+        r del key
+        assert_error {ERR Bad data format*} {r restore key 0 $payload}
+        assert_equal {PONG} [r ping]
+    }
+
+    test {ValkeyModule_SaveDataTypeToString does not crash on a missing rdb_save callback} {
+        r flushall
+        r typecb.setnosave key value
+        assert_error {ERR save failed*} {r typecb.savetostring key}
+        assert_equal {PONG} [r ping]
+    }
+
+    test {ValkeyModule_LoadDataTypeFromStringEncver does not crash on a missing rdb_load callback} {
+        r flushall
+        assert_error {ERR load failed*} {r typecb.loadfromstring payload}
+        assert_equal {PONG} [r ping]
+    }
 }

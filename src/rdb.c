@@ -78,6 +78,15 @@
 #define isRestoreContext() ((server.current_client == NULL || server.current_client->id == CLIENT_ID_AOF) ? 0 : 1)
 
 char *rdbFileBeingLoaded = NULL; /* used for rdb checking on read error */
+/* Set while loading a rio with RIO_FLAG_RETURN_ON_ERROR, to return load errors
+ * instead of exiting. */
+static int rdbLoadReturnOnError = 0;
+
+/* Returns `msg` to append to a load error log, unless the load returns the
+ * error instead of exiting. */
+static const char *rdbExitingMsg(const char *msg) {
+    return rdbLoadReturnOnError ? "" : msg;
+}
 extern int rdbCheckMode;
 void rdbCheckError(const char *fmt, ...);
 void rdbCheckSetError(const char *fmt, ...);
@@ -140,7 +149,11 @@ void rdbReportError(int corruption_error, int linenum, char *reason, ...) {
     vsnprintf(msg + len, sizeof(msg) - len, reason, ap);
     va_end(ap);
 
-    if (isRestoreContext()) {
+    if (rdbLoadReturnOnError) {
+        /* The caller of rdbLoadStream() handles the error. */
+        serverLog(LL_WARNING, "%s. Failure loading rdb format from stream.", msg);
+        return;
+    } else if (isRestoreContext()) {
         /* If we're in the context of a RESTORE command, just propagate the error. */
         /* log in VERBOSE, and return (don't exit). */
         serverLog(LL_VERBOSE, "%s", msg);
@@ -175,7 +188,8 @@ void rdbReportError(int corruption_error, int linenum, char *reason, ...) {
 /* Route a corrupt compressed frame through the parser's fatal path, so a bad
  * stream logs and terminates instead of driving a full-sync retry loop. */
 void rdbReportCorruptCompressedStream(const char *source) {
-    serverLog(LL_WARNING, "Corrupt streaming-compressed RDB input. Unrecoverable error, aborting now.");
+    serverLog(LL_WARNING, "Corrupt streaming-compressed RDB input.%s",
+              rdbExitingMsg(" Unrecoverable error, aborting now."));
     rdbReportCorruptRDB("Corrupt compressed RDB stream from %s", source);
 }
 
@@ -3543,8 +3557,10 @@ rdbStreamReaderInitResult rdbInitStreamReader(rio *rdb,
         .allow_passthrough = true,
         .skip_codec_checksum_validation = skip_codec_checksum_validation,
         .buffer_size = STREAM_READER_BUFFER_SIZE_DEFAULT,
-        /* A file is fully present, so a short frame there is corruption. */
-        .eof_mid_frame_is_truncation = (rioCheckType(rdb) == RIO_TYPE_CONN),
+        /* A file is fully present, so a short frame there is corruption, but a
+         * connection or a module stream can end early. */
+        .eof_mid_frame_is_truncation =
+            (rioCheckType(rdb) == RIO_TYPE_CONN || (rdb->flags & RIO_FLAG_RETURN_ON_ERROR)),
     };
     compressionAlgo detected_algo = ALGO_NONE;
 
@@ -3606,6 +3622,9 @@ int rdbLoadRioWithLoadingCtx(rio *rdb,
     streamReader stream_reader;
     compressionAlgo compression_algo = ALGO_NONE;
     int retval;
+    /* Scoped to this load, so that a load nested in it exits on errors as usual. */
+    int prev_return_on_error = rdbLoadReturnOnError;
+    rdbLoadReturnOnError = (rdb->flags & RIO_FLAG_RETURN_ON_ERROR) != 0;
 
     bool skip_codec_checksum_validation =
         (rdb->flags & RIO_FLAG_SKIP_RDB_CHECKSUM) ||
@@ -3619,10 +3638,12 @@ int rdbLoadRioWithLoadingCtx(rio *rdb,
                   "The input may require a Valkey version with streaming RDB "
                   "compression support.",
                   filename);
+        rdbLoadReturnOnError = prev_return_on_error;
         return RDB_INCOMPATIBLE;
     }
     if (init_rc == RDB_STREAM_READER_INIT_ERROR) {
         serverLog(LL_WARNING, "Failed to initialize RDB stream reader for %s", filename);
+        rdbLoadReturnOnError = prev_return_on_error;
         return RDB_FAILED;
     }
 
@@ -3661,6 +3682,7 @@ int rdbLoadRioWithLoadingCtx(rio *rdb,
     }
 
     rdbFreeStreamReader(rdb, &stream_reader);
+    rdbLoadReturnOnError = prev_return_on_error;
     return retval;
 }
 
@@ -3779,6 +3801,7 @@ static int rdbLoadRioInternal(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadi
         int empty_db_flags = server.repl_replica_lazy_flush ? EMPTYDB_ASYNC : EMPTYDB_NO_FLAGS;
         serverLog(LL_NOTICE, "RDB signature and version check passed. Flushing old data");
         emptyData(-1, empty_db_flags, replicationEmptyDbCallback);
+        if (rdb->flags & RIO_FLAG_RETURN_ON_ERROR) rdb->flags |= RIO_FLAG_DATA_CLEARED;
 
         /* functionsLibCtx is cleared when we call emptyData, reinitialize here. */
         rdb_loading_ctx->functions_lib_ctx = functionsLibCtxGetCurrent();
@@ -3884,6 +3907,11 @@ static int rdbLoadRioInternal(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadi
             /* SELECTDB: Select the specified database. */
             if ((dbid = rdbLoadLen(rdb, NULL)) == RDB_LENERR) goto eoferr;
             if (dbid >= (unsigned)server.dbnum) {
+                if (rdbLoadReturnOnError) {
+                    serverLog(LL_WARNING, "Can't load DB %llu from the stream, this server has only %d databases",
+                              (unsigned long long)dbid, server.dbnum);
+                    goto loaderr;
+                }
                 serverLog(LL_WARNING,
                           "FATAL: Data file was created with a %s server configured to handle "
                           "more than %d databases. Exiting\n",
@@ -4041,6 +4069,7 @@ static int rdbLoadRioInternal(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadi
                 /* Unknown module. */
                 serverLog(LL_WARNING, "The RDB file contains AUX module data I can't load: no matching module '%s'",
                           name);
+                if (rdbLoadReturnOnError) goto loaderr;
                 exit(1);
             } else if (!rdbCheckMode && mt != NULL) {
                 if (!mt->aux_load) {
@@ -4048,6 +4077,7 @@ static int rdbLoadRioInternal(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadi
                     serverLog(LL_WARNING,
                               "The RDB file contains module AUX data, but the module '%s' doesn't seem to support it.",
                               name);
+                    if (rdbLoadReturnOnError) goto loaderr;
                     exit(1);
                 }
 
@@ -4085,6 +4115,7 @@ static int rdbLoadRioInternal(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadi
             }
         } else if (type == RDB_OPCODE_FUNCTION_PRE_GA) {
             rdbReportCorruptRDB("Pre-release function format not supported.");
+            if (rdbLoadReturnOnError) goto loaderr;
             exit(1);
         } else if (type == RDB_OPCODE_FUNCTION2) {
             sds err = NULL;
@@ -4133,7 +4164,8 @@ static int rdbLoadRioInternal(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadi
                 sdsfree(key);
             } else if (error == RDB_LOAD_ERR_UNKNOWN_TYPE) {
                 sdsfree(key);
-                serverLog(LL_WARNING, "Unknown type or opcode when loading DB. Unrecoverable error, aborting now.");
+                serverLog(LL_WARNING, "Unknown type or opcode when loading DB.%s",
+                          rdbExitingMsg(" Unrecoverable error, aborting now."));
                 goto loaderr;
             } else if (error == RDB_LOAD_ERR_ALL_ITEMS_EXPIRED) {
                 rdb_last_load_all_fields_expired++;
@@ -4167,7 +4199,6 @@ static int rdbLoadRioInternal(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadi
 
             /* Add the new object in the hash table */
             int added = dbAddRDBLoad(db, key, &val);
-            server.rdb_last_load_keys_loaded++;
             if (!added) {
                 if (rdbflags & RDBFLAGS_ALLOW_DUP) {
                     /* This flag is useful for DEBUG RELOAD special modes.
@@ -4182,9 +4213,17 @@ static int rdbLoadRioInternal(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadi
                     } else {
                         serverLog(LL_WARNING, "RDB has duplicated key '%s' in DB %d", key, db->id);
                     }
+                    if (rdbLoadReturnOnError) {
+                        sdsfree(key);
+                        decrRefCount(val);
+                        goto loaderr;
+                    }
                     serverPanic("Duplicated key found in RDB file");
                 }
             }
+            /* Counted once added, since a duplicated key fails a load that
+             * returns its errors. */
+            server.rdb_last_load_keys_loaded++;
 
             /* Set the expire time if needed */
             if (expiretime != -1) {
@@ -4227,8 +4266,8 @@ static int rdbLoadRioInternal(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadi
             } else if (cksum != expected) {
                 serverLog(LL_WARNING,
                           "Wrong RDB checksum expected: (%llx) but "
-                          "got (%llx). Aborting now.",
-                          (unsigned long long)expected, (unsigned long long)cksum);
+                          "got (%llx).%s",
+                          (unsigned long long)expected, (unsigned long long)cksum, rdbExitingMsg(" Aborting now."));
                 rdbReportCorruptRDB("RDB CRC error");
                 goto loaderr;
             }
@@ -4266,16 +4305,19 @@ inlineoomerr:
 eoferr:
     ret = RDB_FAILED;
     if (rdbRioHasInternalStreamReaderError(rdb)) {
-        serverLog(LL_WARNING, "Internal error while decoding streaming-compressed RDB input. Aborting now.");
+        serverLog(LL_WARNING, "Internal error while decoding streaming-compressed RDB input.%s",
+                  rdbExitingMsg(" Aborting now."));
         rdbReportReadError("Internal error decoding compressed RDB stream");
         goto cleanup;
     }
     if (rdbRioHasCorruptCompressedInput(rdb)) {
-        serverLog(LL_WARNING, "Corrupt streaming-compressed RDB input. Unrecoverable error, aborting now.");
+        serverLog(LL_WARNING, "Corrupt streaming-compressed RDB input.%s",
+                  rdbExitingMsg(" Unrecoverable error, aborting now."));
         rdbReportCorruptRDB("Corrupt compressed RDB stream");
         goto cleanup;
     }
-    serverLog(LL_WARNING, "Short read or OOM loading DB. Unrecoverable error, aborting now.");
+    serverLog(LL_WARNING, "Short read or OOM loading DB.%s",
+              rdbExitingMsg(" Unrecoverable error, aborting now."));
     rdbReportReadError("Unexpected EOF reading RDB file");
     /* fall through */
 
@@ -4327,6 +4369,16 @@ int rdbLoad(char *filename, rdbSaveInfo *rsi, int rdbflags) {
         if (rdb_fd >= 0) bioCreateCloseJob(rdb_fd, 0, 1);
     }
 
+    return retval;
+}
+
+/* Like rdbLoad() but for a stream that can't be reopened to run the rdb check,
+ * so read and corruption errors return RDB_FAILED instead of exiting. */
+int rdbLoadStream(rio *rdb, const char *name, rdbSaveInfo *rsi, int rdbflags) {
+    startLoading(0, rdbflags, 0);
+    rdb->flags |= RIO_FLAG_RETURN_ON_ERROR;
+    int retval = rdbLoadRio(rdb, rdbflags, rsi, name);
+    stopLoading(retval == RDB_OK);
     return retval;
 }
 

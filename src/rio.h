@@ -44,6 +44,8 @@
 #define RIO_FLAG_CLOSE_ASAP (1 << 2) /* Rio was closed asynchronously during the current rio operation. */
 #define RIO_FLAG_SKIP_RDB_CHECKSUM (1 << 3)
 #define RIO_FLAG_STREAMING_COMPRESSION (1 << 4) /* Input uses whole-stream compression. */
+#define RIO_FLAG_RETURN_ON_ERROR (1 << 5)       /* Return load errors instead of exiting. */
+#define RIO_FLAG_DATA_CLEARED (1 << 6)          /* A load with RIO_FLAG_RETURN_ON_ERROR cleared the dataset. */
 
 #define RIO_TYPE_FILE (1 << 0)
 #define RIO_TYPE_BUFFER (1 << 1)
@@ -141,6 +143,14 @@ struct _rio {
             sds buf;
             size_t net_output_bytes; /* Total bytes written across all connections. */
         } connset;
+        /* Module provided I/O callbacks (see VM_RdbStreamCreateFromCallbacks). */
+        struct {
+            void *stream; /* ValkeyModuleRdbStream, opaque to rio. */
+            off_t pos;
+            char *buf;
+            size_t buf_len; /* Pending bytes when writing, buffered bytes when reading. */
+            size_t buf_pos; /* Next byte to return when reading. */
+        } module;
     } io;
 };
 

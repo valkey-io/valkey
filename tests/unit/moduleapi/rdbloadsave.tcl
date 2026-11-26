@@ -168,6 +168,224 @@ start_server {tags {"modules"}} {
         }
     }
 
+    test "Module rdbloadsave with callback stream" {
+        set dir [lindex [r config get dir] 1]
+        assert_equal OK [r test.sanity_cb]
+        r flushdb
+        populate 1000 cb 100
+        r expire cb0 10000
+        r test.cb_stat io_calls
+
+        assert_equal OK [r test.rdbsave_cb $dir/cb.rdb]
+        assert_equal 1 [r test.cb_stat last_commit]
+        r flushdb
+        assert_equal OK [r test.rdbload_cb $dir/cb.rdb]
+        assert_equal 1000 [r dbsize]
+        assert_morethan [r ttl cb0] 0
+
+        # The small reads and writes of the RDB code are buffered.
+        assert_lessthan [r test.cb_stat io_calls] 20
+
+        # Same format as a file stream.
+        assert_equal OK [r test.rdbsave $dir/file.rdb]
+        assert_equal OK [r test.rdbload_cb $dir/file.rdb]
+        assert_equal 1000 [r dbsize]
+    }
+
+    test "Module rdbsave with callback stream keeps the previous object on errors" {
+        set dir [lindex [r config get dir] 1]
+        r flushdb
+        r set k v1
+        assert_equal OK [r test.rdbsave_cb $dir/abort.rdb]
+        r set k v2
+
+        assert_error {*Input/output error*} {r test.rdbsave_cb $dir/abort.rdb failwrite 0}
+        assert_equal 0 [r test.cb_stat last_commit]
+        assert_error {*Input/output error*} {r test.rdbsave_cb $dir/abort.rdb failflush}
+        assert_equal 0 [r test.cb_stat last_commit]
+        assert_error {*Input/output error*} {r test.rdbsave_cb $dir/abort.rdb failclose}
+
+        assert_equal OK [r test.rdbload_cb $dir/abort.rdb]
+        assert_equal v1 [r get k]
+    }
+
+    test "Module rdbsave with callback stream doesn't process events while saving" {
+        set dir [lindex [r config get dir] 1]
+        r flushdb
+        r set k v
+        file delete $dir/yield.rdb.started $dir/yield.rdb.go
+        # ValkeyModule_Yield() would process events after this threshold.
+        with_config busy-reply-threshold 100 {
+            set rd [valkey_deferring_client]
+            set rd2 [valkey_deferring_client]
+            $rd test.rdbsave_cb $dir/yield.rdb yieldwrite
+            wait_for_condition 50 100 {
+                [file exists $dir/yield.rdb.started]
+            } else {
+                fail "The save didn't start"
+            }
+            # Sent while the write callback yields, after the threshold.
+            $rd2 ping
+            after 300
+            close [open $dir/yield.rdb.go w]
+            # Not rejected with -BUSY, but processed once the save is done.
+            assert_equal OK [$rd read]
+            assert_equal PONG [$rd2 read]
+            $rd close
+            $rd2 close
+        }
+
+        # The callbacks of a save or a load can't save or load either.
+        assert_equal OK [r test.rdbsave_cb $dir/nested_cb.rdb nested]
+        assert_match {*busy*busy*} [r test.cb_stat nested_result]
+        assert_equal v [r get k]
+        assert_equal OK [r test.rdbload_cb $dir/nested_cb.rdb nested]
+        assert_match {*busy*busy*} [r test.cb_stat nested_result]
+        assert_equal v [r get k]
+        assert {![file exists $dir/nested.rdb]}
+    }
+
+    test "Module rdbsave with callback stream in a module fork" {
+        set dir [lindex [r config get dir] 1]
+        r flushdb
+        r set k v1
+        populate 10 fork 10
+
+        with_config rdb-key-save-delay 100000 {
+            assert_equal OK [r test.rdbsave_cb $dir/fork.rdb fork]
+            r set k v2
+            wait_for_condition 50 100 {
+                [s module_fork_in_progress] == 0
+            } else {
+                fail "Module fork didn't finish"
+            }
+        }
+
+        assert_equal OK [r test.rdbload_cb $dir/fork.rdb]
+        assert_equal v1 [r get k]
+    }
+
+    foreach algo {no lz4} {
+        test "Module rdbload with bad callback stream fails without exiting (rdbcompression $algo)" {
+            set dir [lindex [r config get dir] 1]
+            with_config rdbcompression $algo {
+                r flushdb
+                r set big [string repeat a 100000]
+                assert_equal OK [r test.rdbsave_cb $dir/bad.rdb]
+                set size [file size $dir/bad.rdb]
+
+                file copy -force $dir/bad.rdb $dir/corrupt.rdb
+                set fd [open $dir/corrupt.rdb r+]
+                fconfigure $fd -translation binary
+                seek $fd [expr {$size / 2}]
+                puts -nonewline $fd "b"
+                close $fd
+
+                # A timer has no current client, so a file stream would exit here.
+                foreach {file opts} [list bad.rdb [list limit [expr {$size / 2}]] corrupt.rdb {}] {
+                    assert_equal OK [r test.rdbload_cb $dir/$file {*}$opts timer]
+                    wait_for_condition 50 100 {
+                        [r test.cb_stat timer_result] ne "pending"
+                    } else {
+                        fail "Timer load didn't finish"
+                    }
+                    assert_match {*Input/output error*} [r test.cb_stat timer_result]
+                    assert_equal 0 [r test.cb_stat last_commit]
+                }
+
+                # A stream that ends early, e.g. in the middle of a compressed
+                # frame, is a short read rather than a corrupt RDB.
+                set loglines [count_log_lines 0]
+                assert_error {*Input/output error*} {r test.rdbload_cb $dir/bad.rdb limit [expr {$size / 2}]}
+                set lines [exec tail -n +[expr {$loglines + 1}] [srv 0 stdout]]
+                assert {![string match "*Corrupt*" $lines]}
+                # The server doesn't exit, so the log doesn't say it does.
+                assert {[string match "*Short read or OOM loading DB.*" $lines]}
+                assert {![string match -nocase "*aborting now*" $lines]}
+
+                # From a command, the error is still logged at the default level.
+                set loglines [count_log_lines 0]
+                assert_error {*Input/output error*} {r test.rdbload_cb $dir/corrupt.rdb}
+                verify_log_message 0 "*Failure loading rdb format from stream*" $loglines
+
+                set loglines [count_log_lines 0]
+                assert_equal OK [r test.rdbload_cb $dir/bad.rdb]
+                if {$algo ne "no"} {
+                    verify_log_message 0 "*Loading compressed RDB (algo=$algo)*" $loglines
+                }
+                assert_equal 100000 [r strlen big]
+            }
+        }
+    }
+
+    test "Module rdbload with callback stream doesn't restart the AOF after a failure" {
+        # The server restarts with appendonly yes from its config file, to
+        # check what the AOF has after a failed load.
+        start_server [list overrides [list loadmodule $testmodule appendonly yes]] {
+            set dir [lindex [r config get dir] 1]
+            waitForBgrewriteaof r
+            populate 1000 aoffail 10
+            set digest [r debug digest]
+            assert_equal OK [r test.rdbsave_cb $dir/aoffail.rdb]
+            set size [file size $dir/aoffail.rdb]
+
+            # A stream that fails before the dataset was cleared keeps the AOF.
+            set rewrites [s aof_rewrites]
+            assert_error {*Input/output error*} {r test.rdbload_cb $dir/aoffail.rdb limit 0}
+            assert_equal 1000 [r dbsize]
+            assert_equal {appendonly yes} [r config get appendonly]
+            waitForBgrewriteaof r
+            assert_equal [expr {$rewrites + 1}] [s aof_rewrites]
+
+            # Once the dataset was cleared, the AOF still has the previous dataset,
+            # instead of a rewrite of the partially loaded one.
+            set rewrites [s aof_rewrites]
+            set loglines [count_log_lines 0]
+            assert_error {*Input/output error*} {r test.rdbload_cb $dir/aoffail.rdb limit [expr {$size / 2}]}
+            assert_equal 0 [s aof_enabled]
+            assert_equal {appendonly no} [r config get appendonly]
+            assert_equal $rewrites [s aof_rewrites]
+            verify_log_message 0 "*AOF stays disabled after the failed load of the module stream*" $loglines
+
+            # The previous dataset is loaded from the AOF after a restart.
+            restart_server 0 true false
+            assert_equal 1000 [r dbsize]
+            assert_equal $digest [r debug digest]
+        }
+    }
+
+    test "Module rdbload with callback stream keeps the AOF the close callback enabled" {
+        set dir [lindex [r config get dir] 1]
+        r flushdb
+        r set k v
+        assert_equal OK [r test.rdbsave_cb $dir/aofon.rdb]
+        with_config appendonly no {
+            # The AOF is enabled by the close callback, so it isn't started again.
+            assert_equal OK [r test.rdbload_cb $dir/aofon.rdb aofon]
+            assert_equal 1 [s aof_enabled]
+            assert_equal v [r get k]
+            waitForBgrewriteaof r
+        }
+    }
+
+    test "Module rdbload with callback stream fails on a database the server doesn't have" {
+        set dir [lindex [r config get dir] 1]
+        r select 12
+        r set k v
+        assert_equal OK [r test.rdbsave_cb $dir/db12.rdb]
+        r flushdb
+        r select 9
+
+        start_server [list overrides [list loadmodule $testmodule databases 10]] {
+            r set k v
+            set loglines [count_log_lines 0]
+            assert_error {*Input/output error*} {r test.rdbload_cb $dir/db12.rdb}
+            assert_equal PONG [r ping]
+            verify_log_message 0 "*Can't load DB 12 from the stream, this server has only 10 databases*" $loglines
+            assert_equal 0 [count_log_message 0 "Exiting"]
+        }
+    }
+
     test "Unload the module - rdbloadsave" {
         assert_equal {OK} [r module unload rdbloadsave]
     }

@@ -794,6 +794,50 @@ tags {"aof external:skip logreqres:skip"} {
             r exec
         }
     }
+
+    # Run the server with a file size limit (and SIGXFSZ ignored), so that AOF
+    # writes past it fail with EFBIG. ulimit -f units are 512 bytes in POSIX sh
+    # (64 KB) and 1024 bytes in some shells (128 KB).
+    set wrapper [tmpfile valkey-server-fsize-limit]
+    set fp [open $wrapper w]
+    puts $fp "#!/bin/sh"
+    puts $fp "trap '' XFSZ"
+    puts $fp "ulimit -f 128"
+    puts $fp "exec [file normalize $::VALKEY_SERVER_BIN] \"\$@\""
+    close $fp
+    file attributes $wrapper -permissions 0755
+    set server_bin $::VALKEY_SERVER_BIN
+    set ::VALKEY_SERVER_BIN $wrapper
+    set overrides {appendonly yes appendfsync everysec aof-use-rdb-preamble yes auto-aof-rewrite-percentage 0}
+    set err [catch {
+        start_server [list overrides $overrides] {
+            set ::VALKEY_SERVER_BIN $server_bin
+            test {AOF rewrite is refused while the AOF buffer holds data that couldn't be written} {
+                r set pad1 [string repeat a 40000]
+                # This write takes the INCR file past the limit, so it stays in the AOF buffer.
+                r multi
+                r set pad2 [string repeat b 100000]
+                r incr counter
+                r exec
+                wait_for_condition 50 100 {
+                    [s aof_last_write_status] eq "err"
+                } else {
+                    fail "AOF write didn't fail"
+                }
+                # The INCR above already ran, so the rewrite would save it in the new base,
+                # and the buffer would then write it again to the new INCR file, which
+                # starts in database 0.
+                assert_error {*ERR*} {r bgrewriteaof}
+                assert_equal err [s aof_last_bgrewrite_status]
+                assert_equal 1 [s aof_rewrites_consecutive_failures]
+                verify_log_message 0 "*Can't start AOF rewrite while pending AOF data could not be flushed*" 0
+            }
+        }
+    } result options]
+    set ::VALKEY_SERVER_BIN $server_bin
+    if {$err} {
+        return -options $options $result
+    }
 }
 
 tags {"aof cluster external:skip singledb"} {

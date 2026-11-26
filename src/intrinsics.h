@@ -10,7 +10,7 @@ static inline int32_t builtin_ctzll(uint64_t value) {
     return __builtin_ctzll(value);
 #else
     int bitpos = 0;
-    while (value & 1 == 0) {
+    while ((value & 1) == 0) {
         value >>= 1;
         ++bitpos;
     }

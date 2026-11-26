@@ -100,7 +100,10 @@ static int zslParseRange(robj *min, robj *max, zrangespec *spec) {
     /* Parse the min-max interval. If one of the values is prefixed
      * by the "(" character, it's considered "open". For instance
      * ZRANGEBYSCORE zset (1.5 (2.5 will match min < x < max
-     * ZRANGEBYSCORE zset 1.5 2.5 will instead match min <= x <= max */
+     * ZRANGEBYSCORE zset 1.5 2.5 will instead match min <= x <= max.
+     *
+     * The bounds are binary-safe strings, so the number has to span the whole
+     * string: stopping at a '\0' would accept an embedded NUL ("1\0x"). */
     if (min->encoding == OBJ_ENCODING_INT) {
         spec->min = (long)objectGetVal(min);
     } else {
@@ -110,11 +113,11 @@ static int zslParseRange(robj *min, robj *max, zrangespec *spec) {
         if (s[0] == '(') {
             if (len == 1) return C_ERR; /* bare "(" with no score */
             spec->min = valkey_strtod_n(s + 1, len - 1, &eptr);
-            if (eptr[0] != '\0' || isnan(spec->min)) return C_ERR;
+            if (eptr != s + len || isnan(spec->min)) return C_ERR;
             spec->minex = 1;
         } else {
             spec->min = valkey_strtod_n(s, len, &eptr);
-            if (eptr[0] != '\0' || isnan(spec->min)) return C_ERR;
+            if (eptr != s + len || isnan(spec->min)) return C_ERR;
         }
     }
     if (max->encoding == OBJ_ENCODING_INT) {
@@ -126,11 +129,11 @@ static int zslParseRange(robj *min, robj *max, zrangespec *spec) {
         if (s[0] == '(') {
             if (len == 1) return C_ERR; /* bare "(" with no score */
             spec->max = valkey_strtod_n(s + 1, len - 1, &eptr);
-            if (eptr[0] != '\0' || isnan(spec->max)) return C_ERR;
+            if (eptr != s + len || isnan(spec->max)) return C_ERR;
             spec->maxex = 1;
         } else {
             spec->max = valkey_strtod_n(s, len, &eptr);
-            if (eptr[0] != '\0' || isnan(spec->max)) return C_ERR;
+            if (eptr != s + len || isnan(spec->max)) return C_ERR;
         }
     }
 
@@ -139,14 +142,17 @@ static int zslParseRange(robj *min, robj *max, zrangespec *spec) {
 static int zslParseLexRangeItem(robj *item, sds *dest, int *ex) {
     char *c = objectGetVal(item);
 
+    /* The bounds are binary-safe strings, so "+" and "-" have to be the whole
+     * string: checking c[1] would accept an embedded NUL ("-\0x"). After "(" and
+     * "[" any bytes, NUL included, are part of the member bound. */
     switch (c[0]) {
     case '+':
-        if (c[1] != '\0') return C_ERR;
+        if (sdslen(c) != 1) return C_ERR;
         *ex = 1;
         *dest = shared.maxstring;
         return C_OK;
     case '-':
-        if (c[1] != '\0') return C_ERR;
+        if (sdslen(c) != 1) return C_ERR;
         *ex = 1;
         *dest = shared.minstring;
         return C_OK;

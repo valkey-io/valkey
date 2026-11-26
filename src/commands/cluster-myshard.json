@@ -1,0 +1,96 @@
+{
+    "MYSHARD": {
+        "summary": "Returns the slot ranges and nodes in the current shard.",
+        "complexity": "O(S + N) where S is the number of cluster slots and N is the number of nodes in the current shard",
+        "group": "cluster",
+        "since": "9.2.0",
+        "arity": 2,
+        "container": "CLUSTER",
+        "function": "clusterCommand",
+        "command_flags": [
+            "LOADING",
+            "STALE"
+        ],
+        "command_tips": [
+            "NONDETERMINISTIC_OUTPUT"
+        ],
+        "reply_schema": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "slots": {
+                    "description": "An even number element array specifying the start and end slot numbers for slot ranges owned by this shard.",
+                    "type": "array",
+                    "items": {
+                        "type": "integer"
+                    }
+                },
+                "nodes": {
+                    "description": "Nodes that handle these slot ranges.",
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "properties": {
+                            "id": {
+                                "type": "string"
+                            },
+                            "port": {
+                                "type": "integer"
+                            },
+                            "tls-port": {
+                                "type": "integer"
+                            },
+                            "ip": {
+                                "type": "string"
+                            },
+                            "endpoint": {
+                                "type": "string"
+                            },
+                            "hostname": {
+                                "type": "string"
+                            },
+                            "role": {
+                                "oneOf": [
+                                    {
+                                        "const": "master"
+                                    },
+                                    {
+                                        "const": "replica"
+                                    }
+                                ]
+                            },
+                            "replication-offset": {
+                                "type": "integer"
+                            },
+                            "health": {
+                                "oneOf": [
+                                    {
+                                        "const": "fail"
+                                    },
+                                    {
+                                        "const": "loading"
+                                    },
+                                    {
+                                        "const": "online"
+                                    }
+                                ]
+                            },
+                            "availability-zone": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                },
+                "id": {
+                    "description": "A unique shard identifier.",
+                    "type": "string"
+                }
+            },
+            "description": "A map of slot ranges and nodes in the current shard."
+        },
+        "acl_categories": [
+            "SLOW"
+        ]
+    }
+}

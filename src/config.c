@@ -492,6 +492,21 @@ static int updateClientOutputBufferLimit(sds *args, int arg_len, const char **er
  * abnormal aggregate `save T C` functionality. Remove in the future. */
 static int reading_config_file;
 
+/* Nesting depth of loadServerConfigFromString (include recurses), so the final
+ * checks only run once the outermost file is fully read. */
+static int config_load_depth;
+
+/* A `dir` that failed chdir while reading the config file. It is only fatal if
+ * no later `dir` line fixes it, so an included file can be overridden.
+ * pending_dir_err keeps the line context so the error reads as it did when
+ * the failure aborted on the spot. */
+static sds pending_dir;
+static sds pending_dir_err;
+
+/* The config line being applied, for errors reported after it was parsed. */
+static const char *config_cur_line;
+static int config_cur_linenum;
+
 void loadServerConfigFromString(sds config) {
     deprecatedConfig deprecated_configs[] = {
         {"list-max-ziplist-entries", 2, 2},
@@ -511,11 +526,14 @@ void loadServerConfigFromString(sds config) {
     int argc;
 
     reading_config_file = 1;
+    config_load_depth++;
     lines = sdssplitlen(config, sdslen(config), "\n", 1, &totlines);
 
     for (i = 0; i < totlines; i++) {
         linenum = i + 1;
         lines[i] = sdstrim(lines[i], " \t\r\n");
+        config_cur_line = lines[i];
+        config_cur_linenum = linenum;
 
         /* Skip comments and blank lines */
         if (lines[i][0] == '#' || lines[i][0] == '\0') continue;
@@ -584,6 +602,13 @@ void loadServerConfigFromString(sds config) {
 
         /* Execute config directives */
         if (!strcasecmp(argv[0], "include") && argc == 2) {
+            /* A relative path would resolve against the directory we failed
+             * to leave, so it could load the wrong file or match nothing. */
+            if (pending_dir && argv[1][0] != '/') {
+                err = sdscatprintf(sdsempty(), "Can't include a relative path after failing to chdir to '%s'",
+                                   pending_dir);
+                goto loaderr;
+            }
             loadServerConfig(argv[1], 0, NULL);
         } else if (!strcasecmp(argv[0], "rename-command") && argc == 3) {
             struct serverCommand *cmd = lookupCommandBySds(argv[1]);
@@ -651,6 +676,19 @@ void loadServerConfigFromString(sds config) {
         }
         sdsfreesplitres(argv, argc);
         argv = NULL;
+    }
+
+    if (--config_load_depth > 0) {
+        /* Keep the existing reset so `save` lines after an include still
+         * replace the included rules. */
+        reading_config_file = 0;
+        sdsfreesplitres(lines, totlines);
+        return;
+    }
+
+    if (pending_dir) {
+        err = pending_dir_err;
+        goto loaderr;
     }
 
     if (server.logfile[0] != '\0') {
@@ -2485,8 +2523,9 @@ static void numericConfigRewrite(standardConfig *config, const char *name, struc
 static int isValidForklessPolicy(int val, const char **err) {
     /* During startup config parsing the directives are applied one by one, so
      * forkless-infrastructure-enabled may not have been read yet when this
-     * value is set. We will check it when loading the config string */
-    if (reading_config_file) return 1;
+     * value is set. The check runs once the outermost config file is loaded.
+     * Uses the depth, since an include clears reading_config_file. */
+    if (config_load_depth > 0) return 1;
     if (val != FORKLESS_POLICY_REQUIRE_FORK && !server.forkless_infrastructure_enabled) {
         *err = "'prefer-forkless' can only be selected when the server was started with "
                "'forkless-infrastructure-enabled yes'";
@@ -3025,10 +3064,26 @@ static int setConfigDirOption(standardConfig *config, sds *argv, int argc, const
         *err = "dir can't be empty";
         return 0;
     }
+    /* A relative dir would resolve against the directory we failed to leave. */
+    if (pending_dir && argv[0][0] != '/') {
+        *err = "Can't use a relative dir after a dir that failed to chdir";
+        return 0;
+    }
     if (chdir(argv[0]) == -1) {
+        if (config_load_depth > 0) {
+            sdsfree(pending_dir);
+            sdsfree(pending_dir_err);
+            pending_dir = sdsnew(argv[0]);
+            pending_dir_err = sdscatprintf(sdsempty(), "Reading the configuration file, at line %d\n>>> '%s'\n%s",
+                                           config_cur_linenum, config_cur_line, strerror(errno));
+            return 1;
+        }
         *err = strerror(errno);
         return 0;
     }
+    sdsfree(pending_dir);
+    sdsfree(pending_dir_err);
+    pending_dir = pending_dir_err = NULL;
     return 1;
 }
 

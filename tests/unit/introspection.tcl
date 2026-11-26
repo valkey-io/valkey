@@ -1926,6 +1926,80 @@ start_server {tags {"introspection"}} {
         }
     } {} {external:skip}
 
+    test {config file - dir and logfile set again after include override the included values} {
+        set base [file normalize [tmpfile base.conf]]
+        set tmp [file normalize [tmpdir include_override]]
+        set bad [file join $tmp nonexistent]
+        write_file $base "dir $bad\nlogfile [file join $bad valkey.log]\n"
+        # The harness reads <dir>/stdout, so the final dir and logfile must match it.
+        start_server [list overrides [list dir $tmp] config_lines [list include $base dir $tmp logfile stdout]] {
+            assert_equal $tmp [lindex [r config get dir] 1]
+            assert_equal stdout [lindex [r config get logfile] 1]
+        }
+    } {} {external:skip}
+
+    test {config file - relative include after a failed dir is fatal} {
+        set tmp [file normalize [tmpdir include_relative]]
+        set bad [file join $tmp nonexistent]
+        set conf [file normalize [tmpfile override.conf]]
+        write_file $conf "dir $bad\ninclude conf.d/*.conf\ndir $tmp\nport 0\n"
+        catch {exec $::VALKEY_SERVER_BIN $conf} err
+        assert_match "*Can't include a relative path after failing to chdir to '$bad'*" $err
+    } {} {external:skip}
+
+    test {config file - save after include replaces the included rules} {
+        set base [file normalize [tmpfile base.conf]]
+        write_file $base "save 900 1\n"
+        start_server [list config_lines [list include $base save "60 100"]] {
+            assert_equal {save {60 100}} [r config get save]
+        }
+    } {} {external:skip}
+
+    test {config file - non-existent dir as the final value is fatal} {
+        set base [file normalize [tmpfile base.conf]]
+        set tmp [file normalize [tmpdir include_fatal]]
+        set bad [file join $tmp nonexistent]
+        write_file $base "dir $tmp\n"
+        set conf [file normalize [tmpfile override.conf]]
+        write_file $conf "include $base\ndir $bad\nport 0\n"
+        catch {exec $::VALKEY_SERVER_BIN $conf} err
+        assert_match "*at line 2*>>> 'dir $bad'*No such file or directory*" $err
+    } {} {external:skip}
+
+    test {config file - relative dir after a failed dir is fatal} {
+        set tmp [file normalize [tmpdir include_reldir]]
+        set bad [file join $tmp nonexistent]
+        set conf [file normalize [tmpfile override.conf]]
+        write_file $conf "dir $bad\ndir ./\nport 0\n"
+        catch {exec $::VALKEY_SERVER_BIN $conf} err
+        assert_match "*at line 2*>>> 'dir ./'*Can't use a relative dir after a dir that failed to chdir*" $err
+    } {} {external:skip}
+
+    test {config file - forkless-policy in an include is checked against the final forkless-infrastructure-enabled} {
+        set base [file normalize [tmpfile base.conf]]
+        write_file $base "forkless-policy prefer-forkless\n"
+        start_server [list config_lines [list include $base forkless-infrastructure-enabled yes]] {
+            assert_equal {forkless-policy prefer-forkless} [r config get forkless-policy]
+        }
+    } {} {external:skip}
+
+    test {config file - forkless-policy after an include is checked against a later forkless-infrastructure-enabled} {
+        set base [file normalize [tmpfile base.conf]]
+        write_file $base "hz 10\n"
+        start_server [list config_lines [list include $base forkless-policy prefer-forkless forkless-infrastructure-enabled yes]] {
+            assert_equal {forkless-policy prefer-forkless} [r config get forkless-policy]
+        }
+    } {} {external:skip}
+
+    test {config file - forkless-policy after an include still fails without forkless-infrastructure-enabled} {
+        set base [file normalize [tmpfile base.conf]]
+        write_file $base "hz 10\n"
+        set conf [file normalize [tmpfile forkless.conf]]
+        write_file $conf "include $base\nforkless-policy prefer-forkless\nport 0\n"
+        catch {exec $::VALKEY_SERVER_BIN $conf} err
+        assert_match "*can only be selected when the server was started with 'forkless-infrastructure-enabled yes'*" $err
+    } {} {external:skip}
+
     # Config file at this point is at a weird state, and includes all
     # known keywords. Might be a good idea to avoid adding tests here.
 }

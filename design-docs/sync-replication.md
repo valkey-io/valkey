@@ -299,6 +299,8 @@ Cluster V2 stores each shard's membership as durable, consistent metadata in its
 | **Eligible** | Sync replicas. They may be promoted to primary. |
 | **Ineligible** | Async replicas and replicas still catching up. They may not be promoted. |
 
+In Kafka's terms the eligible replicas are the in-sync replicas (ISR), and in PacificA's they are the secondaries. Cluster V2's Raft roles (leader, follower) describe the cluster bus, not a shard.
+
 All changes go through a compare-and-set against the shard's configuration in the cluster bus, so only one of any set of concurrent conflicting changes can succeed. Two ordering rules keep the set of nodes that confirms a write identical to the set that can become primary:
 
 * A replica must count toward commits **before** it becomes eligible.  

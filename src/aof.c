@@ -740,6 +740,7 @@ void aofOpenIfNeededOnServerStart(void) {
         serverLog(LL_WARNING, "Can't open the append-only file %s: %s", aof_name, strerror(errno));
         exit(1);
     }
+    server.aof_fd_gen++;
 
     /* Persist our changes. */
     int ret = persistAofManifest(server.aof_manifest);
@@ -824,6 +825,8 @@ int openNewIncrAofForAppend(void) {
         server.aof_last_fsync = server.mstime;
     }
     server.aof_fd = newfd;
+    server.aof_fd_gen++;
+    server.aof_rewrite_base_fd_gen = server.aof_fd_gen;
 
     /* Reset the aof_last_incr_size. */
     server.aof_last_incr_size = 0;
@@ -898,6 +901,10 @@ int aofRewriteLimited(void) {
 /* ----------------------------------------------------------------------------
  * AOF file implementation
  * ------------------------------------------------------------------------- */
+
+int aofFsync(int fd) {
+    return valkey_fsync(fd);
+}
 
 /* Return true if an AOf fsync is currently already in progress in a
  * BIO thread. */
@@ -996,11 +1003,15 @@ int startAppendOnly(void) {
         }
     }
     server.aof_last_fsync = server.mstime;
-    /* If AOF fsync error in bio job, we just ignore it and log the event. */
-    int aof_bio_fsync_status = atomic_load_explicit(&server.aof_bio_fsync_status, memory_order_relaxed);
+    /* Drain prior AOF BIO jobs unconditionally before checking/clearing any fsync error. */
+    bioDrainWorker(BIO_AOF_FSYNC);
+    bioDrainWorker(BIO_CLOSE_AOF);
+    int aof_bio_fsync_status = atomic_load_explicit(&server.aof_bio_fsync_status, memory_order_acquire);
     if (aof_bio_fsync_status == C_ERR) {
         serverLog(LL_WARNING, "AOF reopen, just ignore the AOF fsync error in bio job");
-        atomic_store_explicit(&server.aof_bio_fsync_status, C_OK, memory_order_relaxed);
+        atomic_store_explicit(&server.aof_bio_fsync_errno, 0, memory_order_relaxed);
+        atomic_store_explicit(&server.aof_bio_fsync_error_gen, 0, memory_order_relaxed);
+        atomic_store_explicit(&server.aof_bio_fsync_status, C_OK, memory_order_release);
     }
 
     /* If AOF was in error state, we just ignore it and log the event. */
@@ -1074,14 +1085,17 @@ int restartAOFWithSyncRdb(void) {
     /* Drain pending fsync jobs from the previous AOF before publishing the new
      * fsynced offset to avoid races on fsynced_reploff_pending. */
     bioDrainWorker(BIO_AOF_FSYNC);
+    bioDrainWorker(BIO_CLOSE_AOF);
     atomic_store_explicit(&server.fsynced_reploff_pending, server.primary_repl_offset, memory_order_relaxed);
     server.fsynced_reploff =
         atomic_load_explicit(&server.fsynced_reploff_pending, memory_order_relaxed);
 
-    int aof_bio_fsync_status = atomic_load_explicit(&server.aof_bio_fsync_status, memory_order_relaxed);
+    int aof_bio_fsync_status = atomic_load_explicit(&server.aof_bio_fsync_status, memory_order_acquire);
     if (aof_bio_fsync_status == C_ERR) {
         serverLog(LL_WARNING, "AOF reopen, just ignore the AOF fsync error in bio job");
-        atomic_store_explicit(&server.aof_bio_fsync_status, C_OK, memory_order_relaxed);
+        atomic_store_explicit(&server.aof_bio_fsync_errno, 0, memory_order_relaxed);
+        atomic_store_explicit(&server.aof_bio_fsync_error_gen, 0, memory_order_relaxed);
+        atomic_store_explicit(&server.aof_bio_fsync_status, C_OK, memory_order_release);
     }
 
     if (server.aof_last_write_status == C_ERR) {
@@ -1099,6 +1113,7 @@ int restartAOFWithSyncRdb(void) {
     server.aof_current_size = server.aof_rewrite_base_size;
 
     server.aof_fd = newfd;
+    server.aof_fd_gen++;
     server.aof_state = AOF_ON;
 
     serverLog(LL_NOTICE, "Reused RDB file from primary sync as AOF base file: %s", new_base_filename);
@@ -1162,6 +1177,29 @@ ssize_t aofWrite(int fd, const char *buf, size_t len) {
     return totwritten;
 }
 
+/* Clear a latched BIO fsync error once its generation is covered by a
+ * committed rewrite base and BIO_CLOSE_AOF is empty. BIO_AOF_FSYNC and
+ * BIO_CLOSE_AOF share FIFO worker 1, so BIO_CLOSE_AOF == 0 guarantees all
+ * pre-rotation jobs have finished. Requiring aof_committed_base_fd_gen ==
+ * aof_fd_gen ensures no incremental file retired after the committed base
+ * skipped its fsync under C_ERR. Reset aof_last_incr_fsync_offset before
+ * release-storing C_OK so the new incremental delta must be fsynced before
+ * fsynced_reploff_pending advances. */
+void aofClearCoveredFsyncError(void) {
+    if (server.aof_state == AOF_OFF || server.aof_committed_base_fd_gen == 0) return;
+    if (server.aof_committed_base_fd_gen != server.aof_fd_gen) return;
+    if (atomic_load_explicit(&server.aof_bio_fsync_status, memory_order_acquire) != C_ERR) return;
+    if (bioPendingJobsOfType(BIO_CLOSE_AOF) != 0) return;
+    if (atomic_load_explicit(&server.aof_bio_fsync_error_gen, memory_order_relaxed) <
+        server.aof_committed_base_fd_gen) {
+        server.aof_last_incr_fsync_offset = 0;
+        atomic_store_explicit(&server.aof_bio_fsync_errno, 0, memory_order_relaxed);
+        atomic_store_explicit(&server.aof_bio_fsync_error_gen, 0, memory_order_relaxed);
+        atomic_store_explicit(&server.aof_bio_fsync_status, C_OK, memory_order_release);
+        serverLog(LL_NOTICE, "Background AOF rewrite succeeded; cleared previous AOF fsync error state");
+    }
+}
+
 /* Write the append only file buffer on disk.
  *
  * Since we are required to write the AOF before replying to the client,
@@ -1186,6 +1224,8 @@ void flushAppendOnlyFile(int force) {
     int sync_in_progress = 0;
     mstime_t latency;
 
+    aofClearCoveredFsyncError();
+
     if (sdslen(server.aof_buf) == 0) {
         /* Check if we need to do fsync even the aof buffer is empty,
          * because previously in AOF_FSYNC_EVERYSEC mode, fsync is
@@ -1208,10 +1248,20 @@ void flushAppendOnlyFile(int force) {
              * This is needed to avoid a WAITAOF hang in case a module used RM_Call with the NO_AOF flag,
              * in which case primary_repl_offset will increase but fsynced_reploff_pending won't be updated
              * (because there's no reason, from the AOF POV, to call fsync) and then WAITAOF may wait on
-             * the higher offset (which contains data that was only propagated to replicas, and not to AOF) */
-            if (!sync_in_progress && server.aof_fsync != AOF_FSYNC_NO)
+             * the higher offset (which contains data that was only propagated to replicas, and not to AOF).
+             *
+             * Only advance when all incremental AOF bytes have been requested for sync, no background
+             * AOF fsync (including rotation close-and-fsync) is pending, and the last write and
+             * background fsync both succeeded. */
+            if (server.aof_fsync != AOF_FSYNC_NO &&
+                server.aof_last_incr_fsync_offset == server.aof_last_incr_size &&
+                server.aof_last_write_status == C_OK &&
+                !aofFsyncInProgress() &&
+                bioPendingJobsOfType(BIO_CLOSE_AOF) == 0 &&
+                atomic_load_explicit(&server.aof_bio_fsync_status, memory_order_acquire) == C_OK) {
                 atomic_store_explicit(&server.fsynced_reploff_pending, server.primary_repl_offset,
                                       memory_order_relaxed);
+            }
             return;
         }
     }
@@ -1387,7 +1437,10 @@ try_fsync:
 
         server.aof_last_incr_fsync_offset = server.aof_last_incr_size;
         server.aof_last_fsync = server.mstime;
-        atomic_store_explicit(&server.fsynced_reploff_pending, server.primary_repl_offset, memory_order_relaxed);
+        if (bioPendingJobsOfType(BIO_CLOSE_AOF) == 0 &&
+            atomic_load_explicit(&server.aof_bio_fsync_status, memory_order_acquire) == C_OK) {
+            atomic_store_explicit(&server.fsynced_reploff_pending, server.primary_repl_offset, memory_order_relaxed);
+        }
     } else if (server.aof_fsync == AOF_FSYNC_EVERYSEC && server.mstime - server.aof_last_fsync >= 1000) {
         if (!sync_in_progress) {
             aof_background_fsync(server.aof_fd);
@@ -2786,6 +2839,7 @@ int rewriteAppendOnlyFileBackground(void) {
          * sync scenario where we don't wanna risk the ACKed replication offset
          * jumping backwards or forward when switching to a different primary. */
         bioDrainWorker(BIO_AOF_FSYNC);
+        bioDrainWorker(BIO_CLOSE_AOF);
 
         /* Set the initial repl_offset, which will be applied to fsynced_reploff
          * when AOFRW finishes (after possibly being updated by a bio thread) */
@@ -3046,6 +3100,13 @@ void backgroundRewriteDoneHandler(int exitcode, int bysignal) {
 
         server.aof_lastbgrewrite_status = C_OK;
         server.stat_aofrw_consecutive_failures = 0;
+
+        if (server.aof_state != AOF_OFF) {
+            if (server.aof_rewrite_base_fd_gen > server.aof_committed_base_fd_gen) {
+                server.aof_committed_base_fd_gen = server.aof_rewrite_base_fd_gen;
+            }
+            aofClearCoveredFsyncError();
+        }
 
         serverLog(LL_NOTICE, "Background AOF rewrite finished successfully");
         /* Change state from WAIT_REWRITE to ON if needed */

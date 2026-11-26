@@ -111,6 +111,19 @@ proc node_seen_healthy_by_all {node_id} {
     return 1
 }
 
+# Returns 1 when every node in the cluster sees $node_id as a replica.
+proc node_seen_as_replica_by_all {node_id} {
+    for {set j 0} {$j < [llength $::servers]} {incr j} {
+        set node [cluster_get_node_by_id $j $node_id]
+        # A node turned into an empty node no longer knows the whole cluster.
+        if {$node eq {}} continue
+        if {![cluster_has_flag $node slave]} {
+            return 0
+        }
+    }
+    return 1
+}
+
 # Give the shard back to $primary with a manual failover.
 proc failback {primary} {
     set primary_id [R $primary CLUSTER MYID]
@@ -119,12 +132,25 @@ proc failback {primary} {
     } else {
         fail "node $primary_id is still flagged as failing by some node"
     }
+    # A node can process a packet that $primary sent as a primary after the
+    # one that announced its replica role, and then sees it as a primary until
+    # its next packet. Such a node ignores its MFSTART or denies it the vote.
+    wait_for_condition 100 100 {
+        [node_seen_as_replica_by_all $primary_id] == 1
+    } else {
+        fail "node $primary_id is still seen as a primary by some node"
+    }
     assert_equal {OK} [R $primary cluster failover]
     wait_for_role $primary master
 }
 
 # Restore the layout the tests assume.
 proc normalize_cluster {pairs} {
+    # A failed failover_and_back_unseen_by can leave a node dropping cluster
+    # bus packets, which would break every later test in the block.
+    for {set j 0} {$j < [llength $::servers]} {incr j} {
+        R $j DEBUG DROP-CLUSTER-PACKET-FILTER -1
+    }
     foreach {primary replica} $pairs {
         if {[get_cluster_role $primary] eq "slave"} {
             # $replica took the shard over and never gave it back.
@@ -315,6 +341,149 @@ proc create_empty_shard {p r} {
     wait_for_role $p master
 }
 
+# Returns 1 when R<from>'s outbound link to the node was created after the last
+# PONG R<from> got from it. Until that PONG, R<from> sends full-header PUBLISH
+# messages on the link, which carry its config epoch.
+proc link_unsettled {from to_id} {
+    set link {}
+    foreach l [R $from CLUSTER LINKS] {
+        if {[dict get $l node] eq $to_id && [dict get $l direction] eq "to"} { set link $l }
+    }
+    if {$link eq {}} { return 0 }
+    set pong [dict get [cluster_get_node_by_id $from $to_id] pong_recv]
+    return [expr {[dict get $link create-time] > $pong}]
+}
+
+# Returns the shard id that R<idx> records for the node, from CLUSTER SHARDS.
+proc node_shard_id {idx node_id} {
+    foreach shard [R $idx CLUSTER SHARDS] {
+        foreach n [dict get $shard nodes] {
+            if {[dict get $n id] eq $node_id} { return [dict get $shard id] }
+        }
+    }
+    return {}
+}
+
+# Fail over from $primary to $replica and back, while $observer drops every
+# cluster bus packet from the moment $primary is about to turn into a replica
+# until it is a primary again. $observer never sees $primary as a replica, so
+# the newer config epoch is the only sign it gets that $primary is the primary
+# of the shard again.
+#
+# $first_seen chooses the packet that first carries that config epoch to
+# $observer:
+# - ping: a regular PING or PONG.
+# - handshake: the PONG that answers a MEET. $observer knows $primary already,
+#   so it discards the packet.
+# - publish: a full-header PUBLISH, sent before $primary's first PONG on a new
+#   link to $observer. Only PINGs and PONGs reach the slot checks.
+proc failover_and_back_unseen_by {primary replica observer {first_seen ping}} {
+    set CLUSTER_PACKET_TYPE_PING 0
+    set CLUSTER_PACKET_TYPE_NONE -1
+    set CLUSTER_PACKET_TYPE_ALL -2
+    set primary_id [R $primary CLUSTER MYID]
+    set replica_id [R $replica CLUSTER MYID]
+
+    # Freeze $primary until $observer has seen $replica take its shard over.
+    # A takeover needs no vote, so the nodes don't have to detect a failure.
+    pause_process [srv [expr -1*$primary] pid]
+    set wait_error [catch {
+        assert_equal {OK} [R $replica CLUSTER FAILOVER TAKEOVER]
+        wait_for_condition 100 100 {
+            [cluster_has_flag [cluster_get_node_by_id $observer $replica_id] master]
+        } else {
+            fail "R $observer didn't see R $replica take over from R $primary in time"
+        }
+        R $observer DEBUG DROP-CLUSTER-PACKET-FILTER $CLUSTER_PACKET_TYPE_ALL
+    } wait_result wait_options]
+    resume_process [srv [expr -1*$primary] pid]
+    if {$wait_error} {
+        return -options $wait_options $wait_result
+    }
+
+    wait_for_condition 100 100 {
+        [get_cluster_role $primary] eq "slave"
+    } else {
+        fail "R $primary didn't become a replica of R $replica in time"
+    }
+    assert_equal {OK} [R $primary CLUSTER FAILOVER TAKEOVER]
+    wait_for_condition 100 100 {
+        [get_cluster_role $primary] eq "master"
+    } else {
+        fail "R $primary didn't take over from R $replica in time"
+    }
+
+    # Once the other nodes have seen $primary take over, $observer has dropped
+    # what $primary sent it as a replica.
+    set primary_epoch [dict get [cluster_get_myself $primary] config_epoch]
+    for {set j 0} {$j < [llength $::servers]} {incr j} {
+        if {$j == $observer} continue
+        wait_for_condition 100 100 {
+            [cluster_has_flag [cluster_get_node_by_id $j $primary_id] master] &&
+            [dict get [cluster_get_node_by_id $j $primary_id] config_epoch] == $primary_epoch
+        } else {
+            fail "R $j didn't see R $primary take over from R $replica in time"
+        }
+    }
+    assert {[cluster_has_flag [cluster_get_node_by_id $observer $primary_id] master]}
+
+    if {$first_seen eq "handshake"} {
+        # The ping of $observer to $primary must be pending, so that the PONG
+        # of the handshake link is the only one $primary sends it.
+        wait_for_condition 100 100 {
+            [dict get [cluster_get_node_by_id $observer $primary_id] ping_sent] != 0
+        } else {
+            fail "R $observer has no pending ping to R $primary"
+        }
+        set loglevel [lindex [R $observer CONFIG GET loglevel] 1]
+        R $observer CONFIG SET loglevel verbose
+        set loglines [count_log_lines [expr -1*$observer]]
+        R $observer DEBUG DROP-CLUSTER-PACKET-FILTER $CLUSTER_PACKET_TYPE_PING
+        assert_equal {OK} [R $observer CLUSTER MEET [srv [expr -1*$primary] host] [srv [expr -1*$primary] port]]
+        wait_for_log_messages [expr -1*$observer] [list "*Handshake: we already know node $primary_id*"] $loglines 100 100
+        R $observer CONFIG SET loglevel $loglevel
+    }
+
+    if {$first_seen eq "publish"} {
+        # $observer dropped every packet long enough for $primary to reconnect
+        # its link to $observer, so that link has not seen a PONG yet.
+        set observer_id [R $observer CLUSTER MYID]
+        wait_for_condition 300 100 {
+            [link_unsettled $primary $observer_id]
+        } else {
+            fail "R $primary link to R $observer never became unsettled"
+        }
+        set sub [valkey_deferring_client [expr -1*$observer]]
+        $sub subscribe first-epoch-ch
+        $sub read
+        R $observer DEBUG DROP-CLUSTER-PACKET-FILTER $CLUSTER_PACKET_TYPE_PING
+        R $primary PUBLISH first-epoch-ch hello
+        assert_equal {message first-epoch-ch hello} [$sub read]
+        $sub close
+        # The full-header PUBLISH recorded the newer config epoch.
+        assert_equal $primary_epoch [dict get [cluster_get_node_by_id $observer $primary_id] config_epoch]
+    }
+
+    lassign [R $observer TIME] sec usec
+    set now [expr {$sec * 1000 + $usec / 1000}]
+    R $observer DEBUG DROP-CLUSTER-PACKET-FILTER $CLUSTER_PACKET_TYPE_NONE
+
+    # The pings sent to and by $observer in the meantime are still pending.
+    # Wait for a newer PONG in both directions, so that a lower
+    # cluster-node-timeout in a later test does not turn them into a failure.
+    set observer_id [R $observer CLUSTER MYID]
+    for {set j 0} {$j < [llength $::servers]} {incr j} {
+        if {$j == $observer} continue
+        set node_id [R $j CLUSTER MYID]
+        wait_for_condition 100 100 {
+            [dict get [cluster_get_node_by_id $j $observer_id] pong_recv] > $now &&
+            [dict get [cluster_get_node_by_id $observer $node_id] pong_recv] > $now
+        } else {
+            fail "R $observer and R $j didn't exchange a PONG in time"
+        }
+    }
+}
+
 start_cluster 3 5 {tags {external:skip cluster} overrides {cluster-allow-replica-migration no cluster-node-timeout 5000} } {
 
     set R0_id [R 0 CLUSTER MYID]
@@ -384,6 +553,126 @@ start_cluster 3 5 {tags {external:skip cluster} overrides {cluster-allow-replica
         wait_for_slot_state 6 "\[609-<-$R0_id\]"
         wait_for_slot_state 3 "\[609->-$R6_id\]"
         wait_for_slot_state 7 "\[609-<-$R0_id\]"
+    }
+
+    test "Empty-shard migration target is auto-updated after a failover seen only as a newer config epoch" {
+        test_defer_fail { normalize_cluster $shard_pairs }
+        # R3 sees the failover from R6 to R7, but not the one back to R6
+        failover_and_back_unseen_by 6 7 3
+        wait_for_role 6 master
+        wait_for_role 7 slave
+        # Validate final states
+        wait_for_slot_state 0 "\[609->-$R6_id\]"
+        wait_for_slot_state 6 "\[609-<-$R0_id\]"
+        wait_for_slot_state 3 "\[609->-$R6_id\]"
+        wait_for_slot_state 7 "\[609-<-$R0_id\]"
+    }
+
+    test "Empty-shard migration target is auto-updated after a newer config epoch first seen on a handshake link" {
+        test_defer_fail { normalize_cluster $shard_pairs }
+        # R3 misses both failovers and discards the first PONG of R6 after them
+        failover_and_back_unseen_by 6 7 3 handshake
+        wait_for_role 6 master
+        wait_for_role 7 slave
+        # Validate final states
+        wait_for_slot_state 0 "\[609->-$R6_id\]"
+        wait_for_slot_state 6 "\[609-<-$R0_id\]"
+        wait_for_slot_state 3 "\[609->-$R6_id\]"
+        wait_for_slot_state 7 "\[609-<-$R0_id\]"
+    }
+
+    test "Empty-shard primary follows a new primary seen only as a newer config epoch" {
+        test_defer_fail { normalize_cluster $shard_pairs }
+        # R7 takes the shard over from R6, but does not see R6 take it back
+        failover_and_back_unseen_by 6 7 7
+        wait_for_role 6 master
+        wait_for_role 7 slave
+        # Validate final states
+        wait_for_slot_state 0 "\[609->-$R6_id\]"
+        wait_for_slot_state 6 "\[609-<-$R0_id\]"
+        wait_for_slot_state 3 "\[609->-$R6_id\]"
+        wait_for_slot_state 7 "\[609-<-$R0_id\]"
+    }
+    test "Empty-shard migration source primary is auto-updated after a failover seen only as a newer config epoch" {
+        test_defer_fail { normalize_cluster $shard_pairs }
+        # The source primary R0 sees the failover from R6 to R7, but not the one back to R6
+        failover_and_back_unseen_by 6 7 0
+        wait_for_role 6 master
+        wait_for_role 7 slave
+        # Validate final states
+        wait_for_slot_state 0 "\[609->-$R6_id\]"
+        wait_for_slot_state 6 "\[609-<-$R0_id\]"
+        wait_for_slot_state 3 "\[609->-$R6_id\]"
+        wait_for_slot_state 7 "\[609-<-$R0_id\]"
+    }
+
+    test "Empty-shard migration target is auto-updated after a newer config epoch first seen in a PUBLISH" {
+        test_defer_fail { normalize_cluster $shard_pairs }
+        # R3 misses both failovers and records R6's newer epoch from a PUBLISH
+        failover_and_back_unseen_by 6 7 3 publish
+        wait_for_role 6 master
+        wait_for_role 7 slave
+        # Validate final states
+        wait_for_slot_state 0 "\[609->-$R6_id\]"
+        wait_for_slot_state 6 "\[609-<-$R0_id\]"
+        wait_for_slot_state 7 "\[609-<-$R0_id\]"
+        wait_for_slot_state 3 "\[609->-$R6_id\]"
+    }
+
+    test "Empty-shard migration target follows a takeover by a node last seen as the primary of another shard" {
+        test_defer_fail { normalize_cluster $shard_pairs }
+        # An earlier failing test may have left R3 on another target.
+        if {[get_open_slots 3] ne "\[609->-$R6_id\]"} {
+            assert_equal {OK} [R 0 CLUSTER SETSLOT 609 MIGRATING $R6_id]
+        }
+        wait_for_slot_state 0 "\[609->-$R6_id\]"
+        wait_for_slot_state 3 "\[609->-$R6_id\]"
+        # R7 leaves for its own empty shard, and R3 sees it there as a primary.
+        assert_equal {OK} [R 7 CLUSTER RESET]
+        assert_equal {OK} [R 7 CLUSTER MEET [srv 0 host] [srv 0 port]]
+        set R7_old_shard [R 7 CLUSTER MYSHARDID]
+        wait_for_condition 200 100 {
+            [catch {cluster_get_node_by_id 3 $R7_id} n] == 0 && $n ne {} &&
+            [cluster_has_flag $n master] && [node_shard_id 3 $R7_id] eq $R7_old_shard
+        } else {
+            fail "R3 never saw R7 as a primary of its own shard"
+        }
+        wait_for_condition 200 100 {
+            [catch {cluster_get_node_by_id 7 $R6_id} n] == 0 && $n ne {}
+        } else {
+            fail "R7 never learned R6"
+        }
+        assert_equal "\[609->-$R6_id\]" [get_open_slots 3]
+        # R3 misses R7 joining R6's shard and taking it over, so the first
+        # packet with R7's newer epoch also carries its new shard id.
+        R 3 DEBUG DROP-CLUSTER-PACKET-FILTER -2
+        assert_equal {OK} [R 7 CLUSTER REPLICATE $R6_id]
+        wait_for_role 7 slave
+        set shard [R 6 CLUSTER MYSHARDID]
+        pause_process [srv -6 pid]
+        assert_equal {OK} [R 7 CLUSTER FAILOVER TAKEOVER]
+        wait_for_condition 100 100 {
+            [get_cluster_role 7] eq "master"
+        } else {
+            fail "R7 did not take over"
+        }
+        set e7 [dict get [cluster_get_myself 7] config_epoch]
+        wait_for_condition 100 100 {
+            [dict get [cluster_get_node_by_id 0 $R7_id] config_epoch] == $e7
+        } else {
+            fail "R0 did not see R7 take over"
+        }
+        wait_for_slot_state 0 "\[609->-$R7_id\]"
+        # R6 is paused, so R3 hears from R7 first.
+        R 3 DEBUG DROP-CLUSTER-PACKET-FILTER -1
+        wait_for_condition 300 100 {
+            [dict get [cluster_get_node_by_id 3 $R7_id] config_epoch] == $e7 &&
+            [node_shard_id 3 $R7_id] eq $shard
+        } else {
+            fail "R3 did not record R7's takeover"
+        }
+        resume_process [srv -6 pid]
+        wait_for_slot_state 3 "\[609->-$R7_id\]"
     }
 }
 
@@ -531,8 +820,17 @@ start_cluster 3 5 {tags {tls:skip external:skip cluster} overrides {cluster-allo
 
         # Real failback, so the cluster agrees on R6's role and epoch again.
         # R6's election epoch is at least the forged one, so R3's record of
-        # R6 is not ahead of the real one.
-        failback 6
+        # R6 is not ahead of the real one. Until then R3 holds the forged
+        # epoch and ignores R6's replica packets as stale, so failback's wait
+        # for every node to see R6 as a replica cannot pass. R3 is a replica
+        # and does not vote, so fail back directly.
+        wait_for_condition 100 100 {
+            [node_seen_healthy_by_all $R6_id] == 1
+        } else {
+            fail "R6 is still flagged as failing by some node"
+        }
+        assert_equal {OK} [R 6 cluster failover]
+        wait_for_role 6 master
         assert {[dict get [cluster_get_myself 6] config_epoch] >= $E_new}
 
         # Outcome only: R3 and the source R0 end with slot 609 migrating to R6.
@@ -665,16 +963,6 @@ start_cluster 3 5 {tags {tls:skip external:skip cluster} overrides {cluster-allo
     }
 }
 
-# Returns the shard id that R<idx> records for the node, from CLUSTER SHARDS.
-proc node_shard_id {idx node_id} {
-    foreach shard [R $idx CLUSTER SHARDS] {
-        foreach n [dict get $shard nodes] {
-            if {[dict get $n id] eq $node_id} { return [dict get $shard id] }
-        }
-    }
-    return {}
-}
-
 # A stale primary claim from a paused R6 that carries a previous shard id. R3
 # moves R6 to that shard, so the first claim at a newer epoch, which carries
 # the real shard id, is checked against the old one. The claims that follow
@@ -723,6 +1011,32 @@ start_cluster 3 5 {tags {tls:skip external:skip cluster} overrides {cluster-allo
         wait_for_log_messages -3 [list "*Slot 609 is now being migrated to node $R6_id*"] $loglines 1000 10
         assert_equal "\[609->-$R6_id\]" [get_open_slots 3]
         resume_process [srv -6 pid]
+    }
+}
+
+# The demotion of a stale primary in an empty shard does not depend on an open
+# slot migration: R7 takes the shard over from R6, misses R6 taking it back, and
+# must still follow R6 when it sees R6's newer config epoch.
+start_cluster 3 5 {tags {external:skip cluster} overrides {cluster-allow-replica-migration no cluster-node-timeout 5000} } {
+
+    create_empty_shard 6 7
+    set R6_id [R 6 CLUSTER MYID]
+    set R7_id [R 7 CLUSTER MYID]
+
+    test "Empty-shard primary follows a new primary seen only as a newer config epoch without a migration" {
+        assert_equal {} [get_open_slots 6]
+        assert_equal {} [get_open_slots 7]
+        # R7 takes the shard over from R6, but does not see R6 take it back
+        failover_and_back_unseen_by 6 7 7
+        wait_for_role 6 master
+        wait_for_role 7 slave
+        for {set j 0} {$j < [llength $::servers]} {incr j} {
+            wait_for_condition 100 100 {
+                [cluster_node_is_replica_of $j $R7_id $R6_id]
+            } else {
+                fail "R $j didn't see R7 as a replica of R6"
+            }
+        }
     }
 }
 

@@ -2651,12 +2651,22 @@ void bgIteration_handleCommandReplication(int dbid,
          * In the case of a client driven DEL command, the key will have already been deleted when
          *  we hit this routine.  In the case of EXPIRE/EVICT, they propagate happens before the key
          *  is deleted.  So if the key is missing, we can use the cached replication decision.  But
-         *  if the key still exists (indicating EXPIRE/EVICT) we evaluate it specially. */
+         *  if the key still exists (indicating EXPIRE/EVICT) we evaluate it specially.
+         *
+         * A module can also replicate a DEL before it deletes the key, because
+         *  ValkeyModule_Replicate() propagates right away.  In that case the key still exists
+         *  here, and we decide by its current state. */
         if (isDeleteCmd(cmd)) {
             sds key = objectGetVal(argv[1]);
             dbEntry *de = dbFind(server.db[dbid], key);
-            serverAssert(de == NULL); // dbEntry should be removed before replication (self-check)
-            if (!replicate) {
+            if (!replicate && de != NULL) {
+                /* Replicate the DEL only if the iterator has already sent the key.  Otherwise the
+                 * delete that follows removes the key before the iterator reaches it. */
+                if (it->keyset_iter->isKeyInScope(it->keyset_iter, key) &&
+                    iteratorHasPassedKey(it, dbid, key, de)) {
+                    replicate = true;
+                }
+            } else if (!replicate) {
                 if (it->keyset_iter->isKeyInScope(it->keyset_iter, key)) {
                     /* Otherwise, it's something like active expiration or eviction (unrelated), or a
                      * lazy expiration in a READ nested inside a write whose decision didn't account

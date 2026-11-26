@@ -213,7 +213,7 @@ static ustime_t activeExpireCycleJob(enum activeExpiryType jobType, int cycleTyp
     /* This function has some global state in order to continue the work
      * incrementally across calls. */
     typedef struct {
-        unsigned int current_db; /* Next DB to test. */
+        unsigned int current_db; /* Index into server.created_db_ids of the next DB to test. */
         bool timelimit_exit;     /* Time limit hit in previous call? */
     } expireState;
     static expireState _expire_state[ACTIVE_EXPIRY_TYPE_COUNT] = {0}; // [KEYS, FIELDS]
@@ -242,8 +242,9 @@ static ustime_t activeExpireCycleJob(enum activeExpiryType jobType, int cycleTyp
      * 1) Don't test more DBs than we have.
      * 2) If last time we hit the time limit, we want to scan all DBs
      * in this iteration, as there is work to do in some DB and we don't want
-     * expired keys to use memory for too much time. */
-    if (dbs_per_call > server.dbnum || state->timelimit_exit) dbs_per_call = server.dbnum;
+     * expired keys to use memory for too much time.
+     * Only created databases are visited. */
+    if (dbs_per_call > server.created_db_count || state->timelimit_exit) dbs_per_call = server.created_db_count;
 
     state->timelimit_exit = false;
 
@@ -258,15 +259,15 @@ static ustime_t activeExpireCycleJob(enum activeExpiryType jobType, int cycleTyp
      * 1) We have checked a sufficient number of databases with expiration time.
      * 2) The time limit has been exceeded.
      * 3) All databases have been traversed. */
-    for (j = 0; dbs_performed < dbs_per_call && state->timelimit_exit == 0 && j < server.dbnum; j++) {
+    for (j = 0; dbs_performed < dbs_per_call && state->timelimit_exit == 0 && j < server.created_db_count; j++) {
         /* Scan callback data including expired and checked count per iteration. */
         expireScanData data = {0};
         /* Increment the DB now so we are sure if we run out of time
          * in the current DB we'll restart from the next. This allows to
-         * distribute the time evenly across DBs. */
-        serverDb *db = server.db[(state->current_db++ % server.dbnum)];
-        /* In case the current database is not used we can simply skip to the next database. */
-        if (!db) continue;
+         * distribute the time evenly across DBs. server.created_db_ids is
+         * read on every iteration, so a database created while keys are
+         * expired (for example by a module) is safe. */
+        serverDb *db = server.db[server.created_db_ids[state->current_db++ % server.created_db_count]];
 
         data.ttl_sum = 0;
         data.ttl_samples = 0;

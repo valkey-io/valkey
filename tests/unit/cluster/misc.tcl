@@ -177,6 +177,92 @@ start_cluster 2 0 {tags {external:skip cluster}} {
         assert_error {MOVED *} {R 0 exec ifeq $other_key val}
         assert_equal {PONG} [R 0 ping]
     }
+
+    # MSETEX key positions are counted pairs, so cluster routing needs msetexGetKeys.
+    # Without it the command looks keyless and a non-owner executes the write.
+    test {MSETEX cluster key routing} {
+        set remote remotekey
+        while {![catch {R 0 exists $remote}]} {
+            append remote x
+        }
+        if {[catch {R 1 exists $remote} err]} {
+            fail "node 1 should own $remote ($err)"
+        }
+
+        set remote_slot [R 0 cluster keyslot $remote]
+        set remote_before [R 0 cluster countkeysinslot $remote_slot]
+        assert_error {MOVED *} {R 0 msetex 1 $remote hello}
+        assert_equal $remote_before [R 0 cluster countkeysinslot $remote_slot]
+        assert_equal 1 [R 1 msetex 1 $remote hello]
+        assert_equal hello [R 1 get $remote]
+        assert_equal $remote_before [R 0 cluster countkeysinslot $remote_slot]
+        R 1 del $remote
+
+        set cross_a "{slotA}a"
+        set cross_b "{slotB}b"
+        assert {[R 0 cluster keyslot $cross_a] != [R 0 cluster keyslot $cross_b]}
+        set slot_a [R 0 cluster keyslot $cross_a]
+        set slot_b [R 0 cluster keyslot $cross_b]
+        set before_a0 [R 0 cluster countkeysinslot $slot_a]
+        set before_b0 [R 0 cluster countkeysinslot $slot_b]
+        set before_a1 [R 1 cluster countkeysinslot $slot_a]
+        set before_b1 [R 1 cluster countkeysinslot $slot_b]
+        assert_error {CROSSSLOT Keys*} {R 0 msetex 2 $cross_a hello $cross_b world}
+        assert_equal $before_a0 [R 0 cluster countkeysinslot $slot_a]
+        assert_equal $before_b0 [R 0 cluster countkeysinslot $slot_b]
+        assert_equal $before_a1 [R 1 cluster countkeysinslot $slot_a]
+        assert_equal $before_b1 [R 1 cluster countkeysinslot $slot_b]
+
+        set k1 "{msetex}a"
+        set k2 "{msetex}b"
+        assert {[R 0 cluster keyslot $k1] == [R 0 cluster keyslot $k2]}
+        set owner 0
+        if {[catch {R 0 exists $k1}]} {set owner 1}
+        set other [expr {$owner ? 0 : 1}]
+        set same_slot [R 0 cluster keyslot $k1]
+        assert_equal 1 [R $owner msetex 2 $k1 hello $k2 world]
+        assert_equal hello [R $owner get $k1]
+        assert_equal world [R $owner get $k2]
+        assert_equal 0 [R $other cluster countkeysinslot $same_slot]
+
+        assert_equal [list $k1 $k2] [R $owner command getkeys msetex 2 $k1 v1 $k2 v2 ex 10]
+        assert_error {MOVED *} {R $other msetex 1 $k1 hello EX 60}
+        assert_equal hello [R $owner get $k1]
+        assert_equal 1 [R $owner msetex 1 $k1 hello2 EX 60]
+        assert_morethan [R $owner pttl $k1] 0
+
+        # 257 keys is past the inline getKeys buffer (MAX_KEYS_BUFFER 256).
+        set args [list 257]
+        for {set i 0} {$i < 257} {incr i} {
+            lappend args "{msetex}k$i" "v$i"
+        }
+        assert_equal 1 [R $owner msetex {*}$args]
+        assert_equal v0 [R $owner get "{msetex}k0"]
+        assert_equal v256 [R $owner get "{msetex}k256"]
+        assert_equal 0 [R $other cluster countkeysinslot $same_slot]
+
+        R 0 multi
+        assert_error {MOVED *} {R 0 msetex 1 $remote gone}
+        assert_error {EXECABORT*} {R 0 exec}
+        assert_equal 0 [R 0 cluster countkeysinslot $remote_slot]
+        assert_equal 0 [R 1 exists $remote]
+
+        R 0 multi
+        assert_error {CROSSSLOT Keys*} {R 0 msetex 2 $cross_a hello $cross_b world}
+        assert_error {EXECABORT*} {R 0 exec}
+
+        R $owner multi
+        assert_equal QUEUED [R $owner msetex 2 $k1 q1 $k2 q2]
+        assert_equal {1} [R $owner exec]
+        assert_equal q1 [R $owner get $k1]
+        assert_equal q2 [R $owner get $k2]
+
+        set delargs [list $k1 $k2]
+        for {set i 0} {$i < 257} {incr i} {
+            lappend delargs "{msetex}k$i"
+        }
+        R $owner del {*}$delargs
+    }
 }
 
 # Get the path to the cluster config file.

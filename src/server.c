@@ -1394,19 +1394,19 @@ void databasesCron(void) {
     if (!hasActiveChildProcess()) {
         /* We use global counters so if we stop the computation at a given
          * DB we'll be able to start from the successive in the next
-         * cron loop iteration. */
+         * cron loop iteration. The counters index server.created_db_ids, so
+         * only created databases are visited. */
         static unsigned int resize_db = 0;
         static unsigned int rehash_db = 0;
         int dbs_per_call = CRON_DBS_PER_CALL;
         int j;
 
         /* Don't test more DBs than we have. */
-        if (dbs_per_call > server.dbnum) dbs_per_call = server.dbnum;
+        if (dbs_per_call > server.created_db_count) dbs_per_call = server.created_db_count;
 
         for (j = 0; j < dbs_per_call; j++) {
-            serverDb *db = server.db[resize_db % server.dbnum];
+            serverDb *db = server.db[server.created_db_ids[resize_db % server.created_db_count]];
             resize_db++;
-            if (db == NULL) continue;
             kvstoreTryResizeHashtables(db->keys, CRON_DICTS_PER_DB);
             kvstoreTryResizeHashtables(db->expires, CRON_DICTS_PER_DB);
             kvstoreTryResizeHashtables(db->keys_with_volatile_items, CRON_DICTS_PER_DB);
@@ -1417,15 +1417,13 @@ void databasesCron(void) {
             uint64_t elapsed_us = 0;
             uint64_t threshold_us = 1 * 1000000 / server.hz / 100;
             for (j = 0; j < dbs_per_call; j++) {
-                serverDb *db = server.db[rehash_db % server.dbnum];
-                if (db != NULL) {
-                    elapsed_us += kvstoreIncrementallyRehash(db->keys, threshold_us - elapsed_us);
-                    if (elapsed_us >= threshold_us) break;
-                    elapsed_us += kvstoreIncrementallyRehash(db->expires, threshold_us - elapsed_us);
-                    if (elapsed_us >= threshold_us) break;
-                    elapsed_us += kvstoreIncrementallyRehash(db->keys_with_volatile_items, threshold_us - elapsed_us);
-                    if (elapsed_us >= threshold_us) break;
-                }
+                serverDb *db = server.db[server.created_db_ids[rehash_db % server.created_db_count]];
+                elapsed_us += kvstoreIncrementallyRehash(db->keys, threshold_us - elapsed_us);
+                if (elapsed_us >= threshold_us) break;
+                elapsed_us += kvstoreIncrementallyRehash(db->expires, threshold_us - elapsed_us);
+                if (elapsed_us >= threshold_us) break;
+                elapsed_us += kvstoreIncrementallyRehash(db->keys_with_volatile_items, threshold_us - elapsed_us);
+                if (elapsed_us >= threshold_us) break;
                 rehash_db++;
             }
         }
@@ -1662,16 +1660,15 @@ long long serverCron(struct aeEventLoop *eventLoop, long long id, void *clientDa
     /* Show some info about non-empty databases */
     if (server.verbosity <= LL_VERBOSE) {
         run_with_period(5000) {
-            for (j = 0; j < server.dbnum; j++) {
-                serverDb *db = server.db[j];
-                if (db == NULL) continue;
+            serverDb *db;
+            forEachCreatedDb(db) {
                 long long size, used, vkeys;
 
-                size = kvstoreBuckets(server.db[j]->keys) * hashtableEntriesPerBucket();
-                used = kvstoreSize(server.db[j]->keys);
-                vkeys = kvstoreSize(server.db[j]->expires);
+                size = kvstoreBuckets(db->keys) * hashtableEntriesPerBucket();
+                used = kvstoreSize(db->keys);
+                vkeys = kvstoreSize(db->expires);
                 if (used || vkeys) {
-                    serverLog(LL_VERBOSE, "DB %d: %lld keys (%lld volatile) in %lld slots HT.", j, used, vkeys, size);
+                    serverLog(LL_VERBOSE, "DB %d: %lld keys (%lld volatile) in %lld slots HT.", db->id, used, vkeys, size);
                 }
             }
         }
@@ -2967,7 +2964,6 @@ void resetServerStats(void) {
     server.stat_forkless_fallbacks_exclude_data = 0;
     server.stat_forkless_fallbacks_missing_inband_repl = 0;
     server.stat_forkless_fallbacks_compression = 0;
-    server.stat_forkless_fallbacks_old_rdb_version = 0;
     server.stat_rejected_conn = 0;
     server.stat_rejected_priority_conn = 0;
     server.stat_sync_full = 0;
@@ -3039,9 +3035,9 @@ int dbHasNoKeys(int dbid) {
 }
 
 bool dbsHaveNoKeys(void) {
-    for (int i = 0; i < server.dbnum; i++) {
-        if (!dbHasNoKeys(i))
-            return false;
+    serverDb *db;
+    forEachCreatedDb(db) {
+        if (kvstoreSize(db->keys) != 0) return false;
     }
     return true;
 }
@@ -3070,11 +3066,46 @@ serverDb *createDatabase(int id) {
     return db;
 }
 
+/* Adds id to server.created_db_ids. Databases are never freed while the
+ * server runs, so the list only grows. Its array grows by doubling, up to
+ * dbnum entries, so memory follows the number of created databases. The list
+ * is sorted by id so that the order of loops over it (for example eviction
+ * sampling and defrag stages) is deterministic and does not depend on the
+ * order databases were created. Only createDatabaseIfNeeded() calls this; it
+ * is exported for unit tests. */
+void trackCreatedDatabase(int id) {
+    serverAssert(server.created_db_count < server.dbnum);
+    if (server.created_db_count == server.created_db_capacity) {
+        int cap = server.created_db_capacity ? server.created_db_capacity * 2 : 16;
+        if (cap > server.dbnum) cap = server.dbnum;
+        server.created_db_ids = zrealloc(server.created_db_ids, sizeof(int) * cap);
+        server.created_db_capacity = cap;
+    }
+    int pos = server.created_db_count;
+    while (pos > 0 && server.created_db_ids[pos - 1] > id) {
+        server.created_db_ids[pos] = server.created_db_ids[pos - 1];
+        pos--;
+    }
+    serverAssert(pos == 0 || server.created_db_ids[pos - 1] != id);
+    server.created_db_ids[pos] = id;
+    server.created_db_count++;
+}
+
 serverDb *createDatabaseIfNeeded(int id) {
     if (server.db[id] == NULL) {
         server.db[id] = createDatabase(id);
+        trackCreatedDatabase(id);
     }
     return server.db[id];
+}
+
+/* Like createDatabaseIfNeeded(), for code that fills either server.db or a
+ * temporary database array (for example RDB loading into a temp db). Only
+ * databases created in server.db are tracked. */
+serverDb *createDatabaseInArrayIfNeeded(serverDb **dbarray, int id) {
+    if (dbarray == server.db) return createDatabaseIfNeeded(id);
+    if (dbarray[id] == NULL) dbarray[id] = createDatabase(id);
+    return dbarray[id];
 }
 
 void initServer(void) {
@@ -3173,6 +3204,9 @@ void initServer(void) {
     }
     server.dbnum = server.cluster_enabled ? server.config_databases_cluster : server.config_databases;
     server.db = zcalloc(sizeof(serverDb *) * server.dbnum);
+    server.created_db_ids = NULL;
+    server.created_db_count = 0;
+    server.created_db_capacity = 0;
 
     /* Set object metadata size before creating any database key objects */
     if (server.forkless_infrastructure_enabled) {
@@ -4656,6 +4690,9 @@ void unprepareCommand(client *c) {
  * other operations can be performed by the caller. Otherwise
  * if C_ERR is returned the client was destroyed (i.e. after QUIT). */
 int processCommand(client *c) {
+    /* evictClients() below relies on this flag to skip clients that are still
+     * executing further up the stack. Callers must go through processCommandAndResetClient(). */
+    debugServerAssert(c->flag.processing_command);
     serverAssert(!c->flag.blocked && !c->flag.unblocked);
 
     if (!scriptIsTimedOut()) {
@@ -6475,11 +6512,11 @@ void totalNumberOfStatefulKeys(unsigned long *blocking_keys,
                                unsigned long *blocking_keys_on_nokey,
                                unsigned long *watched_keys) {
     unsigned long bkeys = 0, bkeys_on_nokey = 0, wkeys = 0;
-    for (int j = 0; j < server.dbnum; j++) {
-        if (server.db[j] == NULL) continue;
-        bkeys += dictSize(server.db[j]->blocking_keys);
-        bkeys_on_nokey += dictSize(server.db[j]->blocking_keys_unblock_on_nokey);
-        wkeys += dictSize(server.db[j]->watched_keys);
+    serverDb *db;
+    forEachCreatedDb(db) {
+        bkeys += dictSize(db->blocking_keys);
+        bkeys_on_nokey += dictSize(db->blocking_keys_unblock_on_nokey);
+        wkeys += dictSize(db->watched_keys);
     }
     if (blocking_keys) *blocking_keys = bkeys;
     if (blocking_keys_on_nokey) *blocking_keys_on_nokey = bkeys_on_nokey;
@@ -6493,7 +6530,6 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
     sds info = sdsempty();
     info = sdsMakeRoomFor(info, 4096);
     time_t uptime = server.unixtime - server.stat_starttime;
-    int j;
     int sections = 0;
     if (everything) all_sections = 1;
 
@@ -6916,12 +6952,6 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                 "pubsubshard_channels:%llu\r\n", kvstoreSize(server.pubsubshard_channels),
                 "latest_fork_usec:%lld\r\n", server.stat_fork_time,
                 "total_forks:%lld\r\n", server.stat_total_forks,
-                "forkless_fallbacks_module:%lld\r\n", server.stat_forkless_fallbacks_module,
-                "forkless_fallbacks_slot_import:%lld\r\n", server.stat_forkless_fallbacks_slot_import,
-                "forkless_fallbacks_exclude_data:%lld\r\n", server.stat_forkless_fallbacks_exclude_data,
-                "forkless_fallbacks_missing_inband_repl:%lld\r\n", server.stat_forkless_fallbacks_missing_inband_repl,
-                "forkless_fallbacks_compression:%lld\r\n", server.stat_forkless_fallbacks_compression,
-                "forkless_fallbacks_old_rdb_version:%lld\r\n", server.stat_forkless_fallbacks_old_rdb_version,
                 "migrate_cached_sockets:%zu\r\n", dictSize(server.migrate_cached_sockets),
                 "slave_expires_tracked_keys:%zu\r\n", getReplicaKeyWithExpireCount(),
                 "active_defrag_hits:%lld\r\n", server.stat_active_defrag_hits,
@@ -7201,9 +7231,8 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
     if (all_sections || (dictFind(section_dict, "keyspace") != NULL)) {
         if (sections++) info = sdscat(info, "\r\n");
         info = sdscatprintf(info, "# Keyspace\r\n");
-        for (j = 0; j < server.dbnum; j++) {
-            serverDb *db = server.db[j];
-            if (db == NULL) continue;
+        serverDb *db;
+        forEachCreatedDb(db) {
             long long keys, vkeys, keysvitems;
 
             keys = kvstoreSize(db->keys);
@@ -7211,7 +7240,7 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
             keysvitems = kvstoreSize(db->keys_with_volatile_items);
 
             if (keys || vkeys) {
-                info = sdscatprintf(info, "db%d:keys=%lld,expires=%lld,avg_ttl=%lld,keys_with_volatile_items=%lld\r\n", j, keys, vkeys,
+                info = sdscatprintf(info, "db%d:keys=%lld,expires=%lld,avg_ttl=%lld,keys_with_volatile_items=%lld\r\n", db->id, keys, vkeys,
                                     db->expiry[KEYS].avg_ttl, keysvitems);
             }
         }
@@ -7251,7 +7280,12 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                 "eventloop_priority_duration_max:%llu\r\n", server.duration_stats[EL_DURATION_TYPE_PRIORITY_EL].max,
                 "eventloop_priority_cmd_per_cycle_max:%lld\r\n", server.priority_el_cmd_cnt_max,
                 "io_threaded_reads_pending:%lld\r\n", server.stat_io_reads_pending,
-                "io_threaded_writes_pending:%lld\r\n", server.stat_io_writes_pending));
+                "io_threaded_writes_pending:%lld\r\n", server.stat_io_writes_pending,
+                "forkless_fallbacks_module:%lld\r\n", server.stat_forkless_fallbacks_module,
+                "forkless_fallbacks_slot_import:%lld\r\n", server.stat_forkless_fallbacks_slot_import,
+                "forkless_fallbacks_exclude_data:%lld\r\n", server.stat_forkless_fallbacks_exclude_data,
+                "forkless_fallbacks_missing_inband_repl:%lld\r\n", server.stat_forkless_fallbacks_missing_inband_repl,
+                "forkless_fallbacks_compression:%lld\r\n", server.stat_forkless_fallbacks_compression));
 
         info = forkless_catDebugInfo(info);
         info = throttleRepl_sdscatInfoDebugMetrics(info);
@@ -8293,20 +8327,22 @@ __attribute__((weak)) int main(int argc, char **argv) {
  * Common command extended options - EX/EXAT/PX/PXAT/KEEPTTL
  *
  * Function takes pointers to client, flags, unit, expire_idx, pointer to pointer of expire obj,
- * pointer to pointer of compare obj, pointer to pointer of incrby obj, pointer to pointer of
+ * compare_idx, pointer to pointer of compare obj, pointer to pointer of incrby obj, pointer to pointer of
  * lbound obj, pointer to pointer of ubound obj, and command_type which can be COMMAND_*.
  *
  * If there are any syntax violations C_ERR is returned else C_OK is returned.
  *
  * Input flags are updated upon parsing the arguments. Unit, expire_idx and expire are updated if there are any
- * EX/EXAT/PX/PXAT arguments. Unit is updated to millisecond if PX/PXAT is set.
+ * EX/EXAT/PX/PXAT arguments. Unit is updated to millisecond if PX/PXAT is set. compare_idx and compare_val are
+ * updated if there is an IFEQ/IFNE argument.
  *
  * start_idx provides a way to start scanning from a specific index.
  * max_args provides a way to limit the scan to a specific range of arguments.
  */
-int parseExtendedCommandArgumentsOrReply(client *c, int command_type, int start_idx, int max_args, int *flags, int *unit, int *expire_idx, robj **expire, robj **compare_val, robj **incrby_val, robj **lbound_val, robj **ubound_val) {
+int parseExtendedCommandArgumentsOrReply(client *c, int command_type, int start_idx, int max_args, int *flags, int *unit, int *expire_idx, robj **expire, int *compare_idx, robj **compare_val, robj **incrby_val, robj **lbound_val, robj **ubound_val) {
     int j = start_idx;
     if (expire_idx) *expire_idx = -1;
+    if (compare_idx) *compare_idx = -1;
     for (; j < max_args; j++) {
         char *opt = objectGetVal(c->argv[j]);
         robj *next = (j == max_args - 1) ? NULL : c->argv[j + 1];
@@ -8347,6 +8383,7 @@ int parseExtendedCommandArgumentsOrReply(client *c, int command_type, int start_
         {
             *flags |= ARGS_SET_IFEQ;
             *compare_val = next;
+            if (compare_idx) *compare_idx = j + 1;
             j++;
         } else if ((opt[0] == 'i' || opt[0] == 'I') &&
                    (opt[1] == 'f' || opt[1] == 'F') &&
@@ -8357,6 +8394,7 @@ int parseExtendedCommandArgumentsOrReply(client *c, int command_type, int start_
         {
             *flags |= ARGS_SET_IFNE;
             *compare_val = next;
+            if (compare_idx) *compare_idx = j + 1;
             j++;
         } else if ((opt[0] == 'g' || opt[0] == 'G') &&
                    (opt[1] == 'e' || opt[1] == 'E') &&

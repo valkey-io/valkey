@@ -253,8 +253,8 @@ void setSlotImportingStateInDb(serverDb *db,
 }
 
 void setSlotImportingStateInAllDbs(list *slot_ranges, int is_importing) {
-    for (int i = 0; i < server.dbnum; i++) {
-        serverDb *db = server.db[i];
+    serverDb *db;
+    forEachCreatedDb(db) {
         setSlotImportingStateInDb(db, slot_ranges, is_importing);
     }
 }
@@ -1664,7 +1664,9 @@ bool shouldRewriteHashtableIndex(int didx, hashtable *ht, void *privdata) {
 int childSnapshotForSyncSlot(rio *aof, slotMigrationJob *job) {
     list *slot_ranges = job->slot_ranges;
     size_t key_count = 0;
-    for (int db_num = 0; db_num < server.dbnum; db_num++) {
+    serverDb *db;
+    forEachCreatedDb(db) {
+        int db_num = db->id;
         listIter li;
         listNode *ln;
         listRewind(slot_ranges, &li);

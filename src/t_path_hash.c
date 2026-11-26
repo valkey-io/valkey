@@ -113,6 +113,31 @@ void pathHashTypeDigest(unsigned char *digest, robj *o) {
     raxStop(&paths);
 }
 
+/* Pauses or resumes rehashing on every hashtable encoded payload. The caller must keep the payloads
+ * and their encodings unchanged between pause and resume. */
+static void pathHashSetRehashingPaused(pathHashObject *path_hash, bool pause) {
+    raxIterator ri;
+    raxStart(&ri, path_hash->index);
+    raxSeek(&ri, "^", NULL, 0);
+    while (raxNext(&ri)) {
+        robj *payload = ri.data;
+        if (payload->encoding != OBJ_ENCODING_HASHTABLE) continue;
+        if (pause)
+            hashtablePauseRehashing(objectGetVal(payload));
+        else
+            hashtableResumeRehashing(objectGetVal(payload));
+    }
+    raxStop(&ri);
+}
+
+void pathHashTypePauseRehashing(pathHashObject *path_hash) {
+    pathHashSetRehashingPaused(path_hash, true);
+}
+
+void pathHashTypeResumeRehashing(pathHashObject *path_hash) {
+    pathHashSetRehashingPaused(path_hash, false);
+}
+
 static robj *pathHashLookupPayload(robj *o, robj *path) {
     if (o == NULL) return NULL;
     pathHashObject *path_hash = objectGetVal(o);

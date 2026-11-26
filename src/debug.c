@@ -241,15 +241,14 @@ void xorObjectDigest(serverDb *db, robj *keyobj, unsigned char *digest, robj *o)
         hashTypeInitIterator(o, &hi);
         while (hashTypeNext(&hi) != C_ERR) {
             unsigned char eledigest[20];
-            sds sdsele;
+            char fbuf[LONG_STR_SIZE], vbuf[LONG_STR_SIZE];
+            size_t flen, vlen;
 
             memset(eledigest, 0, 20);
-            sdsele = hashTypeCurrentObjectNewSds(&hi, OBJ_HASH_FIELD);
-            mixDigest(eledigest, sdsele, sdslen(sdsele));
-            sdsfree(sdsele);
-            sdsele = hashTypeCurrentObjectNewSds(&hi, OBJ_HASH_VALUE);
-            mixDigest(eledigest, sdsele, sdslen(sdsele));
-            sdsfree(sdsele);
+            char *field = hashTypeCurrentObjectRawString(&hi, OBJ_HASH_FIELD, fbuf, &flen);
+            mixDigest(eledigest, field, flen);
+            char *value = hashTypeCurrentObjectRawString(&hi, OBJ_HASH_VALUE, vbuf, &vlen);
+            mixDigest(eledigest, value, vlen);
             xorDigest(digest, eledigest, 20);
         }
         hashTypeResetIterator(&hi);

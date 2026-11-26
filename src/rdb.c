@@ -1237,19 +1237,17 @@ ssize_t rdbSaveObject(rio *rdb, robj *o, robj *key, int dbid, unsigned char rdbt
             hashTypeIterator fields;
             hashTypeInitIterator(payload, &fields);
             while (hashTypeNext(&fields) != C_ERR) {
-                sds field = hashTypeCurrentObjectNewSds(&fields, OBJ_HASH_FIELD);
-                sds value = hashTypeCurrentObjectNewSds(&fields, OBJ_HASH_VALUE);
-                ssize_t field_bytes = rdbSaveRawString(rdb, (unsigned char *)field, sdslen(field));
+                char fbuf[LONG_STR_SIZE], vbuf[LONG_STR_SIZE];
+                size_t flen, vlen;
+                char *field = hashTypeCurrentObjectRawString(&fields, OBJ_HASH_FIELD, fbuf, &flen);
+                char *value = hashTypeCurrentObjectRawString(&fields, OBJ_HASH_VALUE, vbuf, &vlen);
+                ssize_t field_bytes = rdbSaveRawString(rdb, (unsigned char *)field, flen);
                 if (field_bytes == -1) {
-                    sdsfree(field);
-                    sdsfree(value);
                     hashTypeResetIterator(&fields);
                     raxStop(&paths);
                     return -1;
                 }
-                ssize_t value_bytes = rdbSaveRawString(rdb, (unsigned char *)value, sdslen(value));
-                sdsfree(field);
-                sdsfree(value);
+                ssize_t value_bytes = rdbSaveRawString(rdb, (unsigned char *)value, vlen);
                 if (value_bytes == -1) {
                     hashTypeResetIterator(&fields);
                     raxStop(&paths);

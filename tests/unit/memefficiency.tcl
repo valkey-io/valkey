@@ -652,6 +652,7 @@ run_solo {defrag} {
                 fail "stalled client was not freed"
             }
             # The cycle already running may be past the pubsub stage.
+            set log_from [count_log_lines 0]
             wait_for_defrag_cycles $log_from 2
             r config set activedefrag no
 

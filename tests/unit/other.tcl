@@ -795,3 +795,36 @@ start_server {overrides {forkless-infrastructure-enabled yes} tags {"other" "ext
         } {1 1} {needs:debug needs:save}
     }
 }
+
+start_server {overrides {databases 1024} tags {"other" "external:skip" "singledb:skip"}} {
+    foreach mode {SYNC ASYNC} {
+        test "FLUSHALL $mode clears sparse databases and invalidates their watches" {
+            r select 1023
+            r set present high EX 3600
+            r select 31
+            r set present low EX 3600
+
+            set watcher [valkey_client]
+            $watcher select 1023
+            $watcher watch present
+            set missing_watcher [valkey_client]
+            $missing_watcher select 777
+            $missing_watcher watch absent
+
+            r flushall $mode
+            assert_equal 0 [r dbsize]
+            r select 1023
+            assert_equal 0 [r dbsize]
+
+            $watcher multi
+            $watcher ping
+            assert_equal {} [$watcher exec]
+            $watcher close
+
+            $missing_watcher multi
+            $missing_watcher ping
+            assert_equal {PONG} [$missing_watcher exec]
+            $missing_watcher close
+        }
+    }
+}

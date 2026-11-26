@@ -627,38 +627,22 @@ void resetDbExpiryState(serverDb *db) {
     memset(db->expiry, 0, sizeof(db->expiry));
 }
 
-/* Remove all keys from the database(s) structure. The dbarray argument
- * may not be the server main DBs (could be a temporary DB).
- *
- * The dbnum can be -1 if all the DBs should be emptied, or the specified
- * DB index if we want to empty only a single database.
- * The function returns the number of keys removed from the database(s). */
-long long emptyDbStructure(serverDb **dbarray, int dbnum, int async, void(callback)(hashtable *)) {
-    long long removed = 0;
-    int startdb, enddb;
+/* Empty one database, if it exists, and return the number of keys removed. */
+static long long emptyDbStructure(serverDb *db, int async, void(callback)(hashtable *)) {
+    if (db == NULL) return 0;
 
-    if (dbnum == -1) {
-        startdb = 0;
-        enddb = server.dbnum - 1;
+    long long removed = kvstoreSize(db->keys);
+    if (removed == 0) return 0;
+
+    if (async) {
+        emptyDbAsync(db);
     } else {
-        startdb = enddb = dbnum;
+        kvstoreEmpty(db->keys, callback);
+        kvstoreEmpty(db->expires, callback);
+        kvstoreEmpty(db->keys_with_volatile_items, callback);
     }
 
-    for (int j = startdb; j <= enddb; j++) {
-        if (dbarray[j] == NULL || kvstoreSize(dbarray[j]->keys) == 0) continue;
-
-        removed += kvstoreSize(dbarray[j]->keys);
-        if (async) {
-            emptyDbAsync(dbarray[j]);
-        } else {
-            kvstoreEmpty(dbarray[j]->keys, callback);
-            kvstoreEmpty(dbarray[j]->expires, callback);
-            kvstoreEmpty(dbarray[j]->keys_with_volatile_items, callback);
-        }
-        /* Because all keys of database are removed, reset average ttl. */
-        resetDbExpiryState(dbarray[j]);
-    }
-
+    resetDbExpiryState(db);
     return removed;
 }
 
@@ -708,7 +692,14 @@ long long emptyData(int dbnum, int flags, void(callback)(hashtable *)) {
     }
 
     /* Empty the database structure. */
-    removed = emptyDbStructure(server.db, dbnum, async, callback);
+    if (dbnum == -1) {
+        serverDb *db;
+        forEachCreatedDb(db) {
+            removed += emptyDbStructure(db, async, callback);
+        }
+    } else {
+        removed = emptyDbStructure(server.db[dbnum], async, callback);
+    }
 
     if (hotkeysEnabled()) {
         if (dbnum == -1)
@@ -733,27 +724,28 @@ long long emptyData(int dbnum, int flags, void(callback)(hashtable *)) {
 
 /* Discard tempDb array. It's always async. */
 void discardTempDb(serverDb **tempDb) {
-    /* Release temp DBs. */
-    emptyDbStructure(tempDb, -1, 1, NULL);
+    /* Temporary DBs are not part of the server's created-DB index. */
     for (int i = 0; i < server.dbnum; i++) {
-        if (tempDb[i]) {
-            kvstoreRelease(tempDb[i]->keys);
-            kvstoreRelease(tempDb[i]->expires);
-            kvstoreRelease(tempDb[i]->keys_with_volatile_items);
+        serverDb *db = tempDb[i];
+        if (db == NULL) continue;
 
-            /* These are expected to be empty on temporary databases */
-            serverAssert(dictSize(tempDb[i]->blocking_keys) == 0);
-            serverAssert(dictSize(tempDb[i]->blocking_keys_unblock_on_nokey) == 0);
-            serverAssert(dictSize(tempDb[i]->ready_keys) == 0);
-            serverAssert(dictSize(tempDb[i]->watched_keys) == 0);
+        emptyDbStructure(db, 1, NULL);
+        kvstoreRelease(db->keys);
+        kvstoreRelease(db->expires);
+        kvstoreRelease(db->keys_with_volatile_items);
 
-            dictRelease(tempDb[i]->blocking_keys);
-            dictRelease(tempDb[i]->blocking_keys_unblock_on_nokey);
-            dictRelease(tempDb[i]->ready_keys);
-            dictRelease(tempDb[i]->watched_keys);
-            zfree(tempDb[i]);
-            tempDb[i] = NULL;
-        }
+        /* These are expected to be empty on temporary databases */
+        serverAssert(dictSize(db->blocking_keys) == 0);
+        serverAssert(dictSize(db->blocking_keys_unblock_on_nokey) == 0);
+        serverAssert(dictSize(db->ready_keys) == 0);
+        serverAssert(dictSize(db->watched_keys) == 0);
+
+        dictRelease(db->blocking_keys);
+        dictRelease(db->blocking_keys_unblock_on_nokey);
+        dictRelease(db->ready_keys);
+        dictRelease(db->watched_keys);
+        zfree(db);
+        tempDb[i] = NULL;
     }
     zfree(tempDb);
 }
@@ -790,19 +782,19 @@ void signalModifiedKey(client *c, serverDb *db, robj *key) {
     bgIteration_keyModified(db->id, objectGetVal(key));
 }
 
-void signalFlushedDb(int dbid, int async) {
-    int startdb, enddb;
-    if (dbid == -1) {
-        startdb = 0;
-        enddb = server.dbnum - 1;
-    } else {
-        startdb = enddb = dbid;
-    }
+static void signalFlushedDbKeys(serverDb *db) {
+    scanDatabaseForDeletedKeys(db, NULL);
+    touchAllWatchedKeysInDb(db, NULL);
+}
 
-    for (int j = startdb; j <= enddb; j++) {
-        if (server.db[j] == NULL) continue;
-        scanDatabaseForDeletedKeys(server.db[j], NULL);
-        touchAllWatchedKeysInDb(server.db[j], NULL);
+void signalFlushedDb(int dbid, int async) {
+    if (dbid == -1) {
+        serverDb *db;
+        forEachCreatedDb(db) {
+            signalFlushedDbKeys(db);
+        }
+    } else if (server.db[dbid] != NULL) {
+        signalFlushedDbKeys(server.db[dbid]);
     }
 
     trackingInvalidateKeysOnFlush(async);

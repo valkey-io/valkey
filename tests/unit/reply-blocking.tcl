@@ -2996,3 +2996,37 @@ start_server {tags {"repl durability external:skip"} overrides {appendonly yes a
         }
     }
 }
+
+start_server {tags {"repl durability external:skip"} overrides {appendonly yes appendfsync always bio-aof-offload-enabled yes}} {
+    set primary [srv 0 client]
+    set primary_host [srv 0 host]
+    set primary_port [srv 0 port]
+    start_server {overrides {appendonly yes appendfsync always bio-aof-offload-enabled yes}} {
+        set replica [srv 0 client]
+        test "A promoted replica has its AOF on disk before it serves reads as a primary" {
+            $replica replicaof $primary_host $primary_port
+            wait_for_condition 100 50 {
+                [s 0 master_link_status] eq {up}
+            } else {
+                fail "replica did not sync"
+            }
+            # The replica's offloaded AOF write now takes 2s.
+            $replica debug aof-flush-sleep 2000000
+            $primary set promo:k promoted-value
+            wait_for_condition 100 20 {[$replica get promo:k] eq {promoted-value}} else {fail "write did not replicate"}
+            $replica replicaof no one
+            # Once promoted, reads of promo:k are served without being held,
+            # so its write must already be in the AOF.
+            set dir [file join [lindex [$replica config get dir] 1] [lindex [$replica config get appenddirname] 1]]
+            set found 0
+            foreach f [glob -nocomplain -directory $dir *.incr.aof] {
+                set fh [open $f r]
+                fconfigure $fh -translation binary
+                if {[string first promoted-value [read $fh]] != -1} { set found 1 }
+                close $fh
+            }
+            $replica debug aof-flush-sleep 0
+            assert_equal 1 $found
+        }
+    }
+}

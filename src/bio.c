@@ -135,6 +135,7 @@ typedef union bio_job {
                                           * the file is closed. */
         unsigned need_reclaim_cache : 1; /* A flag to indicate that reclaim cache is required before
                                           * the file is closed. */
+        int sleep_us;                    /* DEBUG aof-flush-sleep for the offloaded AOF write. */
     } fd_args;
 
     struct {
@@ -272,6 +273,8 @@ void bioCreateAofFsyncNotifyJob(int fd, sds buf, long long reploff) {
     job->fd_args.offset = reploff;
     job->fd_args.buf = buf;
     job->fd_args.need_reclaim_cache = 0;
+    /* Read on the main thread, which DEBUG aof-flush-sleep writes. */
+    job->fd_args.sleep_us = server.aof_flush_sleep;
     bioSubmitJob(BIO_AOF_FSYNC, job);
 }
 
@@ -283,6 +286,8 @@ static void bioProcessAofFlushOffload(bio_job *job) {
     sds buf = job->fd_args.buf;
     int err = 0;
     size_t len = sdslen(buf);
+    /* Like the synchronous path, DEBUG aof-flush-sleep delays the write. */
+    if (job->fd_args.sleep_us && len) usleep(job->fd_args.sleep_us);
     ssize_t nwritten = aofWrite(job->fd_args.fd, buf, len);
     if (nwritten != (ssize_t)len) {
         err = (nwritten == -1) ? errno : ENOSPC;

@@ -225,6 +225,7 @@ int ackPausedAofReplyBlocking(long long offset);
 void replyBlockingBeforeTimeoutReply(client *c);
 void replyBlockingAfterTimeoutReply(client *c);
 void replyBlockingStampPlaceholderResponses(long long offset);
+void replyBlockingOnPromotion(void);
 bool isClientReplyBufferLimited(client *c);
 bool isMonitorOutputHeld(const client *c);
 void replyBlockingBeforeWrittenOutputFreed(client *c, struct listNode *reply_block);

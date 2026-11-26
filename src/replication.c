@@ -5292,6 +5292,9 @@ void replicationUnsetPrimary(void) {
     replFreeStreamReader();
     server.repl_state = REPL_STATE_NONE;
 
+    /* Serve nothing as a primary that is not on disk yet. */
+    replyBlockingOnPromotion();
+
     /* We need to make sure the new primary will start the replication stream
      * with a SELECT statement. This is forced after a full resync, but
      * with PSYNC version 2, there is no need for full resync after a

@@ -986,6 +986,15 @@ static void syncAofBeforeRelease(void) {
     }
 }
 
+/* A replica offloads its AOF writes too, but tracks no dirty keys, so once it
+ * is promoted its reads are served right away. Write and fsync what it
+ * received from its primary first, so nothing it serves as a primary is
+ * still in aof_buf or in an in-flight offloaded write. */
+void replyBlockingOnPromotion(void) {
+    if (!isReplyBlockingEnabled()) return;
+    syncAofBeforeRelease();
+}
+
 /* Stop tracking durability on this primary. Turning the feature off releases
  * held replies and runs every deferred task once the AOF is synced. On
  * demotion the held writes may not survive: clients waiting for them are

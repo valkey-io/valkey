@@ -45,3 +45,32 @@ TEST(IOThreadsTest, JobsFinishedCounterHasItsOwnCacheLine) {
         ASSERT_NE(cacheLine(finished), cacheLine(testOnlyGetIOThreadActiveTimeSlot(id))) << "slot " << id;
     }
 }
+
+/* A replica's upstream primary connection must never be dispatched to an
+ * I/O worker, even when the worker pool is active. */
+TEST(IOThreadsTest, PrimaryLinkReadIsNotOffloaded) {
+    client primary = {};
+    connection conn = {};
+
+    primary.conn = &conn;
+    primary.flag.primary = 1;
+    primary.io_read_state = CLIENT_IDLE;
+    primary.io_write_state = CLIENT_IDLE;
+
+    const int original_active_threads = server.active_io_threads_num;
+    server.active_io_threads_num = 4;
+
+    const int client_type = getClientType(&primary);
+    const int result = trySendReadToIOThreads(&primary);
+    const int read_state = primary.io_read_state;
+    const int write_state = primary.io_write_state;
+    const int pending_read = primary.flag.pending_read;
+
+    server.active_io_threads_num = original_active_threads;
+
+    EXPECT_EQ(CLIENT_TYPE_PRIMARY, client_type);
+    EXPECT_EQ(C_ERR, result);
+    EXPECT_EQ(CLIENT_IDLE, read_state);
+    EXPECT_EQ(CLIENT_IDLE, write_state);
+    EXPECT_EQ(0, pending_read);
+}

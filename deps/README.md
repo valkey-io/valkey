@@ -56,12 +56,18 @@ This should hopefully merge the local changes into the new version.
 Linenoise
 ---
 
-Linenoise is rarely upgraded as needed. The upgrade process is trivial since
-Valkey uses a non modified version of linenoise, so to upgrade just do the
-following:
+Linenoise is rarely upgraded as needed. Valkey carries local changes to it, for
+example `linenoiseHistoryAdd()` takes an extra `is_sensitive` argument, so the
+directory can't just be replaced with the upstream tree. To upgrade:
 
-1. Remove the linenoise directory.
-2. Substitute it with the new linenoise source tree.
+1. Compare the files under `linenoise` with upstream linenoise
+   (https://github.com/antirez/linenoise) commit
+   `97d2850af13c339369093b78abe5265845d78220` (2020-03-12), the version they
+   are based on, to find the local changes.
+2. Copy the new upstream files into the directory.
+3. Apply the changes from 1 to the updated files.
+4. Replace the commit in step 1 with the upstream revision you upgraded to, so the
+   next upgrade compares against it.
 
 LZ4
 ---

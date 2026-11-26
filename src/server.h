@@ -1032,9 +1032,7 @@ typedef struct multiState {
     int alloc_count;                /* total number of multiCmd struct memory reserved. */
     list watched_keys;              /* List of watchedKey for iteration and cleanup. */
     size_t watched_keys_mem;        /* Memory used by watched key robj objects. */
-    hashtable **watched_keys_by_db; /* Per-db hashtable for O(1) watched key lookup.
-                                       Array of size server.dbnum, lazily allocated.
-                                       Each hashtable stores watchedKey* directly. */
+    hashtable *watched_keys_lookup; /* Per-client set of watcher lists, one for each watched (db, key). */
     int transaction_db_id;          /* Currently SELECTed DB id in transaction context */
 } multiState;
 

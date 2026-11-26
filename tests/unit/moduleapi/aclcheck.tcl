@@ -179,6 +179,29 @@ start_server {tags {"modules acl"}} {
         assert_equal [r acl DRYRUN j2 aclcheck.module.command.aclcategories.read.only.category] OK
     }
 
+    test {test commands acl categories are added correctly} {
+        set add_acl [r ACL CAT add_acl]
+        puts "DEBUG add_role=$add_acl"
+
+        assert {[lsearch -exact $add_acl "set"] >= 0}
+        assert {[lsearch -exact $add_acl "config"] >= 0}
+        assert {[lsearch -exact $add_acl "memory|usage"] >= 0}
+        assert {[lsearch -exact $add_acl "aclcheck.module.command.test.add.new.aclcategories"] >= 0}
+        assert {[lsearch -exact $add_acl "fail_command"] < 0}
+
+        r acl SETUSER roleuser on >password -@all +@add_acl allkeys
+
+        assert_equal [r acl DRYRUN roleuser set x 1] OK
+        assert_equal [r acl DRYRUN roleuser aclcheck.module.command.test.add.new.aclcategories] OK
+        assert_equal [r ACL DRYRUN roleuser config get "*"] OK
+        assert_equal [r ACL DRYRUN roleuser memory usage x] OK
+
+        catch {r acl DRYRUN roleuser memory stats} e
+        assert_match {*has no permissions to run the 'memory|stats' command*} $e
+        catch {r acl DRYRUN roleuser get x} e
+        assert_match {*has no permissions to run the 'get' command*} $e
+    }
+
     test {Unload the module - aclcheck} {
         assert_equal {OK} [r module unload aclcheck]
     }

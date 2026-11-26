@@ -497,7 +497,9 @@ struct fullScanIterator {
     genericIterator callbacks; // (must be first item)
 
     /* Array of mapping from original DB ID (at the time of iteration start) to that DB's current
-     * index.  So, if the DB which was DB-0 is now at index 6, orig_to_cur_db[0]==6. */
+     * index. Both maps are NULL until the first swap between different IDs.
+     * An entry stores the mapped DB ID plus one; a zero entry means the DB ID
+     * is unchanged. */
     int *orig_to_cur_db;
 
     /* The reverse of the above array.  This maps a current DB index to its original index (at the
@@ -509,7 +511,7 @@ struct fullScanIterator {
      * original ordering. */
     int iter_db;
 
-    // Iterator for the DB orig_to_cur_db[iter_db]
+    // Iterator for the DB fullScanIteratorCurrentDb(it, iter_db)
     kvstore *kvs;     // keep track of kvs associated with iter_dbi
     int kvs_didx;     // hashtable index within the kvstore
     size_t ht_cursor; // cursor for scanning hashtable
@@ -521,6 +523,16 @@ static void fullScanIteratorRelease(genericIterator *genIt) {
     zfree(it->orig_to_cur_db);
     zfree(it->cur_to_orig_db);
     zfree(it);
+}
+
+static inline int fullScanIteratorCurrentDb(const struct fullScanIterator *it, int orig_dbid) {
+    int mapped = it->orig_to_cur_db ? it->orig_to_cur_db[orig_dbid] : 0;
+    return mapped ? mapped - 1 : orig_dbid;
+}
+
+static inline int fullScanIteratorOriginalDbId(const struct fullScanIterator *it, int cur_dbid) {
+    int mapped = it->cur_to_orig_db ? it->cur_to_orig_db[cur_dbid] : 0;
+    return mapped ? mapped - 1 : cur_dbid;
 }
 
 /* Scan callback used by fullScanIteratorGetEntries2 to collect entries into a fifo. */
@@ -541,7 +553,7 @@ static fifo *fullScanIteratorGetEntries(genericIterator *genIt, int *orig_dbid, 
                 fifoRelease(dbEntryFifo);
                 return NULL; // Iteration complete
             }
-            serverDb *db = server.db[it->orig_to_cur_db[it->iter_db]];
+            serverDb *db = server.db[fullScanIteratorCurrentDb(it, it->iter_db)];
             if (db != NULL) {
                 it->kvs = db->keys;
                 it->kvs_didx = kvstoreGetFirstNonEmptyHashtableIndex(it->kvs);
@@ -567,23 +579,29 @@ static fifo *fullScanIteratorGetEntries(genericIterator *genIt, int *orig_dbid, 
         }
     }
     *orig_dbid = it->iter_db;
-    *cur_dbid = it->orig_to_cur_db[*orig_dbid];
+    *cur_dbid = fullScanIteratorCurrentDb(it, *orig_dbid);
     return dbEntryFifo;
 }
 
 static void fullScanIteratorSwapDb(genericIterator *genIt, int db1, int db2) {
     struct fullScanIterator *it = (struct fullScanIterator *)genIt;
-    int temp = it->cur_to_orig_db[db1];
-    it->cur_to_orig_db[db1] = it->cur_to_orig_db[db2];
-    it->cur_to_orig_db[db2] = temp;
+    if (db1 == db2) return;
+    if (!it->orig_to_cur_db) {
+        it->orig_to_cur_db = zcalloc(sizeof(int) * server.dbnum);
+        it->cur_to_orig_db = zcalloc(sizeof(int) * server.dbnum);
+    }
 
-    it->orig_to_cur_db[it->cur_to_orig_db[db1]] = db1;
-    it->orig_to_cur_db[it->cur_to_orig_db[db2]] = db2;
+    int orig1 = fullScanIteratorOriginalDbId(it, db1);
+    int orig2 = fullScanIteratorOriginalDbId(it, db2);
+    it->cur_to_orig_db[db1] = orig2 + 1;
+    it->cur_to_orig_db[db2] = orig1 + 1;
+    it->orig_to_cur_db[orig1] = db2 + 1;
+    it->orig_to_cur_db[orig2] = db1 + 1;
 }
 
 static void fullScanIteratorFlushDb(genericIterator *genIt, int cur_dbid) {
     struct fullScanIterator *it = (struct fullScanIterator *)genIt;
-    int orig_db = (cur_dbid == -1) ? it->iter_db : it->cur_to_orig_db[cur_dbid];
+    int orig_db = (cur_dbid == -1) ? it->iter_db : fullScanIteratorOriginalDbId(it, cur_dbid);
     if (orig_db == it->iter_db) {
         // We are currently iterating on the DB that's being flushed.
         if (it->kvs) {
@@ -597,7 +615,7 @@ static void fullScanIteratorFlushDb(genericIterator *genIt, int cur_dbid) {
 
 static bool fullScanIteratorHasPassedItem(genericIterator *genIt, const_sds key, int cur_dbid) {
     struct fullScanIterator *it = (struct fullScanIterator *)genIt;
-    int orig_dbid = it->cur_to_orig_db[cur_dbid];
+    int orig_dbid = fullScanIteratorOriginalDbId(it, cur_dbid);
 
     if (orig_dbid < it->iter_db) return true;  // Entire DB has already been processed
     if (orig_dbid > it->iter_db) return false; // Haven't started this DB yet
@@ -621,7 +639,7 @@ static bool fullScanIteratorHasPassedItem(genericIterator *genIt, const_sds key,
 
 static int fullScanIteratorOriginalDb(genericIterator *genIt, int cur_dbid) {
     struct fullScanIterator *it = (struct fullScanIterator *)genIt;
-    return it->cur_to_orig_db[cur_dbid];
+    return fullScanIteratorOriginalDbId(it, cur_dbid);
 }
 
 static bool fullScanIteratorIsKeyInScope(genericIterator *genIt, const_sds key) {
@@ -632,12 +650,8 @@ static bool fullScanIteratorIsKeyInScope(genericIterator *genIt, const_sds key) 
 
 static genericIterator *fullScanIteratorCreate(void) {
     struct fullScanIterator *it = zmalloc(sizeof(struct fullScanIterator));
-    it->orig_to_cur_db = zmalloc(sizeof(int) * server.dbnum);
-    it->cur_to_orig_db = zmalloc(sizeof(int) * server.dbnum);
-    for (int i = 0; i < server.dbnum; i++) {
-        it->orig_to_cur_db[i] = i;
-        it->cur_to_orig_db[i] = i;
-    }
+    it->orig_to_cur_db = NULL;
+    it->cur_to_orig_db = NULL;
     it->iter_db = -1;
     it->kvs = NULL;
 

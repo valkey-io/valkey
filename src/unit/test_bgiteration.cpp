@@ -1012,10 +1012,10 @@ class BgIterationTest : public ::testing::Test {
 
         simulateUnblockedWrite_inCall(c); // SWAPDB should never block
 
-        // The real SWAP does more than this, but this is enough for unit tests
-        serverDb *aux = server.db[dbid0];
-        server.db[dbid0] = server.db[dbid1];
-        server.db[dbid1] = aux;
+        // Move the keys while keeping the DB IDs fixed, as SWAPDB does.
+        kvstore *keys = server.db[dbid0]->keys;
+        server.db[dbid0]->keys = server.db[dbid1]->keys;
+        server.db[dbid1]->keys = keys;
         bgIteration_swapdb(dbid0, dbid1);
 
         bgIteration_handleCommandReplication(0, c->cmd, c->argc, c->argv);
@@ -2816,6 +2816,26 @@ TEST_F(BgIterationTest, flushDB_flushOne) {
     bgIteration_feedIterators(); // main thread, cleans up iterator and calls cleanup function
     EXPECT_EQ(cleanupCount, 2);
     EXPECT_TRUE(cleanupTerminated);
+}
+
+
+TEST_F(BgIterationTest, flushDB_afterSwap) {
+    bgIterator *it = bgIteratorCreateFullScanIter("iter", BGITERATOR_CONSISTENCY_NONE, NULL,
+                                                  iteratorCleanupFn, PRIVDATA);
+    expectReadKey(it, 0);
+    expectReadKey(it, 1);
+
+    // The active scan is on the original DB 0, which now lives at DB 1.
+    simulateSwapDB(0, 1);
+    simulateFlushDB(1);
+
+    expectReadKey(it, 2); // Queued before the swap.
+    expectReadSwapDB(it, 0, 1);
+    expectReadFlushDB(it, 1);
+    for (int i = ITEMS_PER_DB; i <= LAST_ITEM; i++) {
+        expectReadDbKeyValue(it, 0, keyStr(i), keyStr(i));
+    }
+    expectReadComplete(it);
 }
 
 

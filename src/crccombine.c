@@ -216,11 +216,12 @@ void init_combine_cache(uint64_t poly, uint8_t dim) {
  * of the second block.
  *
  * If you want reflections on your CRCs; do them outside before / after.
- * WARNING: if you enable USE_STATIC_COMBINE_CACHE to make this fast, you MUST
+ * WARNING: crc64_init() fills the static combine cache once, so you MUST
  * ALWAYS USE THE SAME POLYNOMIAL; otherwise, you will get the wrong results.
  * You MAY bzero() the even/odd static arrays, which will induce a re-cache on
  * next call as a workaround, but ... maybe just parameterize the cached
  * models at that point like Mark Adler does in modern crcany/crc.c .
+ * After a bzero(), call init_combine_cache() before other threads call this.
  */
 
 uint64_t crc64_combine(uint64_t crc1, uint64_t crc2, uintmax_t len2, uint64_t poly, uint8_t dim) {

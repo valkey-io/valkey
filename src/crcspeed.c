@@ -61,10 +61,11 @@ void crcspeed64little_init(crcfn64 crcfn, uint64_t table[8][256]) {
             table[k][n] = crc;
         }
     }
-#if defined(USE_STATIC_COMBINE_CACHE) && USE_STATIC_COMBINE_CACHE
-    /* initialize combine cache for CRC stapling for slice-by 16/24+ */
+    /* Initialize the combine cache for CRC stapling for slice-by 16/24+ here,
+     * while still single threaded. The lazy init in crc64_combine() is not
+     * thread safe, and the forkless save thread can compute CRC64 at the same
+     * time as the main thread. */
     init_combine_cache(CRC64_REVERSED_POLY, 64);
-#endif
 }
 
 void crcspeed16little_init(crcfn16 crcfn, uint16_t table[8][256]) {

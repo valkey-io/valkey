@@ -439,3 +439,138 @@ foreach cmd {rm_call vm_call_argv } {
         }
     }
 }
+
+start_server {tags {"modules"}} {
+    r module load $testmodule
+
+    test "RM_Call K command postponed by client pause is not re-executed after unpause" {
+        r del l
+        set rd [valkey_deferring_client]
+        test_defer { $rd close }
+        $rd do_rm_call_async blpop l 0
+        wait_for_blocked_clients_count 1
+        r client pause 60000 write
+        # do_bg_rm_call runs RM_Call from a module thread, so the pause does not
+        # hold it back. Its rpush wakes the BLPOP, whose re-run is postponed.
+        r do_bg_rm_call rpush l x
+        assert_equal 1 [r llen l]
+        r client unpause
+        # The user client is unblocked with an empty reply and must not pop x.
+        wait_for_blocked_clients_count 0
+        assert_equal 1 [r llen l]
+        $rd ping
+        assert_equal PONG [$rd read]
+        r del l
+    }
+}
+
+start_cluster 2 1 [list tags {modules external:skip cluster} overrides [list loadmodule $testmodule]] {
+    # do_rm_call_async adds the '!' flag, so SETSLOT through a K call is
+    # replicated once. Without '!' it would not be replicated (blockedclient.c).
+    test "CLUSTER SETSLOT through an RM_Call that cannot block is applied on the primary (control)" {
+        set target_id [R 1 CLUSTER MYID]
+        # SETSLOT only waits for online replicas.
+        wait_replica_online [Rn 0]
+
+        # Inside MULTI the module drops the K flag, so SETSLOT cannot block: it
+        # is applied at once and replicated afterwards.
+        R 0 MULTI
+        R 0 do_rm_call_async cluster setslot 1 migrating $target_id
+        assert_equal OK [R 0 EXEC]
+        assert_equal "\[1->-$target_id\]" [get_open_slots 0]
+        wait_for_slot_state 2 "\[1->-$target_id\]"
+
+        R 0 CLUSTER SETSLOT 1 STABLE
+        wait_for_slot_state 2 ""
+    }
+
+    test "CLUSTER SETSLOT through an async RM_Call is applied on the primary and replies" {
+        set target_id [R 1 CLUSTER MYID]
+        wait_replica_online [Rn 0]
+
+        # With the K flag the primary replicates SETSLOT first, blocks the call
+        # until its replica acks, and only then applies it and replies.
+        set rd [valkey_deferring_client]
+        test_defer { $rd close }
+        $rd do_rm_call_async cluster setslot 0 migrating $target_id
+        wait_for_slot_state 2 "\[0->-$target_id\]"
+        wait_for_blocked_clients_count 0
+
+        wait_for_slot_state 0 "\[0->-$target_id\]"
+        assert_equal OK [$rd read]
+
+        R 0 CLUSTER SETSLOT 0 STABLE
+        wait_for_slot_state 0 ""
+        wait_for_slot_state 2 ""
+    }
+
+    test "CLUSTER SETSLOT through an async RM_Call whose re-run is postponed by a pause is applied after unpause" {
+        set target_id [R 1 CLUSTER MYID]
+        wait_replica_online [Rn 0]
+        set replica_pid [srv -2 pid]
+
+        # Hold the replica's ack so that the pause is in effect when it arrives.
+        pause_process $replica_pid
+        set rd [valkey_deferring_client]
+        test_defer { $rd close }
+        $rd do_rm_call_async cluster setslot 3 migrating $target_id timeout 30000
+        wait_for_blocked_clients_count 1
+        R 0 client pause 60000 write
+        resume_process $replica_pid
+
+        # Once the replica has acked, the re-run of SETSLOT is postponed by the pause.
+        wait_for_condition 100 50 {
+            [regexp {slave0:[^\r\n]*offset=(\d+)} [R 0 info replication] -> ack] &&
+            $ack == [status [Rn 0] master_repl_offset]
+        } else {
+            fail "replica did not ack the SETSLOT"
+        }
+        wait_for_slot_state 2 "\[3->-$target_id\]"
+        assert_equal {} [get_open_slots 0]
+
+        R 0 client unpause
+        wait_for_slot_state 0 "\[3->-$target_id\]"
+        assert_equal OK [$rd read]
+
+        R 0 CLUSTER SETSLOT 3 STABLE
+        wait_for_slot_state 0 ""
+        wait_for_slot_state 2 ""
+    }
+
+    test "CLUSTER SETSLOT through an async RM_Call is counted and replicated like a plain SETSLOT" {
+        set target_id [R 1 CLUSTER MYID]
+        wait_replica_online [Rn 0]
+
+        proc setslot_calls {idx} {
+            regexp {cmdstat_cluster\|setslot:calls=(\d+)} [R $idx info commandstats] -> calls
+            return $calls
+        }
+        proc repl_offset {idx} {
+            regexp {master_repl_offset:(\d+)} [R $idx info replication] -> off
+            return $off
+        }
+
+        # Plain and K-call SETSLOT use slot numbers of the same length, so the
+        # propagated argument sizes match.
+        set calls0 [setslot_calls 0]
+        set off0 [repl_offset 0]
+        R 0 CLUSTER SETSLOT 5 MIGRATING $target_id
+        set plain_calls [expr {[setslot_calls 0] - $calls0}]
+        set plain_off [expr {[repl_offset 0] - $off0}]
+        R 0 CLUSTER SETSLOT 5 STABLE
+        wait_for_slot_state 2 ""
+
+        set calls0 [setslot_calls 0]
+        set off0 [repl_offset 0]
+        assert_equal OK [R 0 do_rm_call_async cluster setslot 4 migrating $target_id]
+        set k_calls [expr {[setslot_calls 0] - $calls0}]
+        set k_off [expr {[repl_offset 0] - $off0}]
+        R 0 CLUSTER SETSLOT 4 STABLE
+        wait_for_slot_state 2 ""
+
+        # Compare against a plain SETSLOT rather than a fixed count: a re-run
+        # SETSLOT is counted twice until #5530, for every client.
+        assert_equal $plain_calls $k_calls
+        assert_equal $plain_off $k_off
+    }
+}

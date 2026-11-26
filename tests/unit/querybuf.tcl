@@ -126,5 +126,22 @@ start_server {tags {"querybuf slow"}} {
      
         $rd close
     }
+}
 
+start_server {tags {"querybuf slow"}} {
+    test "huge bulk length is rejected without crashing the server" {
+        set announcement 2147483647
+        if {[s arch_bits] == 64} {
+            set announcement 9223372036854775807
+        }
+        r config set proto-max-bulk-len $announcement
+        foreach len [list $announcement [expr {$announcement - 1}]] {
+            set rd [valkey_deferring_client]
+            $rd write "*1\r\n\$$len\r\n"
+            $rd flush
+            assert_error "*invalid bulk length*" {$rd read}
+            $rd close
+        }
+        assert_equal "PONG" [r ping]
+    }
 }

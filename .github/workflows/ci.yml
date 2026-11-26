@@ -228,11 +228,6 @@ jobs:
 
   build-macos-latest:
     runs-on: macos-latest
-    env:
-      CC: /opt/homebrew/opt/llvm/bin/clang
-      CXX: /opt/homebrew/opt/llvm/bin/clang++
-      AR: /opt/homebrew/opt/llvm/bin/llvm-ar
-      RANLIB: /opt/homebrew/opt/llvm/bin/llvm-ranlib
     steps:
       - name: Install build dependencies
         run: brew install llvm googletest pkgconf zstd

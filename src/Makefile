@@ -737,6 +737,10 @@ all-with-unit-tests: all $(ENGINE_UNIT_GTESTS)
 .PHONY: all
 
 persist-settings: distclean
+	echo CC=$(CC) >> .make-settings
+	echo CXX=$(CXX) >> .make-settings
+	echo AR=$(AR) >> .make-settings
+	echo RANLIB=$(RANLIB) >> .make-settings
 	echo STD=$(STD) >> .make-settings
 	echo WARN=$(WARN) >> .make-settings
 	echo OPT=$(OPT) >> .make-settings
@@ -807,8 +811,10 @@ $(RDMA_MODULE_NAME): $(SERVER_NAME)
 
 # engine_lua.so
 # FORCE runs the sub-make on every build so it can rebuild changed Lua sources.
+# CC and AR are passed explicitly, as the values read from .make-settings are
+# not exported to sub-makes.
 $(LUA_MODULE_NAME): .make-prerequisites FORCE
-	$(MAKE) -C modules/lua OPTIMIZATION="$(OPTIMIZATION)" BUILD_LUA="$(BUILD_LUA)"
+	$(MAKE) -C modules/lua CC="$(CC)" AR="$(AR)" OPTIMIZATION="$(OPTIMIZATION)" BUILD_LUA="$(BUILD_LUA)"
 
 .PHONY: FORCE
 FORCE:
@@ -867,7 +873,7 @@ distclean: clean
 test: $(ALL_BUILD_PREREQUISITES)
 	@(cd ..; VALKEY_PROG_SUFFIX="$(PROG_SUFFIX)" ./runtest $(TEST_OPTIONS))
 
-test-unit:
+test-unit: $(ENGINE_LIB_NAME)
 	@(cd unit && $(MAKE) test-unit)
 
 # valkey-unit-gtests

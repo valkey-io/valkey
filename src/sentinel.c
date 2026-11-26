@@ -1502,6 +1502,27 @@ int removeMatchingSentinelFromPrimary(sentinelValkeyInstance *primary, char *run
     return removed;
 }
 
+/* Remove the Sentinel with the specified ID from every primary we monitor.
+ * Returns the number of entries removed. */
+int removeMatchingSentinelFromAllPrimaries(char *runid) {
+    dictIterator *di;
+    dictEntry *de;
+    int removed = 0;
+
+    if (runid == NULL) return 0;
+
+    /* Keep a copy of runid, the instance owning it may be deleted in the loop. */
+    sds runid_obsolete = sdsnew(runid);
+    di = dictGetIterator(sentinel.primaries);
+    while ((de = dictNext(di)) != NULL) {
+        sentinelValkeyInstance *primary = dictGetVal(de);
+        removed += removeMatchingSentinelFromPrimary(primary, runid_obsolete);
+    }
+    dictReleaseIterator(di);
+    sdsfree(runid_obsolete);
+    return removed;
+}
+
 /* Search an instance with the same runid, ip and port into a dictionary
  * of instances. Return NULL if not found; otherwise, return the instance
  * pointer.
@@ -1956,7 +1977,9 @@ const char *sentinelHandleConfiguration(char **argv, int argc) {
     } else if (!strcasecmp(argv[0], "known-sentinel") && (argc == 4 || argc == 5)) {
         sentinelValkeyInstance *si;
 
-        if (argc == 5) { /* Ignore the old form without runid. */
+        /* Ignore the old form without runid, and our own runid, which an
+         * older version could save as a peer. */
+        if (argc == 5 && strcmp(argv[4], sentinel.myid)) {
             /* known-sentinel <name> <ip> <port> [runid] */
             ri = sentinelGetPrimaryByName(argv[1]);
             if (!ri) return "No such master with specified name.";
@@ -2823,6 +2846,24 @@ void sentinelProcessHelloMessage(char *hello, int hello_len) {
         /* First, try to see if we already have this sentinel. */
         port = atoi(token[1]);
         primary_port = atoi(token[6]);
+
+        /* Our own hello can only reach us here if we sent it with PUBLISH to
+         * a peer that lives at our own address: a previous incarnation of
+         * this Sentinel that announced the same address with another runid.
+         * Remove that peer instead of adding ourselves as one. */
+        if (!strcmp(token[2], sentinel.myid)) {
+            int stale_removed = 0;
+            sentinelValkeyInstance *stale;
+
+            while ((stale = getSentinelValkeyInstanceByAddrAndRunID(primary->sentinels, token[0], port, NULL)) != NULL) {
+                sentinelEvent(LL_NOTICE, "+sentinel-invalid-addr", stale, "%@");
+                if (!removeMatchingSentinelFromAllPrimaries(stale->runid)) break;
+                stale_removed = 1;
+            }
+            if (stale_removed) sentinelFlushConfig();
+            goto cleanup;
+        }
+
         si = getSentinelValkeyInstanceByAddrAndRunID(primary->sentinels, token[0], port, token[2]);
         current_epoch = strtoull(token[3], NULL, 10);
         primary_config_epoch = strtoull(token[7], NULL, 10);
@@ -2846,19 +2887,7 @@ void sentinelProcessHelloMessage(char *hello, int hello_len) {
                     /* If there is already other sentinel with same address (but
                      * different runid) then remove the old one across all primaries */
                     sentinelEvent(LL_NOTICE, "+sentinel-invalid-addr", other, "%@");
-                    dictIterator *di;
-                    dictEntry *de;
-
-                    /* Keep a copy of runid. 'other' about to be deleted in loop. */
-                    sds runid_obsolete = sdsnew(other->runid);
-
-                    di = dictGetIterator(sentinel.primaries);
-                    while ((de = dictNext(di)) != NULL) {
-                        sentinelValkeyInstance *primary = dictGetVal(de);
-                        removeMatchingSentinelFromPrimary(primary, runid_obsolete);
-                    }
-                    dictReleaseIterator(di);
-                    sdsfree(runid_obsolete);
+                    removeMatchingSentinelFromAllPrimaries(other->runid);
                 }
             }
 

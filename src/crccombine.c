@@ -1,7 +1,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <strings.h>
-#if defined(__i386__) || defined(__X86_64__)
+#if defined(__i386__) || defined(__X86_64__) || defined(__x86_64__)
 #include <immintrin.h>
 #endif
 #include "crccombine.h"
@@ -38,9 +38,9 @@
   madler@alumni.caltech.edu
 */
 
-#define STATIC_ASSERT(VVV) do {int test = 1 / (VVV);test++;} while (0)
+#define STATIC_ASSERT(VVV) _Static_assert((VVV), #VVV)
 
-#if !((defined(__i386__) || defined(__X86_64__)))
+#if !((defined(__i386__) || defined(__X86_64__) || defined(__x86_64__)))
 
 /* This cuts 40% of the time vs bit-by-bit. */
 
@@ -177,8 +177,9 @@ static void gf2_matrix_square(uint64_t *square, uint64_t *mat, uint8_t dim) {
 }
 
 /* Turns out our Jones CRC cycles at this point, so we can support
- * more than 64 bits of extension if we want. Trivially. */
-static uint64_t combine_cache[64][64];
+ * more than 64 bits of extension if we want. Trivially.
+ * gf2_matrix_times_vec2() reads rows as v2uq, so rows must be 16-byte aligned. */
+static uint64_t combine_cache[64][64] __attribute__((aligned(16)));
 
 /* Mark Adler has some amazing updates to crc.c in his crcany repository. I
  * like static caches, and not worrying about finding cycles generally. We are

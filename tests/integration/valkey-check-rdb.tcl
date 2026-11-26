@@ -84,6 +84,53 @@ tags {"check-rdb external:skip logreqres:skip"} {
         } result
         assert_match {*db.2.type.string.keys.total:0*} $result
     }
+
+    test {Check RDB stats when a key precedes any SELECTDB} {
+        # String key "k" -> "v" without SELECTDB, EOF, zero checksum.
+        set rdb [tmpfile no-selectdb.rdb]
+        write_binary_file $rdb [binary format a9H* REDIS0009 00016b0176ff0000000000000000]
+        set status [catch {
+            exec $::VALKEY_CHECK_RDB_BIN $rdb --stats --format info
+        } result]
+        assert_equal 0 $status
+        assert_match {*db.0.type.string.keys.total:1*} $result
+    }
+
+    test {Check RDB with a DB ID too large for the stats} {
+        # SELECTDB 4294967295, string key "k" -> "v", EOF, zero checksum.
+        set rdb [tmpfile huge-selectdb.rdb]
+        write_binary_file $rdb [binary format a9H* REDIS0009 fe80ffffffff00016b0176ff0000000000000000]
+        set status [catch {
+            exec $::VALKEY_CHECK_RDB_BIN $rdb --stats --format info
+        } result options]
+        assert_equal 1 $status
+        set errorcode [dict get $options -errorcode]
+        assert_equal CHILDSTATUS [lindex $errorcode 0]
+        assert_equal 1 [lindex $errorcode 2]
+        assert_match {*Invalid DB ID 4294967295*} $result
+    }
+
+    test {Check RDB with a DB ID at the stats limit, with and without --stats} {
+        # SELECTDB 268435455 (INT_MAX / OBJ_TYPE_MAX), string key "k" -> "v",
+        # EOF, zero checksum. Without --stats the DB ID is valid.
+        set rdb [tmpfile stats-limit-selectdb.rdb]
+        write_binary_file $rdb [binary format a9H* REDIS0009 fe800fffffff00016b0176ff0000000000000000]
+        set status [catch {
+            exec $::VALKEY_CHECK_RDB_BIN $rdb
+        } result]
+        assert_equal 0 $status
+        assert_match {*RDB looks OK!*} $result
+
+        # With --stats it would overflow the stats array size.
+        set status [catch {
+            exec $::VALKEY_CHECK_RDB_BIN $rdb --stats --format info
+        } result options]
+        assert_equal 1 $status
+        set errorcode [dict get $options -errorcode]
+        assert_equal CHILDSTATUS [lindex $errorcode 0]
+        assert_equal 1 [lindex $errorcode 2]
+        assert_match {*DB ID 268435455 is too large for --stats (max 268435454)*} $result
+    }
 }
 
 tags {"check-rdb network external:skip logreqres:skip"} {

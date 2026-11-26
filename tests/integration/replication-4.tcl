@@ -329,3 +329,56 @@ start_server {tags {"repl external:skip needs:debug"} overrides {save {}}} {
         }
     }
 }
+
+start_server {tags {"repl external:skip sort"} overrides {save {}}} {
+    start_server {overrides {save {}}} {
+        set primary [srv -1 client]
+        set primary_host [srv -1 host]
+        set primary_port [srv -1 port]
+        set replica [srv 0 client]
+
+        test {SORT BY pattern ALPHA STORE produces identical order on primary and replica} {
+            $replica replicaof $primary_host $primary_port
+            wait_for_sync $replica
+
+            set members {}
+            set zargs {}
+            set mset_args {}
+            for {set i 0} {$i < 300} {incr i} {
+                set m "m$i"
+                lappend members $m
+                lappend zargs $i $m
+                lappend mset_args "eq:$m" "same"
+            }
+            $primary zadd z {*}$zargs
+            $primary sadd s {*}$members
+            $primary mset {*}$mset_args
+            assert_equal btree [$primary object encoding z]
+            assert_equal hashtable [$primary object encoding s]
+
+            set expected_asc [lsort -ascii $members]
+            set expected_desc [lsort -ascii -decreasing $members]
+
+            $primary sort z by nosuchkey_* alpha store out_z_missing
+            $primary sort z by nosuchkey_* alpha desc store out_z_missing_desc
+            $primary sort z by nosuchkey_* alpha limit 10 25 store out_z_limit
+            $primary sort z by eq:* alpha store out_z_equal
+            $primary sort s by nosuchkey_* alpha store out_s_missing
+
+            wait_for_ofs_sync $primary $replica
+
+            foreach {key expected} [list \
+                out_z_missing $expected_asc \
+                out_z_missing_desc $expected_desc \
+                out_z_limit [lrange $expected_asc 10 34] \
+                out_z_equal $expected_asc \
+                out_s_missing $expected_asc \
+            ] {
+                set primary_res [$primary lrange $key 0 -1]
+                set replica_res [$replica lrange $key 0 -1]
+                assert_equal $primary_res $replica_res
+                assert_equal $expected $primary_res
+            }
+        }
+    }
+}

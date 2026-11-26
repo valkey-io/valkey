@@ -323,10 +323,12 @@ tags {"aof external:skip logreqres:skip"} {
         }
     }
 
+    # The padding must be longer than an annotation line buffer, otherwise the
+    # annotation reaches EOF and it is handled as a plain short read.
     create_aof $aof_dirpath $aof_file {
         append_to_aof [formatCommand set foo hello]
         append_to_aof "#TS:17000"
-        append_to_aof $zeros
+        append_to_aof [string repeat "\x00" 4096]
     }
 
     start_server_aof [list dir $server_path aof-load-truncated yes] {
@@ -335,6 +337,7 @@ tags {"aof external:skip logreqres:skip"} {
             wait_done_loading $client
             assert_equal "hello" [$client get foo]
             assert_equal [formatCommand set foo hello] [read_binary_file $aof_file]
+            verify_log_message 0 "*short read followed by zero padding*" 0
         }
     }
 
@@ -395,6 +398,28 @@ tags {"aof external:skip logreqres:skip"} {
         test "Corrupt tail: Server should fail to start if it is larger than aof-load-corrupt-tail-max-size" {
             wait_for_log_messages 0 {"*Bad file format reading the append only file*"} 0 10 1000
             assert_equal "[formatCommand set foo hello]$corrupt_tail" [read_binary_file $aof_file]
+        }
+    }
+
+    ## Enabling aof-load-corrupt-tail-max-size while loading applies to the next load only
+    create_aof $aof_dirpath $aof_file {
+        for {set i 0} {$i < 4096} {incr i} {
+            append_to_aof [formatCommand incr foo]
+        }
+        append_to_aof "!!!"
+    }
+    set aof_content [read_binary_file $aof_file]
+
+    start_server_aof_ex [list dir $server_path aof-load-truncated no key-load-delay 1000] [list wait_ready false] {
+        test "Corrupt tail: Enabling aof-load-corrupt-tail-max-size while loading does not truncate" {
+            set client [valkey [srv host] [srv port] 0 $::tls]
+            wait_for_condition 100 50 {
+                [catch {$client config set aof-load-corrupt-tail-max-size 1gb}] == 0
+            } else {
+                fail "CONFIG SET failed while loading"
+            }
+            wait_for_log_messages 0 {"*Bad file format reading the append only file*"} 0 200 100
+            assert_equal $aof_content [read_binary_file $aof_file]
         }
     }
 

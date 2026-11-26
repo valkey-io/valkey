@@ -1856,6 +1856,11 @@ int loadSingleAppendOnlyFile(char *filename, int last_file) {
     off_t valid_before_multi = 0; /* Offset before MULTI command loaded. */
     off_t last_progress_report_size = 0;
     int ret = AOF_OK;
+    /* CONFIG SET can run while loading, from processEventsWhileBlocked().
+     * valid_up_to is only tracked if one of these is enabled, so read them
+     * once: enabling one mid-load must not truncate at a stale offset. */
+    int load_truncated = server.aof_load_truncated;
+    off_t corrupt_tail_max_size = server.aof_load_corrupt_tail_max_size;
 
     sds aof_filepath = makePath(server.aof_dirname, filename);
     FILE *fp = fopen(aof_filepath, "r");
@@ -1982,8 +1987,7 @@ int loadSingleAppendOnlyFile(char *filename, int last_file) {
         }
         if (lr == LOAD_CMD_MULTI_START) valid_before_multi = valid_up_to;
 
-        if (server.aof_load_truncated || server.aof_load_corrupt_tail_max_size)
-            valid_up_to = ftello(fp);
+        if (load_truncated || corrupt_tail_max_size) valid_up_to = ftello(fp);
         if (server.key_load_delay) debugDelay(server.key_load_delay);
     }
 
@@ -2010,7 +2014,7 @@ uxeof: /* Unexpected AOF end of file. */
         serverLog(LL_WARNING, "Revert incomplete MULTI/EXEC transaction in AOF file %s", filename);
         valid_up_to = valid_before_multi;
     }
-    if (server.aof_load_truncated) {
+    if (load_truncated) {
         serverLog(LL_WARNING, "!!! Warning: short read while loading the AOF file %s!!!", filename);
         serverLog(LL_WARNING, "!!! Truncating the AOF %s at offset %llu !!!", filename,
                   (unsigned long long)valid_up_to);
@@ -2036,11 +2040,11 @@ fmterr: /* Format error. */
         off_t truncate_at = fakeClient->flag.multi ? valid_before_multi : valid_up_to;
         const char *reason = NULL;
 
-        if (server.aof_load_truncated && valid_up_to != -1 &&
+        if (load_truncated && valid_up_to != -1 &&
             aofTailIsZeroPaddedShortRead(fp, valid_up_to, sb.st_size)) {
             reason = "the tail is a short read followed by zero padding and aof-load-truncated is enabled";
-        } else if (server.aof_load_corrupt_tail_max_size > 0 && truncate_at != -1 &&
-                   sb.st_size - truncate_at <= server.aof_load_corrupt_tail_max_size) {
+        } else if (corrupt_tail_max_size > 0 && truncate_at != -1 &&
+                   sb.st_size - truncate_at <= corrupt_tail_max_size) {
             reason = "the corrupt tail is not larger than aof-load-corrupt-tail-max-size";
         }
 

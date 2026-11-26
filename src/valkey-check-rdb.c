@@ -123,6 +123,7 @@ static void rdbCheckPrintOffset(const char *msg) {
 #define RDB_CHECK_DOING_READ_AUX 7
 #define RDB_CHECK_DOING_READ_MODULE_AUX 8
 #define RDB_CHECK_DOING_READ_FUNCTIONS 9
+#define RDB_CHECK_DOING_READ_INLINE_COMMAND 10
 
 #define OUTPUT_FORMAT_INFO 0
 #define OUTPUT_FORMAT_TABLE 1
@@ -139,6 +140,7 @@ char *rdb_check_doing_string[] = {
     "read-aux",
     "read-module-aux",
     "read-functions",
+    "read-inline-command",
 };
 
 char *rdb_type_string[] = {
@@ -843,6 +845,25 @@ int redis_check_rdb(char *rdbfilename, FILE *fp) {
             }
             rdbstate.functions_num++;
             continue;
+        } else if (type == RDB_OPCODE_UPDATE && rdbver >= 81) {
+            /* Inline replication command saved during a forkless sync. Parse it
+             * the same way rdbLoad does and skip it. */
+            robj **argv = NULL;
+            int argc = 0;
+            rdbstate.doing = RDB_CHECK_DOING_READ_INLINE_COMMAND;
+            respParseResult pr = parseRespCommandFromReader(rdbRioReader, rdbRioReadLine, rdb, &argc, &argv);
+            if (pr == RESP_PARSE_EOF) goto eoferr;
+            if (pr == RESP_PARSE_OOM) {
+                rdbCheckError("Out of memory reading inline replication command in RDB");
+                goto err;
+            }
+            if (pr != RESP_PARSE_OK) {
+                rdbCheckError("Malformed inline replication command in RDB");
+                goto err;
+            }
+            for (int j = 0; j < argc; j++) decrRefCount(argv[j]);
+            zfree(argv);
+            continue; /* Read type again. */
         } else if (rdbIsForeignVersion(rdbver) &&
                    type >= RDB_FOREIGN_TYPE_MIN &&
                    type <= RDB_FOREIGN_TYPE_MAX) {

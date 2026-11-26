@@ -221,7 +221,7 @@ void init_combine_cache(uint64_t poly, uint8_t dim) {
  * You MAY bzero() the even/odd static arrays, which will induce a re-cache on
  * next call as a workaround, but ... maybe just parameterize the cached
  * models at that point like Mark Adler does in modern crcany/crc.c .
- * Only bzero() them before any other thread can call this function.
+ * After a bzero(), call init_combine_cache() before other threads call this.
  */
 
 uint64_t crc64_combine(uint64_t crc1, uint64_t crc2, uintmax_t len2, uint64_t poly, uint8_t dim) {

@@ -268,11 +268,83 @@ start_server {tags {"modules"}} {
             # every member is still returned once, in order: the "del" step
             # finds no key, the "zunionstore" step continues in the new set.
             r debug set-active-expire 0
+            test_defer {r debug set-active-expire 1}
             r zadd gone 0 z
             r pexpire gone 1
-            after 10
+            # Wait on the server clock, not on key gone: reading it would
+            # expire it before the module command does.
+            lassign [r time] secs usecs
+            set deadline [expr {$secs * 1000 + $usecs / 1000 + 2}]
+            wait_for_condition 100 10 {
+                [lassign [r time] s u; expr {$s * 1000 + $u / 1000}] > $deadline
+            } else {
+                fail "server time did not pass the expiry deadline"
+            }
             assert_equal {a {b c} {x y}} [r zset.iter_notify k ZUNIONSTORE k 3 k src gone]
-            r debug set-active-expire 1
+        }
+
+        test "Module zset range walk of a thread safe context ends when its lock is released - $enc" {
+            r del k
+            r zadd k 1 a 2 b 3 c
+            assert_equal $enc [r object encoding k]
+            # The thread unlocks, then frees its context without closing the
+            # key: the walk must already be gone from the server's list.
+            assert_equal {b} [r zset.thread_walk k 0]
+            assert_equal PONG [r ping]
+            # Locking again does not revive the walk: the step reports the end.
+            assert_equal {b 0 1} [r zset.thread_walk k 1]
+            assert_equal PONG [r ping]
+        }
+
+        test "Module zset lex range walk agrees with ZRANGEBYLEX on a mixed-score set - $enc" {
+            r del k
+            r zadd k 0 b 0 d 1 a 1 c 2 e
+            assert_equal $enc [r object encoding k]
+            # Only the far bound in the direction of travel is checked, as the
+            # core commands do: on mixed scores the near bound fails for
+            # members that follow in (score, member) order.
+            set fwd [r zrangebylex k {[c} +]
+            set rev [r zrevrangebylex k + {[c}]
+            assert_equal $fwd [r zset.walk_range k lex {[c} + fwd 0]
+            assert_equal $rev [r zset.walk_range k lex {[c} + rev 0]
+            # The same with a Call before every step, so each step re-seeks.
+            assert_equal $fwd [r zset.walk_range k lex {[c} + fwd 1]
+            assert_equal $rev [r zset.walk_range k lex {[c} + rev 1]
+        }
+
+        test "Module zset range walk of a thread safe context survives ValkeyModule_Yield - $enc" {
+            r del k
+            r zadd k 1 a 2 b 3 c
+            assert_equal $enc [r object encoding k]
+            test_config_set r busy-reply-threshold 1
+            # The thread yields for 100 ms: the main thread runs in between,
+            # and its own releases of the lock must not end the walk either.
+            set rd [valkey_deferring_client]
+            $rd zset.thread_yield_walk k 100
+            assert_equal {a b c} [$rd read]
+            $rd close
+            assert_equal PONG [r ping]
+        }
+
+        test "Module zset range walk continues on a key that expired logically while open - $enc" {
+            r del k
+            r zadd k 1 a 2 b 3 c
+            assert_equal $enc [r object encoding k]
+            r debug set-active-expire 0
+            test_defer {r debug set-active-expire 1}
+            test_config_set r busy-reply-threshold 1
+            r pexpire k 20
+            # The thread yields for 100 ms; the main thread runs in between, so
+            # the server clock passes the TTL while the walk is open. The walk
+            # re-finds the key without an expiry check, as the handle never
+            # did: the step moves and the add lands on the existing key instead
+            # of creating it again.
+            set rd [valkey_deferring_client]
+            $rd zset.thread_expired_add k 100 d 4
+            assert_equal {1 4} [$rd read]
+            $rd close
+            assert_equal PONG [r ping]
+            r del k
         }
 
         test "Module zset range iteration current element after a change - $enc" {
@@ -346,6 +418,7 @@ start_server {tags {"modules"}} {
         }
 
         test "Module zset range walk through a handle whose string a Call turned into a $enc zset" {
+            test_config_set r zset-max-listpack-entries $max_entries
             r del k src
             r set k [string repeat x 300]
             assert_equal raw [r object encoding k]
@@ -358,6 +431,7 @@ start_server {tags {"modules"}} {
     r config set zset-max-listpack-entries 128
 
     test {Module zset range iteration across listpack to btree conversion} {
+        test_config_set r zset-max-listpack-value 64
         r del k
         r zadd k 1 a 3 c
         assert_equal listpack [r object encoding k]
@@ -392,5 +466,25 @@ start_server {tags {"modules"}} {
             assert_equal {x} [r zset.iter_mut k score -inf +inf fwd 0 call PING]
             assert_equal PONG [r ping]
         }
+        test "Module zset range walk left attached by a callback without a module context - $type" {
+            r config set zset-max-listpack-entries $max_lp_entries
+            r del k k2
+            r zadd k 1 a 2 b 3 c
+            r zadd k2 1 a
+            assert_equal $type [r object encoding k]
+            assert_equal OK [r zset.oneshot_walk k]
+            wait_for_condition 100 10 {[r zset.oneshot_status] == 1} else {
+                fail "one-shot callback did not run"
+            }
+            # The walk's handle stays open with no command around it. Grow the
+            # set so the listpack moves, then run any module hook.
+            for {set i 0} {$i < 20} {incr i} {
+                r zadd k $i [string repeat m$i 10]
+            }
+            assert_equal {a} [r zset.iter_mut k2 score -inf +inf fwd 0 call PING]
+            assert_equal OK [r zset.oneshot_cleanup]
+            assert_equal PONG [r ping]
+        }
+
     }
 }

@@ -740,9 +740,15 @@ static void defragPubsubScanCallback(void *privdata, void *elemref) {
     hashtable *newclients, *clients = *clients_ref;
     robj *newchannel, *channel = *(robj **)hashtableMetadata(clients);
 
-    /* Try to defrag the channel name. */
-    serverAssert(channel->refcount == (int)hashtableSize(clients) + 1);
-    newchannel = activeDefragStringOb(channel);
+    /* Try to defrag the channel name. Besides the table and its subscribers, a
+     * queued reply can hold the channel when reply copy avoidance is in use, so
+     * only move it when nothing else holds it, and skip it this cycle otherwise. */
+    int expected_refcount = (int)hashtableSize(clients) + 1;
+    serverAssert(channel->refcount >= expected_refcount);
+    size_t allocation_size;
+    newchannel = NULL;
+    if (channel->refcount == expected_refcount)
+        newchannel = activeDefragStringObWithoutFree(channel, &allocation_size);
     if (newchannel) {
         *(robj **)hashtableMetadata(clients) = newchannel;
 
@@ -758,6 +764,8 @@ static void defragPubsubScanCallback(void *privdata, void *elemref) {
             serverAssert(replaced);
         }
         hashtableCleanupIterator(&iter);
+        /* The loop above looks clients up by the old pointer. */
+        allocatorDefragFree(channel, allocation_size);
     }
 
     /* Try to defrag the dictionary of clients that is stored as the value part. */

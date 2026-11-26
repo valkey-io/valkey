@@ -582,12 +582,27 @@ test {corrupt payload: fuzzer findings - huge string} {
     }
 }
 
-test {corrupt payload: fuzzer findings - stream PEL without consumer} {
+test {stream PEL without consumer is allowed because XNACK disassociates} {
     start_server [list overrides [list loglevel verbose use-exit-on-panic yes crash-memcheck-enabled no] ] {
         r debug set-skip-checksum-validation 1
+        # Prior to implementing XNACK, a group PEL entry with no consumer was rejected
+        # as corrupt. Now, this is valid state we need to handle without crashing.
         catch {r restore _stream 0 "\x0F\x01\x10\x00\x00\x01\x7B\x08\xF0\xB2\x34\x00\x00\x00\x00\x00\x00\x00\x00\xC3\x3B\x40\x42\x19\x42\x00\x00\x00\x18\x00\x02\x01\x01\x01\x02\x01\x84\x69\x74\x65\x6D\x05\x85\x76\x61\x6C\x75\x65\x06\x00\x20\x10\x00\x00\x20\x01\x00\x01\x20\x03\x02\x05\x01\x03\x20\x05\x40\x00\x04\x82\x5F\x31\x03\x05\x60\x19\x80\x32\x02\x05\x01\xFF\x02\x81\x00\x00\x01\x7B\x08\xF0\xB2\x34\x02\x01\x07\x6D\x79\x67\x72\x6F\x75\x70\x81\x00\x00\x01\x7B\x08\xF0\xB2\x34\x01\x01\x00\x00\x01\x7B\x08\xF0\xB2\x34\x00\x00\x00\x00\x00\x00\x00\x01\x35\xB2\xF0\x08\x7B\x01\x00\x00\x01\x01\x13\x41\x6C\x69\x63\x65\x35\xB2\xF0\x08\x7B\x01\x00\x00\x01\x00\x00\x01\x7B\x08\xF0\xB2\x34\x00\x00\x00\x00\x00\x00\x00\x01\x09\x00\x28\x2F\xE0\xC5\x04\xBB\xA7\x31"} err
-        assert_match "*Bad data format*" $err
+        assert_equal "OK" $err
         r ping
+
+        # The loaded PEL entry is unowned
+        set pend [r xpending _stream mygroup - + 10]
+        assert_equal 1 [llength $pend]
+        assert_equal {} [lindex $pend 0 1]
+        assert_equal -1 [lindex $pend 0 2]
+
+        # The payload's PEL entry references a stream entry that does not
+        # exist, thus XAUTOCLAIM drops it and reports it as deleted.
+        set claim [r xautoclaim _stream mygroup bob 0 0 COUNT 10]
+        assert_equal {} [lindex $claim 1]
+        assert_equal {1627942597172-1} [lindex $claim 2]
+        assert_equal 0 [llength [r xpending _stream mygroup - + 10]]
     }
 }
 

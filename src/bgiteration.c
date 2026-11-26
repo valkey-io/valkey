@@ -370,10 +370,13 @@ struct bgIterator {
 
     genericIterator *keyset_iter; // Low-level iterator (polymorphic)
 
-    /* A set of dbEntry, compared by pointer.  Used to track items which have already been iterated
-     * over by out-of-order expedited processing.  Ensures a bgIterator does not try to reprocess
-     * items.  Used only by main thread. */
-    hashtable *early_iterate_entries;
+    /* Per-original-DB sets of dbEntry, compared by pointer.  Used to track items which have already
+     * been iterated over by out-of-order expedited processing (or newly created ahead of the scan
+     * cursor).  Indexed by original DB ID so SWAPDB requires no set movement and FLUSHDB can drop a
+     * single DB's entries in O(1).  Allocated lazily per DB.  Used only by main thread. */
+    hashtable **early_iterate_entries;
+    int early_iterate_dbnum;
+    size_t early_iterate_count;
 
     mutexQueue *items_for_iterator; // Created/Destroyed in main thread, used in both (threadsafe)
 
@@ -925,6 +928,67 @@ static void returnCurrentItemToMainThread(bgIterator *it) {
  *                        Background Iterator (private)
  * ============================================================================================= */
 
+static inline int earlyIterateOrigDb(bgIterator *it, int cur_dbid) {
+    int orig_db = it->keyset_iter->originalDb(it->keyset_iter, cur_dbid);
+    serverAssert(orig_db >= 0 && orig_db < it->early_iterate_dbnum);
+    return orig_db;
+}
+
+static bool earlyIterateAdd(bgIterator *it, int cur_dbid, dbEntry *de) {
+    int orig_db = earlyIterateOrigDb(it, cur_dbid);
+    hashtable *ht = it->early_iterate_entries[orig_db];
+    if (ht == NULL) {
+        ht = hashtableCreate(&dbEntryPtrHashtableType);
+        hashtableExpand(ht, BGITER_EARLY_ITERATE_DICT_INITIAL_SIZE);
+        it->early_iterate_entries[orig_db] = ht;
+    }
+    bool wasAdded = hashtableAdd(ht, de);
+    if (wasAdded) it->early_iterate_count++;
+    return wasAdded;
+}
+
+static bool earlyIterateDeleteOrigDb(bgIterator *it, int orig_db, dbEntry *de) {
+    serverAssert(orig_db >= 0 && orig_db < it->early_iterate_dbnum);
+    hashtable *ht = it->early_iterate_entries[orig_db];
+    if (ht == NULL) return false;
+    if (hashtableDelete(ht, de)) {
+        serverAssert(it->early_iterate_count > 0);
+        it->early_iterate_count--;
+        return true;
+    }
+    return false;
+}
+
+static bool earlyIterateDelete(bgIterator *it, int cur_dbid, dbEntry *de) {
+    return earlyIterateDeleteOrigDb(it, earlyIterateOrigDb(it, cur_dbid), de);
+}
+
+static bool earlyIterateFind(bgIterator *it, int cur_dbid, dbEntry *de) {
+    int orig_db = earlyIterateOrigDb(it, cur_dbid);
+    hashtable *ht = it->early_iterate_entries[orig_db];
+    return (ht != NULL && hashtableFind(ht, de, NULL));
+}
+
+static void earlyIterateClearDb(bgIterator *it, int orig_db) {
+    serverAssert(orig_db >= 0 && orig_db < it->early_iterate_dbnum);
+    hashtable *ht = it->early_iterate_entries[orig_db];
+    if (ht != NULL) {
+        size_t count = hashtableSize(ht);
+        serverAssert(it->early_iterate_count >= count);
+        it->early_iterate_count -= count;
+        hashtableRelease(ht);
+        it->early_iterate_entries[orig_db] = NULL;
+    }
+}
+
+static void earlyIterateClearAll(bgIterator *it) {
+    if (it->early_iterate_entries == NULL) return;
+    for (int i = 0; i < it->early_iterate_dbnum; i++) {
+        earlyIterateClearDb(it, i);
+    }
+    serverAssert(it->early_iterate_count == 0);
+}
+
 static void bgIteratorRelease(bgIterator *it) {
     serverAssert(hasMainThreadExclusivity());
     serverAssert(it->current_item == NULL);
@@ -943,7 +1007,8 @@ static void bgIteratorRelease(bgIterator *it) {
     it->keyset_iter->release(it->keyset_iter);
     it->keyset_iter = NULL;
 
-    hashtableRelease(it->early_iterate_entries);
+    earlyIterateClearAll(it);
+    zfree(it->early_iterate_entries);
     it->early_iterate_entries = NULL;
 
     sdsfree(it->name);
@@ -1036,6 +1101,7 @@ static void feedIterator(bgIterator *it, monotime end_time_us) {
             }
 
             mutexQueueAdd(it->items_for_iterator, completionItem);
+            earlyIterateClearAll(it);
             it->completed = true;
             break;
         }
@@ -1054,7 +1120,7 @@ static void feedIterator(bgIterator *it, monotime end_time_us) {
             }
 
             // Remove any items which have been processed early
-            if (hashtableDelete(it->early_iterate_entries, de)) {
+            if (earlyIterateDeleteOrigDb(it, orig_dbid, de)) {
                 if (BGITERATION_DEBUG) {
                     sds entryString = createEntryString(dbid, de);
                     debugBuffer = sdscatprintf(debugBuffer, "SKIPPING ITEM(early iterate): %s\n", entryString);
@@ -1095,7 +1161,7 @@ static void feedIterator(bgIterator *it, monotime end_time_us) {
 
 
 static bool addEarlyIterationKey(bgIterator *it, dbEntry *earlyEntry, int cur_dbid) {
-    bool wasAdded = hashtableAdd(it->early_iterate_entries, earlyEntry);
+    bool wasAdded = earlyIterateAdd(it, cur_dbid, earlyEntry);
     serverAssert(wasAdded);
 
     int dbid = (it->iteration_flags & BGITERATOR_FLAG_CONSISTENT)
@@ -1136,7 +1202,7 @@ static bool iteratorHasPassedKey(bgIterator *it, int dbid, const_sds key, dbEntr
 
     if (it->keyset_iter->hasPassedItem(it->keyset_iter, key, dbid)) return true;
 
-    if (de && hashtableFind(it->early_iterate_entries, de, NULL)) return true;
+    if (de && earlyIterateFind(it, dbid, de)) return true;
 
     return false;
 }
@@ -1856,6 +1922,14 @@ static void handleFlushdb(int dbid) {
 
         // Let the low-level iterator know the DB is being flushed
         it->keyset_iter->flushDb(it->keyset_iter, dbid);
+
+        // Drop early_iterate_entries for the flushed DB(s) before the flush frees them.
+        if (dbid == -1) {
+            earlyIterateClearAll(it);
+        } else {
+            earlyIterateClearDb(it, earlyIterateOrigDb(it, dbid));
+        }
+
         if (it->completed || it->terminated) continue;
 
         if (should_abort_iterators || it->iteration_flags & BGITERATOR_FLAG_CONSISTENT) {
@@ -2054,8 +2128,9 @@ static bgIterator *bgIteratorCreate(const char *name,
     it->iteration_type = iter_type;
     it->consistent_modification_id = bgIteration_epoch++;
     it->keyset_iter = keyset_iter;
-    it->early_iterate_entries = hashtableCreate(&dbEntryPtrHashtableType);
-    hashtableExpand(it->early_iterate_entries, BGITER_EARLY_ITERATE_DICT_INITIAL_SIZE);
+    it->early_iterate_dbnum = server.dbnum;
+    it->early_iterate_entries = zcalloc(sizeof(hashtable *) * it->early_iterate_dbnum);
+    it->early_iterate_count = 0;
     it->current_item = NULL;
     it->client_is_active = false;
     it->completed = false;
@@ -2188,6 +2263,7 @@ void bgIteratorTerminate(bgIterator *it) {
      * before we get around to fully releasing the iterator.  This allows rehashing to resume, and
      * guards against the possibility that the DB might get deleted before we clean our references. */
     it->keyset_iter->flushDb(it->keyset_iter, -1);
+    earlyIterateClearAll(it);
 
     it->terminated = true;
 }
@@ -2325,7 +2401,7 @@ void bgIteration_keyDelete(int dbid, const_sds key) {
         /* Since the key is being removed from the main dictionary, also remove it from the
          * early_iterate_entries (if it was there) and save the early iterate status for use during
          * the replication of the DEL. */
-        it->last_key_delete_was_early = hashtableDelete(it->early_iterate_entries, de);
+        it->last_key_delete_was_early = earlyIterateDelete(it, dbid, de);
     }
 
     /* We might be within the context of a command execution.  This happens if the key is found to
@@ -2555,7 +2631,7 @@ void bgIteration_handleCommandReplication(int dbid,
             if (special_dbEntry != NULL) {
                 if (it->cur_cmd_may_replicate &&
                     !it->keyset_iter->hasPassedItem(it->keyset_iter, special_key, special_dbid)) {
-                    hashtableAdd(it->early_iterate_entries, special_dbEntry);
+                    earlyIterateAdd(it, special_dbid, special_dbEntry);
                     if (BGITERATION_DEBUG) {
                         sds entryString = createEntryString(special_dbid, special_dbEntry);
                         debugBuffer = sdscatprintf(debugBuffer, "EARLY(special): %s\n", entryString);
@@ -2592,7 +2668,7 @@ void bgIteration_handleCommandReplication(int dbid,
                              * key which we haven't yet reached in iteration, it needs to be added
                              * to the set of early iterate entries.  (We know that it's not already
                              * in that set because it's a newly created key!) */
-                            bool wasAdded = hashtableAdd(it->early_iterate_entries, de);
+                            bool wasAdded = earlyIterateAdd(it, dbid, de);
                             serverAssert(wasAdded);
                             if (BGITERATION_DEBUG) {
                                 sds entryString = createEntryString(dbid, de);
@@ -2756,12 +2832,17 @@ void bgIteration_updateDbEntryPtr(dbEntry *old, dbEntry *new) {
     listRewind(allIterators, &li);
     while ((node = listNext(&li)) != NULL) {
         bgIterator *it = listNodeValue(node);
-        if (hashtableDelete(it->early_iterate_entries, old)) {
-            if (BGITERATION_DEBUG) {
-                debugBuffer = sdscatprintf(debugBuffer, "EARLY LIST UPDATE %p -> %p\n", (void *)old, (void *)new);
+        if (it->completed || it->terminated || it->early_iterate_count == 0) continue;
+        for (int i = 0; i < it->early_iterate_dbnum; i++) {
+            hashtable *ht = it->early_iterate_entries[i];
+            if (ht != NULL && hashtableDelete(ht, old)) {
+                if (BGITERATION_DEBUG) {
+                    debugBuffer = sdscatprintf(debugBuffer, "EARLY LIST UPDATE %p -> %p\n", (void *)old, (void *)new);
+                }
+                bool wasAdded = hashtableAdd(ht, new);
+                serverAssert(wasAdded);
+                break;
             }
-            bool wasAdded = hashtableAdd(it->early_iterate_entries, new);
-            serverAssert(wasAdded);
         }
     }
 }

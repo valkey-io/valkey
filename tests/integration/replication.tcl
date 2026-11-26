@@ -2940,3 +2940,182 @@ start_server {tags {"repl external:skip needs:debug"} overrides {save "" forkles
         }
     }
 }
+
+start_server {tags {"repl external:skip needs:debug"} overrides {save "" forkless-infrastructure-enabled yes forkless-policy prefer-forkless repl-diskless-sync yes repl-diskless-sync-delay 0}} {
+    start_server {overrides {save ""}} {
+        set primary [srv -1 client]
+        set primary_host [srv -1 host]
+        set primary_port [srv -1 port]
+        set replica [srv 0 client]
+
+        test "FLUSHDB on unscanned DB during forkless full sync does not crash primary" {
+            $primary flushall
+            $primary select 0
+            # Populate enough keys that the scanner stays in DB 0 while DB 1 is flushed.
+            $primary debug populate 50000 key 100
+            # Seed pre-existing keys in DB 1 so the first FLUSHDB exercises the
+            # early_count <= db_entries path before subsequent flushes exercise the
+            # early_count > db_entries path.
+            $primary select 1
+            $primary debug populate 100 pre 10
+            $primary select 0
+
+            set loglines [count_log_lines -1]
+            $primary config set rdb-key-save-delay 100
+            $replica replicaof $primary_host $primary_port
+            wait_for_log_messages -1 {"*target: replicas sockets*method: forkless*"} $loglines 100 100
+            wait_for_condition 100 50 {
+                [s -1 current_save_keys_processed] > 0
+            } else {
+                fail "forkless sync did not start scanning"
+            }
+
+            # Add an early-iterated key in DB 2 that must remain untouched when DB 1 is flushed.
+            $primary select 2
+            $primary set keep_db2 v2
+
+            # Repeatedly create keys in unscanned DB 1 (adding them to early_iterate_entries)
+            # and flush DB 1 while the iterator stays alive on DB 0.
+            $primary select 1
+            for {set i 0} {$i < 1500} {incr i} {
+                $primary set x 1
+                $primary flushdb sync
+            }
+            for {set i 0} {$i < 200} {incr i} {
+                $primary set x 1
+                $primary flushdb async
+            }
+            $primary multi
+            $primary set x before_flush
+            $primary flushdb sync
+            $primary set x after_flush
+            $primary exec
+
+            # Minor-DB flushes must not have terminated the forkless sync.
+            assert_equal 1 [s -1 rdb_bgsave_in_progress]
+            $primary select 0
+
+            $primary config set rdb-key-save-delay 0
+            wait_for_condition 200 100 {
+                [s -1 rdb_bgsave_in_progress] == 0 &&
+                [status $replica master_link_status] eq "up"
+            } else {
+                fail "forkless sync did not complete"
+            }
+            wait_for_ofs_sync $primary $replica
+
+            assert_equal [$primary debug digest] [$replica debug digest]
+            $replica select 1
+            assert_equal "after_flush" [$replica get x]
+            $replica select 2
+            assert_equal "v2" [$replica get keep_db2]
+            $replica select 0
+        }
+
+        test "SWAPDB followed by FLUSHDB during forkless full sync does not crash primary" {
+            $replica replicaof no one
+            $primary flushall
+            $primary select 0
+            $primary debug populate 50000 key 100
+
+            set loglines [count_log_lines -1]
+            $primary config set rdb-key-save-delay 100
+            $replica replicaof $primary_host $primary_port
+            wait_for_log_messages -1 {"*target: replicas sockets*method: forkless*"} $loglines 100 100
+            wait_for_condition 100 50 {
+                [s -1 current_save_keys_processed] > 0
+            } else {
+                fail "forkless sync did not start scanning"
+            }
+
+            $primary select 3
+            $primary set keep_db3 v3
+
+            for {set i 0} {$i < 1500} {incr i} {
+                $primary select 1
+                $primary set x 1
+                $primary swapdb 1 2
+                $primary select 2
+                $primary flushdb sync
+            }
+            $primary select 1
+            $primary set final_db1 ok
+            $primary select 0
+
+            assert_equal 1 [s -1 rdb_bgsave_in_progress]
+
+            $primary config set rdb-key-save-delay 0
+            wait_for_condition 200 100 {
+                [s -1 rdb_bgsave_in_progress] == 0 &&
+                [status $replica master_link_status] eq "up"
+            } else {
+                fail "forkless sync did not complete"
+            }
+            wait_for_ofs_sync $primary $replica
+
+            assert_equal [$primary debug digest] [$replica debug digest]
+            $replica select 1
+            assert_equal "ok" [$replica get final_db1]
+            $replica select 3
+            assert_equal "v3" [$replica get keep_db3]
+            $replica select 0
+        }
+
+        test "FLUSHALL during forkless full sync followed by PEXPIRE does not crash primary" {
+            $replica replicaof no one
+            $primary flushall
+            $primary select 0
+            $primary debug populate 20000 key 10
+
+            set loglines [count_log_lines -1]
+            $primary config set rdb-key-save-delay 50000
+            $replica replicaof $primary_host $primary_port
+            wait_for_log_messages -1 {"*target: replicas sockets*method: forkless*"} $loglines 100 100
+            wait_for_condition 100 50 {
+                [s -1 rdb_bgsave_in_progress] == 1
+            } else {
+                fail "forkless sync did not start"
+            }
+
+            # Populate early_iterate_entries in unscanned DB 1 (both with and without
+            # expiry so both allocation size classes are present), then terminate the
+            # iterator with FLUSHALL while the background thread is delayed, and
+            # immediately allocate and reallocate dbEntries via SET + PEXPIRE.
+            set p [valkey_deferring_client -1]
+            $p select 1
+            assert_equal "OK" [$p read]
+            for {set i 0} {$i < 1500} {incr i} {
+                $p set [format "k%04d" $i] [format "v%04d" $i]
+                $p set [format "e%04d" $i] [format "v%04d" $i] px 100000
+            }
+            $p flushall sync
+            for {set i 0} {$i < 1500} {incr i} {
+                $p set [format "k%04d" $i] [format "v%04d" $i]
+                $p pexpire [format "k%04d" $i] 100000
+            }
+            $p flush
+            for {set i 0} {$i < 1500} {incr i} {
+                assert_equal "OK" [$p read]
+                assert_equal "OK" [$p read]
+            }
+            assert_equal "OK" [$p read]
+            for {set i 0} {$i < 1500} {incr i} {
+                assert_equal "OK" [$p read]
+                assert_equal 1 [$p read]
+            }
+            $p close
+            assert_equal "PONG" [$primary ping]
+            $primary select 0
+
+            $primary config set rdb-key-save-delay 0
+            wait_for_condition 200 100 {
+                [s -1 rdb_bgsave_in_progress] == 0 &&
+                [status $replica master_link_status] eq "up"
+            } else {
+                fail "sync did not recover after FLUSHALL"
+            }
+            wait_for_ofs_sync $primary $replica
+            assert_equal [$primary debug digest] [$replica debug digest]
+        }
+    }
+}

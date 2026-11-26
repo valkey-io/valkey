@@ -1844,6 +1844,41 @@ static bool isDbSignificant(int dbid) {
 }
 
 
+/* Evict any entries belonging to `dbid` from `it->early_iterate_entries` before the DB is flushed
+ * so freed dbEntry pointers cannot remain in the set and collide with future allocations. */
+static void removeFlushedDbFromEarlyIterateEntries(bgIterator *it, int dbid) {
+    serverAssert(dbid >= 0 && dbid < server.dbnum);
+    size_t early_count = hashtableSize(it->early_iterate_entries);
+    if (early_count == 0) return;
+
+    serverDb *db = server.db[dbid];
+    if (db == NULL || db->keys == NULL) return;
+
+    unsigned long long db_entries = kvstoreSize(db->keys) + kvstoreImportingSize(db->keys);
+    if (db_entries == 0) return;
+
+    if (early_count <= db_entries) {
+        hashtableIterator hi;
+        hashtableInitIterator(&hi, it->early_iterate_entries, HASHTABLE_ITER_SAFE);
+        dbEntry *de;
+        while (hashtableNext(&hi, (void **)&de)) {
+            if (dbFind(db, objectGetKey(de)) == de) {
+                hashtableDelete(it->early_iterate_entries, de);
+            }
+        }
+        hashtableCleanupIterator(&hi);
+    } else {
+        kvstoreIterator *kvs_it = kvstoreIteratorInit(db->keys, HASHTABLE_ITER_INCLUDE_IMPORTING);
+        void *next;
+        while (kvstoreIteratorNext(kvs_it, &next)) {
+            hashtableDelete(it->early_iterate_entries, next);
+            if (hashtableSize(it->early_iterate_entries) == 0) break;
+        }
+        kvstoreIteratorRelease(kvs_it);
+    }
+}
+
+
 static void handleFlushdb(int dbid) {
     // Invoked BEFORE the actual flush.  -1 indicates FLUSHALL.
     bool should_abort_iterators = (dbid == -1 || isDbSignificant(dbid));
@@ -1866,6 +1901,7 @@ static void handleFlushdb(int dbid) {
              * iteration, knowing that a replication client will also receive the FLUSHDB on the
              * replication stream.  There's no need to worry about the items themselves.  Since
              * we've incremented the refcount, the items still in queue won't be physically deleted. */
+            removeFlushedDbFromEarlyIterateEntries(it, dbid);
 
             // Send a flushdb event to notify the client
             if (BGITERATION_DEBUG) {
@@ -2188,6 +2224,7 @@ void bgIteratorTerminate(bgIterator *it) {
      * before we get around to fully releasing the iterator.  This allows rehashing to resume, and
      * guards against the possibility that the DB might get deleted before we clean our references. */
     it->keyset_iter->flushDb(it->keyset_iter, -1);
+    hashtableEmpty(it->early_iterate_entries, NULL);
 
     it->terminated = true;
 }
@@ -2756,6 +2793,7 @@ void bgIteration_updateDbEntryPtr(dbEntry *old, dbEntry *new) {
     listRewind(allIterators, &li);
     while ((node = listNext(&li)) != NULL) {
         bgIterator *it = listNodeValue(node);
+        if (it->completed || it->terminated) continue;
         if (hashtableDelete(it->early_iterate_entries, old)) {
             if (BGITERATION_DEBUG) {
                 debugBuffer = sdscatprintf(debugBuffer, "EARLY LIST UPDATE %p -> %p\n", (void *)old, (void *)new);

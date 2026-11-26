@@ -474,6 +474,16 @@ TEST_F(SdsTest, TestSdssplitargs) {
     sargv = sdssplitargs("'unterminated '\"double quotes", &len);
     ASSERT_EQ(0, len);
     ASSERT_EQ(sargv, nullptr);
+
+    /* A raw 0xFF (\377) byte is kept unquoted, in double quotes, in single
+     * quotes and after a backslash in double quotes. */
+    sargv = sdssplitargs("a\377b \"\377\" '\377' \"\\\377\"", &len);
+    ASSERT_EQ(4, len);
+    ASSERT_TRUE(sdslen(sargv[0]) == 3 && memcmp(sargv[0], "a\377b", 3) == 0);
+    ASSERT_TRUE(sdslen(sargv[1]) == 1 && sargv[1][0] == '\377');
+    ASSERT_TRUE(sdslen(sargv[2]) == 1 && sargv[2][0] == '\377');
+    ASSERT_TRUE(sdslen(sargv[3]) == 1 && sargv[3][0] == '\377');
+    sdsfreesplitres(sargv, len);
 }
 
 

@@ -3300,6 +3300,43 @@ static void clusterLogSlotRangeMigration(int first_slot,
               target_node->name, humanNodename(target_node), target_node->shard_id);
 }
 
+/* Returns true if a slot that is migrating to 'mn' should migrate to 'sender' instead. */
+static inline int isMigrationTargetRepairNeeded(clusterNode *mn, clusterNode *sender, uint64_t senderConfigEpoch) {
+    return mn != NULL && mn != sender &&
+           (mn->configEpoch < senderConfigEpoch || nodeIsReplica(mn)) &&
+           areInSameShard(mn, sender);
+}
+
+/* For each migrating slot that 'sender' does not claim, point the slot's
+ * migration target to 'sender' if the old target's shard failed over to it.
+ * Used when 'sender' becomes primary without its slots changing, such as in
+ * an empty shard, where clusterUpdateSlotsConfigWith() is not called. */
+static void clusterRepairMigrationTargetsOfPrimary(clusterNode *sender, uint64_t senderConfigEpoch, unsigned char *slots) {
+    /* A safe iterator is required: setMigratingSlotDest() looks up and updates
+     * entries of the same dict while we iterate. */
+    dictIterator *di = dictGetSafeIterator(server.cluster->migrating_slots_to);
+    dictEntry *de;
+    while ((de = dictNext(di)) != NULL) {
+        int j = (int)(uintptr_t)dictGetKey(de);
+        if (bitmapTestBit(slots, j)) continue;
+        clusterNode *mn = dictGetVal(de);
+        if (!isMigrationTargetRepairNeeded(mn, sender, senderConfigEpoch)) continue;
+        /* In a shard without slots, a higher epoch does not show that the
+         * old target lost the shard: a stale primary's epoch can rise without
+         * a failover (CLUSTER BUMPEPOCH, an import, epoch collision handling),
+         * and nothing demotes the old target then. Only move the migration
+         * away from a target that we know is gone. */
+        if (!nodeIsReplica(mn) && !nodeFailed(mn)) continue;
+        serverLog(LL_VERBOSE,
+                  "Failover occurred in migration target."
+                  " Slot %d is now being migrated to node %.40s (%s) in shard %.40s.",
+                  j, sender->name, humanNodename(sender), sender->shard_id);
+        setMigratingSlotDest(j, sender);
+        clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_UPDATE_STATE | CLUSTER_TODO_FSYNC_CONFIG);
+    }
+    dictReleaseIterator(di);
+}
+
 /* This function is called when we receive a primary configuration via a
  * PING, PONG or UPDATE packet. What we receive is a node, a configEpoch of the
  * node, and the set of slots claimed under this configEpoch.
@@ -3469,10 +3506,7 @@ void clusterUpdateSlotsConfigWith(clusterNode *sender, uint64_t senderConfigEpoc
              * the shard. Update the migrating_slots_to state to point to the
              * sender if it has just taken over the primary role. */
             clusterNode *mn = getMigratingSlotDest(j);
-            if (mn != NULL && mn != sender &&
-                (mn->configEpoch < senderConfigEpoch ||
-                 nodeIsReplica(mn)) &&
-                areInSameShard(mn, sender)) {
+            if (isMigrationTargetRepairNeeded(mn, sender, senderConfigEpoch)) {
                 serverLog(LL_VERBOSE,
                           "Failover occurred in migration target."
                           " Slot %d is now being migrated to node %.40s (%s) in shard %.40s.",
@@ -3816,8 +3850,10 @@ static char *getLoadableIpExtension(char *value, int af) {
 /* We previously validated the extensions, so this function just needs to
  * handle the extensions. Returns 1 if the link is still valid after
  * processing, or 0 if the link was freed due to invalid data. */
-int clusterProcessPingExtensions(clusterMsg *hdr, clusterLink *link) {
-    clusterNode *sender = link->node ? link->node : clusterLookupNode(hdr->sender, CLUSTER_NAMELEN);
+/* 'sender' is the node clusterProcessPacket() resolved for the message. It can
+ * differ from link->node: an inbound link can stay bound to a handshake node
+ * after the peer became known through another link. */
+int clusterProcessPingExtensions(clusterMsg *hdr, clusterLink *link, clusterNode *sender) {
     char *ext_hostname = NULL;
     char *ext_humannodename = NULL;
     char *ext_availability_zone = NULL;
@@ -3858,9 +3894,13 @@ int clusterProcessPingExtensions(clusterMsg *hdr, clusterLink *link) {
         } else if (type == CLUSTERMSG_EXT_TYPE_FORGOTTEN_NODE) {
             clusterMsgPingExtForgottenNode *forgotten_node_ext = &(ext->ext[0].forgotten_node);
             clusterNode *n = clusterLookupNode(forgotten_node_ext->name, CLUSTER_NAMELEN);
-            if (n == sender) {
+            /* The link can still be bound to a handshake node that is not
+             * 'sender'. Deleting that node would free the link whose buffer
+             * we are reading, so reject it like the sender itself. */
+            if (n && (n == sender || n == link->node)) {
                 serverLog(LL_WARNING,
-                          "Received invalid FORGOTTEN_NODE extension from node %.40s naming itself; closing link",
+                          "Received invalid FORGOTTEN_NODE extension from node %.40s naming itself or its link's node; "
+                          "closing link",
                           sender->name);
                 freeClusterLink(link);
                 return 0;
@@ -4844,8 +4884,23 @@ int clusterProcessPacket(clusterLink *link) {
         /* Get info from the gossip section */
         if (sender) {
             if (!clusterProcessGossipSection(msg, link)) return 0;
-            if (!clusterProcessPingExtensions(msg, link)) return 0;
+            if (!clusterProcessPingExtensions(msg, link, sender)) return 0;
         }
+
+        /* A primary that owns no slots (e.g. in an empty shard) can take over
+         * its shard without changing its slot set, for example on a failback
+         * after we already saw it as primary because of a stale announcement.
+         * clusterUpdateSlotsConfigWith() does not run then, so re-point the
+         * migrating targets in the sender's shard to the sender here. This
+         * checks the current state on every heartbeat, so it does not depend
+         * on which message first carried the sender's newer epoch. It runs
+         * after the ping extensions, so that it uses the shard id the sender
+         * has now, which may be new in this packet. A delayed packet with an
+         * older epoch than we have for the sender still applies its shard id,
+         * so it must not move migrations into that shard. */
+        if (sender && sender_claims_to_be_primary && sender->numslots == 0 &&
+            sender_claimed_config_epoch >= sender->configEpoch && isAnySlotInManualMigratingState())
+            clusterRepairMigrationTargetsOfPrimary(sender, sender_claimed_config_epoch, msg->myslots);
     } else if (type == CLUSTERMSG_TYPE_FAIL) {
         clusterNode *failing;
 

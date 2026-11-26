@@ -872,6 +872,13 @@ if {[string match {*jemalloc*} [s mem_allocator]]} {
         set e
     } {*syntax*}
 
+    test {SET rejects a repeated expiration option} {
+        assert_error "ERR syntax error" {r set foo bar ex 100 ex 200}
+        assert_error "ERR syntax error" {r set foo bar px 100000 px 200000}
+        assert_error "ERR syntax error" {r set foo bar exat [expr [clock seconds]+100] exat [expr [clock seconds]+200]}
+        assert_error "ERR syntax error" {r set foo bar pxat [expr [clock milliseconds]+100000] pxat [expr [clock milliseconds]+200000]}
+    }
+
     test {Extended SET NX option} {
         r del foo
         set v1 [r set foo 1 nx]

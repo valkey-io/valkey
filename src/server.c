@@ -8422,7 +8422,7 @@ int parseExtendedCommandArgumentsOrReply(client *c, int command_type, int start_
                    !(*flags & ARGS_KEEPTTL) && !(*flags & ARGS_PERSIST) &&
                    !(*flags & ARGS_EXAT) && !(*flags & ARGS_PX) &&
                    !(*flags & ARGS_PXAT) && command_type != COMMAND_DELEX && next &&
-                   !(command_type == COMMAND_INCREX && (*flags & ARGS_EX)))
+                   !((command_type == COMMAND_INCREX || command_type == COMMAND_SET) && (*flags & ARGS_EX)))
         {
             *flags |= ARGS_EX;
             *expire = next;
@@ -8433,7 +8433,7 @@ int parseExtendedCommandArgumentsOrReply(client *c, int command_type, int start_
                    !(*flags & ARGS_KEEPTTL) && !(*flags & ARGS_PERSIST) &&
                    !(*flags & ARGS_EX) && !(*flags & ARGS_EXAT) &&
                    !(*flags & ARGS_PXAT) && command_type != COMMAND_DELEX && next &&
-                   !(command_type == COMMAND_INCREX && (*flags & ARGS_PX)))
+                   !((command_type == COMMAND_INCREX || command_type == COMMAND_SET) && (*flags & ARGS_PX)))
         {
             *flags |= ARGS_PX;
             *unit = UNIT_MILLISECONDS;
@@ -8447,7 +8447,7 @@ int parseExtendedCommandArgumentsOrReply(client *c, int command_type, int start_
                    !(*flags & ARGS_KEEPTTL) && !(*flags & ARGS_PERSIST) &&
                    !(*flags & ARGS_EX) && !(*flags & ARGS_PX) &&
                    !(*flags & ARGS_PXAT) && command_type != COMMAND_DELEX && next &&
-                   !(command_type == COMMAND_INCREX && (*flags & ARGS_EXAT)))
+                   !((command_type == COMMAND_INCREX || command_type == COMMAND_SET) && (*flags & ARGS_EXAT)))
         {
             *flags |= ARGS_EXAT;
             *expire = next;
@@ -8460,7 +8460,7 @@ int parseExtendedCommandArgumentsOrReply(client *c, int command_type, int start_
                    !(*flags & ARGS_KEEPTTL) && !(*flags & ARGS_PERSIST) &&
                    !(*flags & ARGS_EX) && !(*flags & ARGS_EXAT) &&
                    !(*flags & ARGS_PX) && command_type != COMMAND_DELEX && next &&
-                   !(command_type == COMMAND_INCREX && (*flags & ARGS_PXAT)))
+                   !((command_type == COMMAND_INCREX || command_type == COMMAND_SET) && (*flags & ARGS_PXAT)))
         {
             *flags |= ARGS_PXAT;
             *unit = UNIT_MILLISECONDS;

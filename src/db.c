@@ -2176,11 +2176,13 @@ size_t dbReclaimExpiredFields(robj *o, serverDb *db, mstime_t now, unsigned long
         signalModifiedKey(NULL, db, keyobj);
         exitExecutionUnit();
         postExecutionUnitOperations();
+        /* Post notification jobs may have deleted or replaced the key. */
+        bool replaced = !deleteKey && (dbFind(db, objectGetVal(keyobj)) != o || objectGetType(o) != OBJ_HASH);
         decrRefCount(keyobj);
 
         total_expired += expired;
         max_entries -= expired;
-        if (deleteKey) break; /* Stop if key was deleted */
+        if (deleteKey || replaced) break; /* Stop if key was deleted */
     }
     return total_expired;
 }

@@ -1959,6 +1959,9 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
      * events to handle. */
     if (ProcessingEventsWhileBlocked) {
         uint64_t processed = 0;
+        /* A command in the current batch may be yielding while later clients
+         * wait for replies before they can send commands such as SCRIPT KILL. */
+        processClientsCommandsBatch();
         processed += processIOThreadsResponses();
         processed += connTypeProcessPendingData();
         /* Keep an online compressed primary draining when a long-running

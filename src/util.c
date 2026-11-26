@@ -1701,18 +1701,35 @@ void writePointerWithPadding(unsigned char *buf, const void *ptr) {
  */
 sds escapeJsonString(sds s, const char *p, size_t len) {
     s = sdscatlen(s, "\"", 1);
-    while (len--) {
+    while (len) {
+        /* Append the run of characters that need no escaping in one go. */
+        size_t run = 0;
+        while (run < len && p[run] != '\\' && p[run] != '"' && (unsigned char)p[run] > 0x1f) run++;
+        if (run) {
+            s = sdscatlen(s, p, run);
+            p += run;
+            len -= run;
+            continue;
+        }
+
         switch (*p) {
-        case '\\':
-        case '"': s = sdscatprintf(s, "\\%c", *p); break;
+        case '\\': s = sdscatlen(s, "\\\\", 2); break;
+        case '"': s = sdscatlen(s, "\\\"", 2); break;
         case '\n': s = sdscatlen(s, "\\n", 2); break;
         case '\f': s = sdscatlen(s, "\\f", 2); break;
         case '\r': s = sdscatlen(s, "\\r", 2); break;
         case '\t': s = sdscatlen(s, "\\t", 2); break;
         case '\b': s = sdscatlen(s, "\\b", 2); break;
-        default: s = sdscatprintf(s, *(unsigned char *)p <= 0x1f ? "\\u%04x" : "%c", *p);
+        default: {
+            static const char hex[] = "0123456789abcdef";
+            unsigned char c = *p;
+            char escaped[] = {'\\', 'u', '0', '0', hex[c >> 4], hex[c & 0xf]};
+            s = sdscatlen(s, escaped, sizeof(escaped));
+            break;
+        }
         }
         p++;
+        len--;
     }
     return sdscatlen(s, "\"", 1);
 }

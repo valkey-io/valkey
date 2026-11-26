@@ -19,5 +19,5 @@ Apply these standards to Tcl-based integration tests (from DEVELOPMENT_GUIDE.md)
 
 ## 3. Best Practices
 - **Readability:** Keep tests simple and focused on one scenario.
-- **Reliability:** Avoid timing-dependent tests; use proper synchronization.
+- **Reliability:** Avoid timing-dependent tests; use proper synchronization. Check new or changed tests against "Writing tests that don't flake" in `tests/README.md` (polling instead of `after`, budgets scaled for valgrind, explicit waits for replication and cluster convergence, atomic stats reads, teardown with `test_config_set`/`test_defer` or `with_config`/`with_cleanup`).
 - **Documentation:** Comment complex test scenarios to explain intent.

@@ -2048,13 +2048,17 @@ static sds jsonStringOutput(sds out, const char *p, int len, int mode) {
     if (mode == OUTPUT_JSON) {
         return escapeJsonString(out, p, len);
     } else if (mode == OUTPUT_QUOTED_JSON) {
-        /* Need to double-quote backslashes */
+        /* sdscatrepr() wraps the string in quotes and escapes it. Escape its
+         * backslashes and inner quotes again so the result is a valid JSON
+         * string, keeping the enclosing quotes as they are. */
         sds tmp = sdscatrepr(sdsempty(), p, len);
         int tmplen = sdslen(tmp);
         char *n = tmp;
         while (tmplen--) {
             if (*n == '\\')
                 out = sdscatlen(out, "\\\\", 2);
+            else if (*n == '"' && n != tmp && tmplen != 0) /* not the enclosing quotes */
+                out = sdscatlen(out, "\\\"", 2);
             else
                 out = sdscatlen(out, n, 1);
             n++;

@@ -808,6 +808,76 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster network} overrides
         }
     }
 
+    test "Single source import - Path Hash snapshot and incremental changes" {
+        assert_does_not_resync {
+            ensure_slot_on_node 2 16383
+            set key "$16383_slot_tag:pathhash"
+            set deleted_key "$16383_slot_tag:pathhash-deleted"
+            set emptied_key "$16383_slot_tag:pathhash-emptied"
+            set_debug_prevent_pause 1
+
+            # 513 fields promote this payload to a hashtable with the default
+            # hash-max-listpack-entries=512. Explicit field reads below avoid
+            # depending on PHGETALL's process-specific iteration order.
+            set fields {keep old drop gone}
+            for {set i 0} {$i < 511} {incr i} {
+                lappend fields "field:$i" "value:$i"
+            }
+            assert_equal OK [R 2 PHSET $key a FIELDS 513 {*}$fields]
+            assert_equal OK [R 2 PHMSET $key {} FIELDS 1 root original \
+                ab FIELDS 1 f old-ab abc FIELDS 1 f old-abc]
+            assert_equal OK [R 2 PHSET $deleted_key path FIELDS 1 field value]
+            assert_equal OK [R 2 PHSET $emptied_key only-path FIELDS 1 field value]
+            set expire_at [expr {[clock milliseconds] + 3600000}]
+            assert_equal 1 [R 2 PEXPIREAT $key $expire_at]
+
+            # Take the snapshot; the mutations below use the incremental stream.
+            assert_equal OK [R 2 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node0_id]
+            set jobname [get_job_name 2 16383]
+            wait_for_migration_field 2 $jobname state waiting-to-pause
+            assert_equal OK [R 2 PHSET $key a FIELDS 2 keep new added field]
+            assert_equal OK [R 2 PHMSET $key ac FIELDS 1 f new-ac ad FIELDS 2 f new-ad g second]
+            assert_equal 1 [R 2 PHDEL $key a drop]
+            assert_equal 2 [R 2 PHPATHDEL $key ab WITHSUBPATHS]
+            assert_equal 1 [R 2 DEL $deleted_key]
+            assert_equal 1 [R 2 PHDEL $emptied_key only-path]
+            wait_for_countkeysinslot 0 16383 1
+            wait_for_countkeysinslot 3 16383 1
+
+            # Complete the handoff and check both migration endpoints.
+            set_debug_prevent_pause 0
+            wait_for_migration 0 16383
+            wait_for_migration_field 0 $jobname state success
+            wait_for_migration_field 2 $jobname state success
+            assert_equal 1 [R 0 CLUSTER COUNTKEYSINSLOT 16383]
+            assert_equal 0 [R 2 CLUSTER COUNTKEYSINSLOT 16383]
+            wait_for_countkeysinslot 5 16383 0
+            wait_for_ofs_sync [Rn 0] [Rn 3]
+
+            assert_equal OK [R 3 READONLY]
+            foreach node_idx {0 3} {
+                assert_equal pathhash [R $node_idx TYPE $key]
+                assert_equal {original} [R $node_idx PHGET $key {} root]
+                assert_equal {new {} field value:0 value:510} \
+                    [R $node_idx PHGET $key a keep drop added field:0 field:510]
+                assert_equal {new-ac} [R $node_idx PHGET $key ac f]
+                assert_equal {new-ad second} [R $node_idx PHGET $key ad f g]
+                assert_equal 4 [R $node_idx PHPATHCOUNT $key]
+                assert_equal 0 [R $node_idx PHPATHEXISTS $key ab]
+                assert_equal 0 [R $node_idx PHPATHEXISTS $key abc]
+                assert_equal 0 [R $node_idx EXISTS $deleted_key $emptied_key]
+                assert_equal $expire_at [R $node_idx PEXPIRETIME $key]
+                assert {[R $node_idx PTTL $key] > 0}
+            }
+            assert_equal OK [R 3 READWRITE]
+
+            # Cleanup for the next test.
+            assert_equal OK [R 0 FLUSHDB SYNC]
+            assert_equal OK [R 0 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node2_id]
+            wait_for_migration 2 16383
+        }
+    }
+
     test "Single source import - write during snapshot is applied to the right database" {
         assert_does_not_resync {
             set_debug_prevent_pause 1

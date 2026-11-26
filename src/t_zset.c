@@ -3452,7 +3452,9 @@ void genericZpopCommand(client *c,
             sptr = lpNext(zl, eptr);
             serverAssertWithInfo(c, zobj, sptr != NULL);
             score = zzlGetScore(sptr);
-            serverAssertWithInfo(c, zobj, zsetDel(zobj, ele));
+            /* Delete at the known position. zsetDel() would scan the
+             * listpack from the head to find the same entry again. */
+            objectSetVal(zobj, zzlDelete(zl, eptr));
             reply_ele = ele;
             reply_ele_len = sdslen(ele);
         } else if (zobj->encoding == OBJ_ENCODING_BTREE) {

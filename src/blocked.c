@@ -911,7 +911,7 @@ static list *keyToClients_addEntry(robj *key) {
 
 /* ----------------------------- blockInUse API ----------------------------- */
 
-static bool isClientBlockedInUse(client *c) {
+bool isClientBlockedInUse(client *c) {
     return c->flag.blocked && c->bstate->btype == BLOCKED_INUSE;
 }
 

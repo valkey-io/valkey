@@ -137,6 +137,73 @@ start_server [list overrides [list save ""] tags {"large-memory"}] {
         }
     }
 }
+
+# keyHashSlot() and crc16() took the key length as an int. A key of 2^31
+# bytes or more wrapped to a negative value, so the hash tag was ignored and
+# crc16() returned 0 (slot 0) instead of the real slot. CLUSTER KEYSLOT and
+# the cluster routing of such a key were wrong.
+start_server [list overrides [list save ""] tags {"large-memory"}] {
+    test {CLUSTER KEYSLOT with a 2GiB key hashes the hash tag} {
+        r config set proto-max-bulk-len 3000000000 ;#3gb
+        r config set client-query-buffer-limit 3000000000 ;#3gb
+        # Key "{A}" plus about 2 GiB of filler. Only the tag "{A}" decides
+        # the slot, so this must equal the slot of the short key "{A}".
+        r write "*3\r\n\$7\r\nCLUSTER\r\n\$7\r\nKEYSLOT\r\n"
+        write_big_bulk 2147483649 "{A}" yes ;#2gb+1, prefix is the hash tag
+        r flush
+        set big_slot [r read]
+        assert_equal $big_slot [r cluster keyslot "{A}"]
+    }
+}
+
+# Write a bulk string of $size bytes: the escaped key name "\a" followed by
+# '*' filler. It matches the key "a" and nothing else. The 500 MB filler
+# string is local, so the client releases it when the proc returns.
+proc write_big_star_pattern {size} {
+    r write "\$$size\r\n"
+    r write "\\a" ;# escaped 'a', then '*' up to $size
+    set rem [expr {$size - 2}]
+    set star500 [string repeat * 500000000]
+    while {$rem >= 500000000} {
+        r write $star500
+        incr rem -500000000
+    }
+    if {$rem > 0} {
+        r write [string repeat * $rem]
+    }
+    r write "\r\n"
+}
+
+# stringmatchlen() took the pattern and string lengths as int. A pattern of
+# 2^31 bytes or more wrapped to a negative value, so the "\" escape at the
+# start was mishandled and the pattern "\a" plus 2 GiB of "*" failed to match
+# the key "a" (KEYS/SCAN MATCH gave a wrong result).
+start_server [list overrides [list save ""] tags {"large-memory"}] {
+    test {KEYS with a 2GiB pattern matches} {
+        r config set proto-max-bulk-len 3000000000 ;#3gb
+        r config set client-query-buffer-limit 3000000000 ;#3gb
+        r set a 1
+        r write "*2\r\n\$4\r\nKEYS\r\n"
+        write_big_star_pattern 2147483648 ;#2gb
+        r flush
+        assert_equal a [r read]
+    }
+}
+
+# Same pattern through SCAN MATCH, which keeps the pattern length in
+# scanOptions.patlen.
+start_server [list overrides [list save ""] tags {"large-memory"}] {
+    test {SCAN MATCH with a 2GiB pattern matches} {
+        r config set proto-max-bulk-len 3000000000 ;#3gb
+        r config set client-query-buffer-limit 3000000000 ;#3gb
+        r set a 1
+        r write "*4\r\n\$4\r\nSCAN\r\n\$1\r\n0\r\n\$5\r\nMATCH\r\n"
+        write_big_star_pattern 2147483648 ;#2gb
+        r flush
+        set reply [r read]
+        assert_equal a [lindex $reply 1]
+    }
+}
 } ;# run_solo
 
 # SORT which stores an integer encoded element into a list.

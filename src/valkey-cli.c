@@ -316,7 +316,7 @@ size_t valkey_strlcpy(char *dst, const char *src, size_t dsize);
 
 static void cliPushHandler(void *, void *);
 
-uint16_t crc16(const char *buf, int len);
+uint16_t crc16(const char *buf, size_t len);
 
 static void cliRefreshPrompt(void) {
     if (config.eval_ldb) return;
@@ -4513,8 +4513,8 @@ static sds clusterManagerNodeGetJSON(clusterManagerNode *node, unsigned long err
  * However if the key contains the {...} pattern, only the part between
  * { and } is hashed. This may be useful in the future to force certain
  * keys to be in the same node (assuming no resharding is in progress). */
-static unsigned int clusterManagerKeyHashSlot(char *key, int keylen) {
-    int s, e; /* start-end indexes of { and } */
+static unsigned int clusterManagerKeyHashSlot(char *key, size_t keylen) {
+    size_t s, e; /* start-end indexes of { and } */
 
     for (s = 0; s < keylen; s++)
         if (key[s] == '{') break;

@@ -65,9 +65,9 @@
 
 /* Glob-style pattern matching. */
 static int stringmatchlen_impl(const char *pattern,
-                               int patternLen,
+                               size_t patternLen,
                                const char *string,
-                               int stringLen,
+                               size_t stringLen,
                                int nocase,
                                int *skipLongerMatches,
                                int nesting) {
@@ -192,7 +192,7 @@ static int stringmatchlen_impl(const char *pattern,
     return 0;
 }
 
-int stringmatchlen(const char *pattern, int patternLen, const char *string, int stringLen, int nocase) {
+int stringmatchlen(const char *pattern, size_t patternLen, const char *string, size_t stringLen, int nocase) {
     int skipLongerMatches = 0;
     return stringmatchlen_impl(pattern, patternLen, string, stringLen, nocase, &skipLongerMatches, 0);
 }
@@ -201,7 +201,7 @@ int stringmatch(const char *pattern, const char *string, int nocase) {
     return stringmatchlen(pattern, strlen(pattern), string, strlen(string), nocase);
 }
 
-int prefixmatchlen(const char *pattern, int patternLen, const char *string, int stringLen, int nocase) {
+int prefixmatchlen(const char *pattern, size_t patternLen, const char *string, size_t stringLen, int nocase) {
     if (patternLen == 1 && pattern[0] == '*') {
         /* Minor optimization: fast path: avoid calling "stringmatchlen" if the input pattern is exactly "*":
          * We always return 1 in this case. */

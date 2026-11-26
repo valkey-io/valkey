@@ -55,8 +55,8 @@
  * However, if the key contains the {...} pattern, only the part between
  * { and } is hashed. This may be useful in the future to force certain
  * keys to be in the same node (assuming no resharding is in progress). */
-unsigned int keyHashSlot(const char *key, int keylen) {
-    int s, e; /* start-end indexes of { and } */
+unsigned int keyHashSlot(const char *key, size_t keylen) {
+    size_t s, e; /* start-end indexes of { and } */
 
     for (s = 0; s < keylen; s++)
         if (key[s] == '{') break;
@@ -79,10 +79,10 @@ unsigned int keyHashSlot(const char *key, int keylen) {
 /* If it can be inferred that the given glob-style pattern, as implemented in
  * stringmatchlen() in util.c, only can match keys belonging to a single slot,
  * that slot is returned. Otherwise, -1 is returned. */
-int patternHashSlot(char *pattern, int length) {
-    int s = -1; /* index of the first '{' */
+int patternHashSlot(char *pattern, size_t length) {
+    ssize_t s = -1; /* index of the first '{' */
 
-    for (int i = 0; i < length; i++) {
+    for (size_t i = 0; i < length; i++) {
         if (pattern[i] == '*' || pattern[i] == '?' || pattern[i] == '[') {
             /* Wildcard or character class found. Keys can be in any slot. */
             return -1;
@@ -93,7 +93,7 @@ int patternHashSlot(char *pattern, int length) {
         } else if (s == -1 && pattern[i] == '{') {
             /* Opening brace '{' found. */
             s = i;
-        } else if (s >= 0 && pattern[i] == '}' && i == s + 1) {
+        } else if (s >= 0 && pattern[i] == '}' && i == (size_t)(s + 1)) {
             /* Empty tag '{}' found. The whole key is hashed. Ignore braces. */
             s = -2;
         } else if (s >= 0 && pattern[i] == '}') {

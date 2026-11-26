@@ -9982,7 +9982,8 @@ void VM_RegisterClusterMessageReceiver(ValkeyModuleCtx *ctx,
  *
  * The function returns VALKEYMODULE_OK if the message was successfully sent,
  * otherwise if the node is not connected or such node ID does not map to any
- * known cluster node, VALKEYMODULE_ERR is returned. */
+ * known cluster node, or if the payload exceeds the cluster bus message size
+ * limit, VALKEYMODULE_ERR is returned. */
 int VM_SendClusterMessage(ValkeyModuleCtx *ctx, const char *target_id, uint8_t type, const char *msg, uint32_t len) {
     if (!server.cluster_enabled) return VALKEYMODULE_ERR;
     uint64_t module_id = moduleTypeEncodeId(ctx->module->name, 0);

@@ -927,7 +927,7 @@ void killAppendOnlyChild(void) {
     /* Kill AOFRW child, wait for child exit. */
     serverLog(LL_NOTICE, "Killing running AOF rewrite child: %ld", (long)server.child_pid);
     if (kill(server.child_pid, SIGUSR1) != -1) {
-        while (waitpid(-1, &statloc, 0) != server.child_pid);
+        while (waitpid(server.child_pid, &statloc, 0) != server.child_pid);
     }
     aofRemoveTempFile(server.child_pid, 0);
     resetChildState();

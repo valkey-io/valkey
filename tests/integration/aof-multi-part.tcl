@@ -1402,4 +1402,82 @@ tags {"external:skip"} {
             }
         }
     }
+    test "History AOF files are not unlinked if directory fsync fails in aofDelHistoryFiles" {
+        if {$::tcl_platform(os) eq "AIX"} {
+            skip "fsyncFileDir is a no-op on AIX"
+        }
+
+        set test_dir [tmpdir aof.history.fsyncdir]
+        set test_aof_dirpath "$test_dir/$aof_dirname"
+        set test_aof_manifest_file "$test_aof_dirpath/${aof_basename}$::manifest_suffix"
+        file mkdir $test_aof_dirpath
+        test_defer [list clean_aof_persistence $test_aof_dirpath]
+        test_defer [list catch [list file attributes $test_aof_dirpath -permissions 0755]]
+
+        # Detect whether chmod 0300 blocks open(O_RDONLY) on a directory
+        # (root / CAP_DAC_READ_SEARCH bypasses directory read permissions).
+        file attributes $test_aof_dirpath -permissions 0300
+        set can_read_0300 0
+        if {![catch {set fd [open $test_aof_dirpath r]}]} {
+            close $fd
+            set can_read_0300 1
+        }
+        file attributes $test_aof_dirpath -permissions 0755
+        if {$can_read_0300} {
+            skip "directory 0300 permissions do not block O_RDONLY open"
+        }
+
+        start_server_aof [list dir $test_dir overrides [list aof-disable-auto-gc yes]] {
+            set test_aof_dirpath "[get_valkey_dir]/appendonlydir"
+            set test_aof_manifest_file "$test_aof_dirpath/appendonly.aof$::manifest_suffix"
+
+            wait_done_loading r
+            r set k1 v1
+
+            # Trigger a background rewrite to generate history AOF files while auto-GC is disabled
+            r bgrewriteaof
+            waitForBgrewriteaof r
+
+            assert_aof_manifest_content $test_aof_manifest_file {
+                {file appendonly.aof.2.base.rdb seq 2 type b}
+                {file appendonly.aof.1.base.rdb seq 1 type h}
+                {file appendonly.aof.1.incr.aof seq 1 type h}
+                {file appendonly.aof.2.incr.aof seq 2 type i}
+            }
+
+            # Verify history files exist on disk
+            assert {[file exists "$test_aof_dirpath/appendonly.aof.1.base.rdb"]}
+            assert {[file exists "$test_aof_dirpath/appendonly.aof.1.incr.aof"]}
+
+            set loglines [count_log_lines 0]
+
+            # Block directory reads so fsyncFileDir() fails with EACCES
+            file attributes $test_aof_dirpath -permissions 0300
+
+            # Re-enabling auto-GC invokes aofDelHistoryFiles(), which should fail directory fsync
+            # and defer deletion without unlinking history files
+            r config set aof-disable-auto-gc no
+
+            # Restore permissions so we can inspect directory
+            file attributes $test_aof_dirpath -permissions 0755
+
+            verify_log_message 0 "*Fail to fsync AOF directory*before deleting history files*" $loglines
+
+            # History files must still exist
+            assert {[file exists "$test_aof_dirpath/appendonly.aof.1.base.rdb"]}
+            assert {[file exists "$test_aof_dirpath/appendonly.aof.1.incr.aof"]}
+
+            # Now triggering history cleanup with permissions restored should succeed
+            r config set aof-disable-auto-gc yes
+            r config set aof-disable-auto-gc no
+
+            # Wait for bio thread to unlink
+            wait_for_condition 50 100 {
+                ![file exists "$test_aof_dirpath/appendonly.aof.1.base.rdb"] &&
+                ![file exists "$test_aof_dirpath/appendonly.aof.1.incr.aof"]
+            } else {
+                fail "History AOF files were not deleted after restoring directory permissions"
+            }
+        }
+    }
 }

@@ -11,6 +11,23 @@ Upgrade urgency levels:
 | CRITICAL | There is a critical bug affecting MOST USERS. Upgrade ASAP.         |
 | SECURITY | There are security fixes in the release.                            |
 
+Valkey 9.2.1  -  Released Wed 25 November 2026
+----------------------------------------------
+
+Upgrade urgency MODERATE: Program an upgrade of the server, but it's not urgent.
+
+### Bug Fixes
+* Restore pre-9.2 TLS loading so the server no longer refuses to start or apply TLS configuration when a loaded certificate, such as an expired root left in a `tls-ca-cert-file` bundle, is outside its validity period by @madolson (#5550)
+* Fix a server crash when `PHGET` reads a large path hash while a forkless save is running by @madolson (#5112)
+* Fix a double mutex unlock, which is undefined behavior, when reducing the number of IO threads at runtime by @sarthakaggarwal97 (#5366)
+* Fix dual-channel replication so a replica aborts and resyncs when the primary link breaks while it applies its local buffer, instead of reporting a successful sync on a dead link by @shohamazon (#5417)
+* Fix IO threads resending already-written data to a client that is being closed, which could make a replica dropped for exceeding `client-output-buffer-limit` fail with a protocol error by @dgershko (#5468)
+* Fix `COMMAND GETKEYS EXEC` returning wrong keys and possibly crashing the server when given more than 256 conditions by @madolson (#4712)
+* Fix an uninitialized memory read in `ValkeyModule_CloseKey` when a module changes the type of an open key through `ValkeyModule_Call` by @Baraa-Hasheesh (#5358)
+* Fix a use-after-free that could crash a cluster node receiving a cluster bus forgotten-node extension in which the sender names itself by @roshkhatri (#4675)
+* Fix cluster nodes adopting stale replica claims that form a replication cycle in their cluster view, which could trigger an assertion crash in builds with debug assertions by @Baraa-Hasheesh (#5452)
+* Fix a possible assertion crash with IO threads when more data arrives for a client that has a partially received command and is pending close by @aradz44 (#3245)
+
 Valkey 9.2.0 GA  -  Released Wed 18 November 2026
 -------------------------------------------------
 
@@ -377,6 +394,7 @@ Upgrade urgency LOW: This is the first stable release of Valkey 9.2.
 * Alisina Karimi @AlisinaDevelo
 * Alon Arenberg @alon-arenberg
 * Amariah Abishai @AmariahAK
+* aradz44 @aradz44
 * Arshid @arshidkv12
 * Asuka @akasakariko
 * Avi Fenesh @avifenesh
@@ -474,6 +492,7 @@ Upgrade urgency LOW: This is the first stable release of Valkey 9.2.
 * Sebastian Turner @sebxt
 * secwall @secwall
 * shanezx-sc @shanezx-sc
+* Shoham Elias @shohamazon
 * Shubham S Taple @ShubhamTaple
 * Shun Takahashi @moko-poi
 * SHUVA JYOTI KAR @shuvajyotikar13

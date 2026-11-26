@@ -173,6 +173,7 @@ static int connSocketWrite(connection *conn, const void *data, size_t data_len) 
                       ((client *)connGetPrivateData(conn))->io_write_state != CLIENT_PENDING_IO);
 
     int ret = write(conn->fd, data, data_len);
+    conn->last_errno = 0;
     if (ret < 0 && errno != EAGAIN) {
         conn->last_errno = errno;
 
@@ -187,6 +188,7 @@ static int connSocketWrite(connection *conn, const void *data, size_t data_len) 
 
 static int connSocketWritev(connection *conn, const struct iovec *iov, int iovcnt) {
     int ret = writev(conn->fd, iov, iovcnt);
+    conn->last_errno = 0;
     if (ret < 0 && errno != EAGAIN) {
         conn->last_errno = errno;
 
@@ -209,6 +211,7 @@ static int connSocketRead(connection *conn, void *buf, size_t buf_len) {
 
 
     int ret = read(conn->fd, buf, buf_len);
+    conn->last_errno = 0;
     if (!ret) {
         conn->state = CONN_STATE_CLOSED;
     } else if (ret < 0 && errno != EAGAIN) {

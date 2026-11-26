@@ -5607,6 +5607,15 @@ int VM_HashHasStringRef(ValkeyModuleKey *key, ValkeyModuleString *field) {
  *                                 returned number, in addition to the number of
  *                                 updated and deleted fields. (Added in Redis OSS
  *                                 6.2.)
+ *     VALKEYMODULE_HASH_KEEPTTL: Retain the expiration time of existing fields
+ *                               whose value is overwritten. Without this flag,
+ *                               overwriting a field clears its expiration time,
+ *                               like HSET does. It has no effect on new fields
+ *                               or deleted fields. When an already expired
+ *                               field is overwritten, an HDEL for it is
+ *                               propagated to replicas and AOF, so a module
+ *                               that replicates its command must do so after
+ *                               calling this function. (Added in Valkey 9.2.)
  *
  * Unless NX is specified, the command overwrites the old field value with
  * the new one.
@@ -5642,7 +5651,7 @@ int VM_HashHasStringRef(ValkeyModuleKey *key, ValkeyModuleString *field) {
 int VM_HashSet(ValkeyModuleKey *key, int flags, ...) {
     va_list ap;
     if (!key || (flags & ~(VALKEYMODULE_HASH_NX | VALKEYMODULE_HASH_XX | VALKEYMODULE_HASH_CFIELDS |
-                           VALKEYMODULE_HASH_COUNT_ALL))) {
+                           VALKEYMODULE_HASH_COUNT_ALL | VALKEYMODULE_HASH_KEEPTTL))) {
         errno = EINVAL;
         return 0;
     } else if (key->value && objectGetType(key->value) != OBJ_HASH) {
@@ -5658,9 +5667,10 @@ int VM_HashSet(ValkeyModuleKey *key, int flags, ...) {
     va_start(ap, flags);
     while (1) {
         ValkeyModuleString *field, *value;
+        char *cfield = NULL;
         /* Get the field and value objects. */
         if (flags & VALKEYMODULE_HASH_CFIELDS) {
-            char *cfield = va_arg(ap, char *);
+            cfield = va_arg(ap, char *);
             if (cfield == NULL) break;
             field = createRawStringObject(cfield, strlen(cfield));
         } else {
@@ -5690,11 +5700,30 @@ int VM_HashSet(ValkeyModuleKey *key, int flags, ...) {
          * SDS object to the low level function that sets the field
          * to avoid a useless copy. */
         if (flags & VALKEYMODULE_HASH_CFIELDS) low_flags |= (HASH_SET_TAKE_FIELD);
+        if (flags & VALKEYMODULE_HASH_KEEPTTL) low_flags |= HASH_SET_KEEP_EXPIRY;
 
         robj *argv[2] = {field, value};
         hashTypeTryConversion(key->value, argv, 0, 1);
-        int updated = hashTypeSet(key->value, objectGetVal(field), objectGetVal(value), EXPIRY_NONE, low_flags, NULL);
+        bool expired = false;
+        int updated = hashTypeSet(key->value, objectGetVal(field), objectGetVal(value), EXPIRY_NONE, low_flags,
+                                  (flags & VALKEYMODULE_HASH_KEEPTTL) ? &expired : NULL);
         count += (flags & VALKEYMODULE_HASH_COUNT_ALL) ? 1 : updated;
+
+        /* Replicas and AOF loading never treat a field as expired, so with KEEPTTL
+         * they would keep the stale TTL on the new value. Delete it there first,
+         * like HSETEX KEEPTTL does. */
+        if (expired) {
+            robj *deleted_field;
+            if (cfield) {
+                deleted_field = createRawStringObject(cfield, strlen(cfield));
+            } else {
+                deleted_field = field;
+                incrRefCount(deleted_field);
+            }
+            propagateFieldsDeletion(key->db, key->value, 1, &deleted_field,
+                                    getKVStoreIndexForKey(objectGetVal(key->key)));
+            server.stat_expiredfields++;
+        }
 
         /* If CFIELDS is active, SDS string ownership is now of hashTypeSet(),
          * however we still have to release the 'field' object shell. */

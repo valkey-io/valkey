@@ -105,6 +105,38 @@ tags {"check-rdb external:skip logreqres:skip"} {
         assert_match {*--- RDB ERROR DETECTED ---*} $result
         assert_no_match {*RDB looks OK*} $result
     }
+
+    test {Check RDB with an inline replication command between keys} {
+        # SELECTDB 0, string key a=b, SET k v as a RESP command, string key c=d, EOF and a
+        # zero checksum. The checker must resume right after the command and read key c.
+        set rdb [tmpfile inline-update-mixed.rdb]
+        write_binary_file $rdb [binary format a9H*ca*H* VALKEY081 fe000001610162 242 "*3\r\n\$3\r\nSET\r\n\$1\r\nk\r\n\$1\r\nv\r\n" 0001630164ff0000000000000000]
+        set rc [catch {
+            exec $::VALKEY_CHECK_RDB_BIN $rdb
+        } result]
+        assert_equal 0 $rc
+        assert_match {*RDB looks OK!*} $result
+        assert_match {*2 keys read*} $result
+    }
+
+    test {Check RDB rejects a malformed or truncated inline replication command} {
+        # A RESP reply instead of a command array, then EOF and a zero checksum.
+        set rdb [tmpfile inline-update-bad.rdb]
+        write_binary_file $rdb [binary format a9ca*H* VALKEY081 242 "+OK\r\n" ff0000000000000000]
+        assert_equal 1 [catch {exec $::VALKEY_CHECK_RDB_BIN $rdb} result]
+        assert_match {*--- RDB ERROR DETECTED ---*} $result
+        assert_match {*Malformed inline replication command in RDB*} $result
+        assert_match {*While doing: read-inline-command*} $result
+        assert_no_match {*Invalid object type*} $result
+        assert_no_match {*RDB looks OK*} $result
+
+        # The file ends inside the command.
+        set rdb [tmpfile inline-update-trunc.rdb]
+        write_binary_file $rdb [binary format a9ca* VALKEY081 242 "*3\r\n\$3\r\nSET\r\n\$1\r\nk"]
+        assert_equal 1 [catch {exec $::VALKEY_CHECK_RDB_BIN $rdb} result]
+        assert_match {*Unexpected EOF reading RDB file*} $result
+        assert_no_match {*RDB looks OK*} $result
+    }
 }
 
 tags {"check-rdb network external:skip logreqres:skip"} {

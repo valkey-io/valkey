@@ -7,6 +7,7 @@
 #include "generated_wrappers.hpp"
 
 #include <climits>
+#include <cstdarg>
 #include <cstring>
 #include <sys/mman.h>
 #include <unistd.h>
@@ -408,4 +409,82 @@ TEST_F(UtilTest, TestSecureRandomBytesFillsEveryPosition) {
     for (size_t i = 0; i < kLen; i++) {
         ASSERT_TRUE(differed[i]) << "byte " << i << " was never written in " << kDraws << " draws";
     }
+}
+
+/* Formats with both snprintf() and snprintf_async_signal_safe() and checks they agree. */
+#define ASSERT_ASYNC_FORMAT_MATCHES(...)                                                  \
+    do {                                                                                  \
+        char expected[256];                                                               \
+        char actual[256];                                                                 \
+        int expected_len = snprintf(expected, sizeof(expected), __VA_ARGS__);             \
+        int actual_len = snprintf_async_signal_safe(actual, sizeof(actual), __VA_ARGS__); \
+        ASSERT_STREQ(expected, actual);                                                   \
+        ASSERT_EQ(expected_len, actual_len);                                              \
+    } while (0)
+
+/* Calls the formatter without compile-time format checks, to test formats the
+ * compiler would reject. */
+static int formatUnchecked(char *buf, size_t len, const char *fmt, ...) {
+    va_list ap;
+    va_start(ap, fmt);
+    int ret = vsnprintf_async_signal_safe(buf, len, fmt, ap);
+    va_end(ap);
+    return ret;
+}
+
+TEST_F(UtilTest, TestSnprintfAsyncSignalSafe) {
+    int x;
+
+    ASSERT_ASYNC_FORMAT_MATCHES("%d %d %d %d %d", 0, 42, -42, INT_MAX, INT_MIN);
+    ASSERT_ASYNC_FORMAT_MATCHES("%u %u", 0u, UINT_MAX);
+    ASSERT_ASYNC_FORMAT_MATCHES("%ld %ld %lu", LONG_MAX, LONG_MIN, ULONG_MAX);
+    ASSERT_ASYNC_FORMAT_MATCHES("%lld %lld %llu", LLONG_MAX, LLONG_MIN, ULLONG_MAX);
+    ASSERT_ASYNC_FORMAT_MATCHES("%zu %zu", (size_t)0, SIZE_MAX);
+    ASSERT_ASYNC_FORMAT_MATCHES("%x %x %lx %llx", 0xdeadbeefu, UINT_MAX, ULONG_MAX, ULLONG_MAX);
+    /* Zero-padded and space-padded widths, as used for registers and stack content. */
+    ASSERT_ASYNC_FORMAT_MATCHES("[%016lx] [%08lx] [%04lx]", 0xabcUL, 0x12345678UL, 0xdeadbeefUL);
+    ASSERT_ASYNC_FORMAT_MATCHES("[%04ld] [%04ld] [%5d] [%03u]", 7L, -7L, 42, 5u);
+    ASSERT_ASYNC_FORMAT_MATCHES("%p %p", (void *)&x, (void *)0x1);
+    ASSERT_ASYNC_FORMAT_MATCHES("[%s] [%s]", "abc", "");
+}
+
+TEST_F(UtilTest, TestSnprintfAsyncSignalSafeUnsupported) {
+    char buf[64];
+
+    /* Unsupported conversions are copied verbatim, with no further arguments read. */
+    ASSERT_EQ(formatUnchecked(buf, sizeof(buf), "%d %f %s %d", 1, 2.5, "unread", 3), 10);
+    ASSERT_STREQ(buf, "1 %f %s %d");
+    formatUnchecked(buf, sizeof(buf), "%d %c", 1, 'c');
+    ASSERT_STREQ(buf, "1 %c");
+    formatUnchecked(buf, sizeof(buf), "%d %ls", 1, (wchar_t *)NULL);
+    ASSERT_STREQ(buf, "1 %ls");
+    formatUnchecked(buf, sizeof(buf), "%d %10s", 1, "unread");
+    ASSERT_STREQ(buf, "1 %10s");
+    formatUnchecked(buf, sizeof(buf), "trailing %");
+    ASSERT_STREQ(buf, "trailing %");
+
+    formatUnchecked(buf, sizeof(buf), "%s %p", (char *)NULL, (void *)NULL);
+    ASSERT_STREQ(buf, "(null) 0x0");
+}
+
+TEST_F(UtilTest, TestSnprintfAsyncSignalSafeTruncation) {
+    char buf[8];
+
+    memset(buf, 'x', sizeof(buf));
+    ASSERT_EQ(snprintf_async_signal_safe(buf, 5, "hello world"), 4);
+    ASSERT_STREQ(buf, "hell");
+    ASSERT_EQ(buf[5], 'x');
+
+    ASSERT_EQ(snprintf_async_signal_safe(buf, sizeof(buf), "%d", INT_MIN), 7);
+    ASSERT_STREQ(buf, "-214748");
+
+    /* A huge width stops at the end of the buffer. */
+    ASSERT_EQ(snprintf_async_signal_safe(buf, sizeof(buf), "%0999999999d", 1), 7);
+    ASSERT_STREQ(buf, "0000000");
+
+    buf[0] = 'x';
+    ASSERT_EQ(snprintf_async_signal_safe(buf, 0, "hello"), 0);
+    ASSERT_EQ(buf[0], 'x');
+    ASSERT_EQ(snprintf_async_signal_safe(buf, 1, "hello"), 0);
+    ASSERT_STREQ(buf, "");
 }

@@ -32,6 +32,7 @@
 
 #include <stdint.h>
 #include "sds.h"
+#include "monotonic.h"
 
 /* Anti-warning macro... */
 #ifndef UNUSED
@@ -122,6 +123,7 @@ void getRandomBytes(unsigned char *p, size_t len);
 int getSecureRandomHexChars(char *p, size_t len);
 int getSecureRandomBytes(unsigned char *p, size_t len);
 long long ustime(void);
+long long ustimeFromMonotonic(monotime mono_now);
 mstime_t mstime(void);
 void writePointerWithPadding(unsigned char *buf, const void *ptr);
 sds escapeJsonString(sds s, const char *p, size_t len);

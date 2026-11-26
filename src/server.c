@@ -3121,6 +3121,7 @@ void initServer(void) {
     server.pending_push_messages = listCreate();
     server.clients_waiting_acks = listCreate();
     server.clients_pending_async_unblock = listCreate();
+    server.blocked_async_handles = listCreate();
     server.get_ack_from_replicas = 0;
     server.paused_actions = 0;
     memset(server.client_pause_per_purpose, 0, sizeof(server.client_pause_per_purpose));
@@ -5367,6 +5368,10 @@ int finishShutdown(void) {
 
     /* Module unloading may drain IO queues, so stop workers afterward. */
     killIOThreads();
+
+    /* Operations that are still waiting, e.g. cluster proposals, won't
+     * complete now. */
+    freeBlockedAsyncHandles();
 
     serverLog(LL_WARNING, "%s is now ready to exit, bye bye...", server.sentinel_mode ? "Sentinel" : "Valkey");
     return C_OK;

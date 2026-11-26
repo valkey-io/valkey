@@ -2949,6 +2949,8 @@ start_server {tags {"repl external:skip needs:debug"} overrides {save "" forkles
         set replica [srv 0 client]
 
         test "Forkless full sync handles FLUSHDB and SWAPDB on unscanned DBs without asserting" {
+            # Test clients default to DB 9; populate DB 0 so the scan stays below DBs 1 and 2.
+            $primary select 0
             $primary debug populate 20000 key 100
             $primary config set rdb-key-save-delay 100
 
@@ -3003,11 +3005,7 @@ start_server {tags {"repl external:skip needs:debug"} overrides {save "" forkles
 
             assert_equal "PONG" [$primary ping]
             wait_for_log_messages -1 {"*target: replicas sockets*method: forkless*"} $loglines 50 100
-            foreach db {0 1 2} {
-                $primary select $db
-                $replica select $db
-                assert_equal [$primary debug digest] [$replica debug digest]
-            }
+            assert_equal [$primary debug digest] [$replica debug digest]
             $replica select 1
             assert_equal "ok" [$replica get final_db1]
             $replica select 2

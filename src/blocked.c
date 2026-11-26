@@ -751,11 +751,14 @@ void blockClientShutdown(client *c) {
 
 typedef struct blockedAsyncHandle {
     uint64_t client_id;
+    listNode *node; /* In server.blocked_async_handles */
 } blockedAsyncHandle;
 
 blockedAsyncHandle *blockClientAsync(client *c) {
     blockedAsyncHandle *h = zmalloc(sizeof(*h));
     h->client_id = c->id;
+    listAddNodeTail(server.blocked_async_handles, h);
+    h->node = listLast(server.blocked_async_handles);
     initClientBlockingState(c);
     c->bstate->timeout = 0;
     /* The caller replies before unblockClientAsync(), so clear pending_command
@@ -767,8 +770,20 @@ blockedAsyncHandle *blockClientAsync(client *c) {
 
 client *consumeBlockedClientAsyncHandle(blockedAsyncHandle *handle) {
     client *c = lookupClientByID(handle->client_id);
+    listDelNode(server.blocked_async_handles, handle->node);
     zfree(handle);
     return c;
+}
+
+/* Free the handles of operations that never completed, when shutting down.
+ * Their callbacks aren't called, since they may belong to other subsystems
+ * and refer to state that's already gone. */
+void freeBlockedAsyncHandles(void) {
+    listIter li;
+    listNode *ln;
+    listRewind(server.blocked_async_handles, &li);
+    while ((ln = listNext(&li)) != NULL) zfree(listNodeValue(ln));
+    listEmpty(server.blocked_async_handles);
 }
 
 /* Complete a BLOCKED_ASYNC operation. The caller must have already added

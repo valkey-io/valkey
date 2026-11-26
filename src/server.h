@@ -2374,6 +2374,7 @@ struct valkeyServer {
     /* Synchronous replication. */
     list *clients_waiting_acks;          /* Clients waiting in WAIT or WAITAOF. */
     list *clients_pending_async_unblock; /* BLOCKED_ASYNC clients to unblock in beforeSleep. */
+    list *blocked_async_handles;         /* Handles from blockClientAsync() not consumed yet. */
     int get_ack_from_replicas;           /* If true we send REPLCONF GETACK. */
     /* Limits */
     unsigned int maxclients;                    /* Max number of simultaneous clients */
@@ -4198,6 +4199,7 @@ void blockClientShutdown(client *c);
 typedef struct blockedAsyncHandle blockedAsyncHandle;
 blockedAsyncHandle *blockClientAsync(client *c);
 client *consumeBlockedClientAsyncHandle(blockedAsyncHandle *handle);
+void freeBlockedAsyncHandles(void);
 void unblockClientAsync(client *c);
 void blockPostponeClient(client *c);
 void blockClientInUseOnKeys(client *c, int num_keys, robj *keys[]);

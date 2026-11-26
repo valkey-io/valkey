@@ -167,6 +167,7 @@ start_cluster 1 0 {tags {external:skip cluster} overrides {cluster-slot-stats-en
         R 0 SET $key VALUE
 
         R 0 CLUSTER DELSLOTS $key_slot
+        test_defer_fail {catch {R 0 CLUSTER ADDSLOTS $key_slot}}
         set slot_stats [R 0 CLUSTER SLOT-STATS SLOTSRANGE 0 16383]
         assert_empty_slot_stats $slot_stats $metrics_to_assert
 
@@ -202,6 +203,7 @@ start_cluster 1 0 {tags {external:skip cluster} overrides {cluster-slot-stats-en
     test "CLUSTER SLOT-STATS cpu-usec for blocking commands, unblocked on keyspace update." {
         # Blocking command with no timeout. Only keyspace update can unblock this client.
         set rd [valkey_deferring_client]
+        test_defer [list $rd close]
         $rd BLPOP $key 0
         wait_for_blocked_clients_count 1
         set slot_stats [R 0 CLUSTER SLOT-STATS SLOTSRANGE 0 16383]
@@ -230,6 +232,7 @@ start_cluster 1 0 {tags {external:skip cluster} overrides {cluster-slot-stats-en
     test "CLUSTER SLOT-STATS cpu-usec for blocking commands, unblocked on timeout." {
         # Blocking command with 0.5 seconds timeout.
         set rd [valkey_deferring_client]
+        test_defer [list $rd close]
         $rd BLPOP $key 0.5
 
         # Confirm that the client is blocked, then unblocked within 1 second.
@@ -251,6 +254,7 @@ start_cluster 1 0 {tags {external:skip cluster} overrides {cluster-slot-stats-en
 
     test "CLUSTER SLOT-STATS cpu-usec for transactions." {
         set r1 [valkey_client]
+        test_defer [list $r1 close]
         $r1 MULTI
         $r1 SET $key value
         $r1 GET $key
@@ -370,6 +374,7 @@ start_cluster 1 0 {tags {external:skip cluster} overrides {cluster-slot-stats-en
 
     test "CLUSTER SLOT-STATS network-bytes-in, in-line buffer processing." {
         set rd [valkey_deferring_client]
+        test_defer [list $rd close]
         # SET key value\r\n --> 15 bytes.
         $rd write "SET $key value\r\n"
         $rd flush
@@ -390,6 +395,7 @@ start_cluster 1 0 {tags {external:skip cluster} overrides {cluster-slot-stats-en
 
     test "CLUSTER SLOT-STATS network-bytes-in, blocking command." {
         set rd [valkey_deferring_client]
+        test_defer [list $rd close]
         # *3\r\n$5\r\nblpop\r\n$3\r\nkey\r\n$1\r\n0\r\n --> 31 bytes.
         $rd BLPOP $key 0
         wait_for_blocked_clients_count 1
@@ -416,6 +422,7 @@ start_cluster 1 0 {tags {external:skip cluster} overrides {cluster-slot-stats-en
 
     test "CLUSTER SLOT-STATS network-bytes-in, multi-exec transaction." {
         set r [valkey_client]
+        test_defer [list $r close]
         # *1\r\n$5\r\nmulti\r\n --> 15 bytes.
         $r MULTI
         # *3\r\n$3\r\nSET\r\n$3\r\nkey\r\n$5\r\nvalue\r\n --> 33 bytes.
@@ -448,6 +455,7 @@ start_cluster 1 0 {tags {external:skip cluster} overrides {cluster-slot-stats-en
         # PUB/SUB does not get accumulated at per-slot basis, 
         # as it is cluster-wide and is not slot specific.
         set rd [valkey_deferring_client]
+        test_defer [list $rd close]
         $rd subscribe channel
         R 0 publish channel message
 
@@ -477,6 +485,7 @@ start_cluster 1 1 {tags {external:skip cluster} overrides {cluster-slot-stats-en
         set primary [Rn 0]
         set replica [Rn 1]
         set replica_subscriber [valkey_deferring_client -1]
+        test_defer [list $replica_subscriber close]
         $replica_subscriber SSUBSCRIBE $channel
         # *2\r\n$10\r\nssubscribe\r\n$7\r\nchannel\r\n --> 34 bytes.
         $primary SPUBLISH $channel hello
@@ -541,8 +550,7 @@ start_cluster 1 0 {tags {external:skip cluster}} {
     R 0 FLUSHALL
 
     test "CLUSTER SLOT-STATS network-bytes-out, for slot specific commands, for reply copy avoidance" {
-        set copy_avoid [lindex [R 0 config get min-string-size-avoid-copy-reply] 1]
-        R 0 config set min-string-size-avoid-copy-reply 1
+        test_config_set {R 0} min-string-size-avoid-copy-reply 1
 
         set value [string repeat A 1024] ;# Make sure it is a RAW string
         R 0 set $key $value ;# +OK\r\n --> 5 bytes
@@ -555,14 +563,13 @@ start_cluster 1 0 {tags {external:skip cluster}} {
         ]
         set slot_stats [R 0 CLUSTER SLOT-STATS SLOTSRANGE $key_slot $key_slot]
         assert_empty_slot_stats_with_exception $slot_stats $expected_slot_stats $metrics_to_assert
-
-        R 0 config set min-string-size-avoid-copy-reply $copy_avoid
     }
     R 0 CONFIG RESETSTAT
     R 0 FLUSHALL
 
     test "CLUSTER SLOT-STATS network-bytes-out, blocking commands." {
         set rd [valkey_deferring_client]
+        test_defer [list $rd close]
         $rd BLPOP $key 0
         wait_for_blocked_clients_count 1
 
@@ -633,7 +640,9 @@ start_cluster 1 1 {tags {external:skip cluster}} {
         set slot [R 0 cluster keyslot $channel]
         set publisher [Rn 0]
         set subscriber [valkey_client]
+        test_defer [list $subscriber close]
         set replica [valkey_deferring_client -1]
+        test_defer [list $replica close]
 
         # Subscriber client) *3\r\n$10\r\nssubscribe\r\n$7\r\nchannel\r\n:1\r\n --> 38 bytes
         $subscriber SSUBSCRIBE $channel 
@@ -656,7 +665,6 @@ start_cluster 1 1 {tags {external:skip cluster}} {
         ]
         assert_empty_slot_stats_with_exception $slot_stats $expected_slot_stats $metrics_to_assert
     }
-    $subscriber QUIT
     R 0 FLUSHALL
     R 0 CONFIG RESETSTAT
 
@@ -664,7 +672,9 @@ start_cluster 1 1 {tags {external:skip cluster}} {
         set slot [R 0 cluster keyslot $channel]
         set publisher [Rn 0]
         set subscriber [valkey_client]
+        test_defer [list $subscriber close]
         set replica [valkey_deferring_client -1]
+        test_defer [list $replica close]
 
         # Stack multi-slot subscriptions against a single client.
         # For primary channel;

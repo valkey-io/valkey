@@ -223,6 +223,7 @@ typedef struct sentinelValkeyInstance {
     mstime_t replica_conf_change_time; /* Last time replica primary addr changed. */
 
     int monitored_instance_failover_state;            /* Whether the Valkey instance supports/reports a failover in "master_failover_state" */
+    int has_config_file;                              /* Whether INFO reports a config file, so CONFIG REWRITE can work. */
     mstime_t monitored_instance_failover_change_time; /* Last time monitored_instance_failover_state changed. */
 
     /* Primary specific. */
@@ -1399,6 +1400,7 @@ sentinelValkeyInstance *createSentinelValkeyInstance(char *name,
     ri->replica_conf_change_time = mstime();
 
     ri->monitored_instance_failover_state = SENTINEL_MONITORED_INSTANCE_FAILOVER_NS;
+    ri->has_config_file = 1;
     ri->monitored_instance_failover_change_time = mstime();
 
     /* Add into the right table. */
@@ -2412,6 +2414,9 @@ void sentinelReconnectInstance(sentinelValkeyInstance *ri) {
         } else {
             link->pending_commands = 0;
             link->cc_conn_time = mstime();
+            /* The instance may have restarted with a config file, assume it
+             * has one until the next INFO says otherwise. */
+            ri->has_config_file = 1;
             link->cc->data = link;
             valkeyAeAttach(server.el, link->cc);
             valkeyAsyncSetConnectCallback(link->cc, sentinelLinkEstablishedCallback);
@@ -2601,6 +2606,9 @@ void sentinelRefreshInstanceInfo(sentinelValkeyInstance *ri, const char *info) {
             /* replica_announced:<announcement> */
             if (sdslen(l) >= 18 && !memcmp(l, "replica_announced:", 18)) ri->replica_announced = atoi(l + 18);
         }
+
+        /* config_file:<path>, empty when started without a config file */
+        if (sdslen(l) >= 12 && !memcmp(l, "config_file:", 12)) ri->has_config_file = sdslen(l) > 12;
 
         /* master_failover_state:<failover-state> */
         if (sdslen(l) >= 22 && !memcmp(l, "master_failover_state:", 22)) {
@@ -4845,7 +4853,8 @@ int sentinelKillClients(sentinelValkeyInstance *ri) {
 
     if (ri->link->cc == NULL) return C_ERR;
 
-    /* 1) Rewrite the configuration (the instance just switched roles)
+    /* 1) Rewrite the configuration (the instance just switched roles), unless
+     *    INFO reported that the instance has no config file.
      * 2) Disconnect all clients (but this one sending the command) in order
      *    to trigger the ask-master-on-reconnection protocol for connected
      *    clients.
@@ -4859,11 +4868,13 @@ int sentinelKillClients(sentinelValkeyInstance *ri) {
     if (retval == C_ERR) return retval;
     ri->link->pending_commands++;
 
-    retval = valkeyAsyncCommand(ri->link->cc,
-                                sentinelDiscardReplyCallback, ri, "%s REWRITE",
-                                sentinelInstanceMapCommand(ri, "CONFIG"));
-    if (retval == C_ERR) return retval;
-    ri->link->pending_commands++;
+    if (ri->has_config_file) {
+        retval = valkeyAsyncCommand(ri->link->cc,
+                                    sentinelDiscardReplyCallback, ri, "%s REWRITE",
+                                    sentinelInstanceMapCommand(ri, "CONFIG"));
+        if (retval == C_ERR) return retval;
+        ri->link->pending_commands++;
+    }
 
     for (int type = 0; type < 2; type++) {
         retval = valkeyAsyncCommand(ri->link->cc,
@@ -4889,10 +4900,10 @@ int sentinelKillClients(sentinelValkeyInstance *ri) {
     return C_OK;
 }
 
-/* Send REPLICAOF to the specified instance, always followed by a
- * CONFIG REWRITE command in order to store the new configuration on disk
- * when possible (that is, if the instance is recent enough to support
- * config rewriting, and if the server was started with a configuration file).
+/* Send REPLICAOF to the specified instance, followed by a CONFIG REWRITE
+ * command in order to store the new configuration on disk. The rewrite is
+ * skipped when INFO reported that the server was started without a
+ * configuration file, since it can only fail there.
  *
  * If Host is NULL the function sends "REPLICAOF NO ONE".
  *
@@ -4919,7 +4930,7 @@ int sentinelSendReplicaOf(sentinelValkeyInstance *ri, const sentinelAddr *addr) 
      * 1) Abort a potentially ongoing Valkey FAILOVER (that may be stuck). REPLICAOF
      *    can't be used during a failover.
      * 2) Reconfigure the instance according to the specified host/port params.
-     * 3) Rewrite the configuration.
+     * 3) Rewrite the configuration, unless the instance has no config file.
      * 4) Disconnect all clients (but this one sending the command) in order
      *    to trigger the ask-primary-on-reconnection protocol for connected
      *    clients.
@@ -4943,10 +4954,12 @@ int sentinelSendReplicaOf(sentinelValkeyInstance *ri, const sentinelAddr *addr) 
     if (retval == C_ERR) return retval;
     ri->link->pending_commands++;
 
-    retval = valkeyAsyncCommand(ri->link->cc, sentinelDiscardReplyCallback, ri, "%s REWRITE",
-                                sentinelInstanceMapCommand(ri, "CONFIG"));
-    if (retval == C_ERR) return retval;
-    ri->link->pending_commands++;
+    if (ri->has_config_file) {
+        retval = valkeyAsyncCommand(ri->link->cc, sentinelDiscardReplyCallback, ri, "%s REWRITE",
+                                    sentinelInstanceMapCommand(ri, "CONFIG"));
+        if (retval == C_ERR) return retval;
+        ri->link->pending_commands++;
+    }
 
     /* CLIENT KILL TYPE <type> is only supported starting from Redis OSS 2.8.12,
      * however sending it to an instance not understanding this command is not

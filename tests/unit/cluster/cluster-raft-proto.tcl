@@ -314,7 +314,7 @@ test "Raft proto: DEL_VOTER applies when the node it removes is the leader" {
         set removed_addr "127.0.0.1:9996@19996,,tls-port=0,shard-id=[string repeat 5 40]"
 
         set fd [raft_connect_fake_node 127.0.0.1 $cport $leader_id $leader_addr]
-        set ae "AE $leader_id 1 0 0 3 4\n"
+        set ae "AE $leader_id 1 0 0 3 0 4\n"
         append ae "1 NODE_JOIN $self_id $self_addr voter\n"
         append ae "1 NODE_JOIN $leader_id $leader_addr voter\n"
         append ae "1 NODE_JOIN $removed_id $removed_addr voter\n"
@@ -325,7 +325,7 @@ test "Raft proto: DEL_VOTER applies when the node it removes is the leader" {
 
         # The removed node is elected and commits DEL_VOTER with its no-op.
         set fd_removed [raft_connect_fake_node 127.0.0.1 $cport $removed_id $removed_addr]
-        raft_send $fd_removed "AE $removed_id 2 4 1 5 1\n2 NOOP "
+        raft_send $fd_removed "AE $removed_id 2 4 1 5 0 1\n2 NOOP "
         assert_match "AE_ACK 2 1 5 *" [raft_recv $fd_removed]
         assert_equal 2 [CI 0 cluster_size]
 
@@ -346,7 +346,7 @@ test "Raft proto: a leader that applies DEL_VOTER for itself steps down" {
         set fd [raft_listen_and_accept fake_cport 5000 {
             set fake_addr "127.0.0.1:[expr {$fake_cport - 10000}]@${fake_cport},,tls-port=0,shard-id=[string repeat 3 40]"
             set leader_fd [raft_connect_fake_node 127.0.0.1 $cport $fake_id $fake_addr]
-            set ae "AE $fake_id 2 0 0 2 3\n"
+            set ae "AE $fake_id 2 0 0 2 0 3\n"
             append ae "2 NODE_JOIN $self_id $self_addr voter\n"
             append ae "2 NODE_JOIN $fake_id $fake_addr voter\n"
             append ae "2 DEL_VOTER $self_id"
@@ -362,8 +362,8 @@ test "Raft proto: a leader that applies DEL_VOTER for itself steps down" {
         raft_recv_until $fd "VOTE_REQ $self_id 3 3 2"
         raft_send $fd "VOTE 3 1"
         raft_recv_until $fd "AE $self_id 3 3 2 * 1\n3 NOOP*"
-        raft_send $fd "AE_ACK 3 1 4 0"
-        raft_recv_until $fd "AE $self_id 3 4 3 4 0"
+        raft_send $fd "AE_ACK 3 1 4 0 0"
+        raft_recv_until $fd "AE $self_id 3 4 3 4 * 0"
         assert_equal "learner" [CI 0 cluster_raft_role]
         assert_equal 1 [CI 0 cluster_size]
 

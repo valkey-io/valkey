@@ -2577,8 +2577,9 @@ int rewriteObjectRio(rio *aof, robj *o, int db_num) {
 }
 
 /* This function is currently used in slot migration to rewrite the corresponding
- * slot hashtable to rio. */
-int rewriteSlotToAppendOnlyFileRio(rio *aof, int db_num, int hashslot, size_t *key_count) {
+ * slot hashtable to rio. Keys whose expire time is before 'expired_before' are
+ * skipped; pass 0 to keep every key. */
+int rewriteSlotToAppendOnlyFileRio(rio *aof, int db_num, int hashslot, size_t *key_count, mstime_t expired_before) {
     long long updated_time = 0;
 
     if (dbHasNoKeys(db_num)) return C_OK;
@@ -2604,6 +2605,9 @@ int rewriteSlotToAppendOnlyFileRio(rio *aof, int db_num, int hashslot, size_t *k
                 updated_time = now;
             }
         }
+
+        long long expiretime = objectGetExpire(o);
+        if (expiretime != -1 && expiretime < expired_before) continue;
 
         if (rewriteObjectRio(aof, o, db_num) == C_ERR) return C_ERR;
     }

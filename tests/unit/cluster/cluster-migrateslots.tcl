@@ -952,15 +952,17 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster network} overrides
         }
 
         test "Primary importing key containment (slot $slot_to_migrate from node $source_idx to $target_idx) - active expiration excludes importing keys" {
-            # Populate 1000 keys with 1 second timeout, and do the snapshot
+            # Populate 1000 keys with 2 second timeout, and do the snapshot. The
+            # source keys must still be live at fork time, since keys and hash
+            # fields that are already expired are not sent in the snapshot.
             assert_match "OK" [R $source_idx FLUSHALL SYNC]
             assert_match "OK" [R $target_idx FLUSHALL SYNC]
             assert_match "OK" [R $source_idx DEBUG SET-ACTIVE-EXPIRE 0]
             assert_match "OK" [R $target_idx DEBUG SET-ACTIVE-EXPIRE 0]
-            populate 1000 "$slot_to_migrate_tag:1:" 1000 -$source_idx false 0.5
-            populate 1000 "$slot_to_test_tag:1:" 1000 -$target_idx false 0.5
-            assert_match "1" [R $source_idx HSETEX "$slot_to_migrate_tag:hfe" PX 500 FIELDS 1 field value]
-            assert_match "1" [R $target_idx HSETEX "$slot_to_test_tag:hfe" PX 500 FIELDS 1 field value]
+            populate 1000 "$slot_to_migrate_tag:1:" 1000 -$source_idx false 2
+            populate 1000 "$slot_to_test_tag:1:" 1000 -$target_idx false 2
+            assert_match "1" [R $source_idx HSETEX "$slot_to_migrate_tag:hfe" PX 2000 FIELDS 1 field value]
+            assert_match "1" [R $target_idx HSETEX "$slot_to_test_tag:hfe" PX 2000 FIELDS 1 field value]
             assert_match "OK" [R $source_idx CLUSTER MIGRATESLOTS SLOTSRANGE $slot_to_migrate $slot_to_migrate NODE $target_id]
             set jobname [get_job_name $source_idx $slot_to_migrate]
             wait_for_migration_field $source_idx $jobname state waiting-to-pause
@@ -980,6 +982,66 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster network} overrides
 
             # Wait for the expirations to be propagated
             wait_for_countkeysinslot $target_idx $slot_to_migrate 0
+
+            # Cleanup for the next test
+            assert_match "OK" [R $source_idx FLUSHALL SYNC]
+            assert_match "OK" [R $target_idx FLUSHALL SYNC]
+            wait_for_migration_field $source_idx $jobname state failed
+            wait_for_migration_field $target_idx $jobname state failed
+        }
+
+        test "Already expired keys are not sent in the snapshot (slot $slot_to_migrate from node $source_idx to $target_idx)" {
+            assert_match "OK" [R $source_idx FLUSHALL SYNC]
+            assert_match "OK" [R $target_idx FLUSHALL SYNC]
+            assert_match "OK" [R $source_idx DEBUG SET-ACTIVE-EXPIRE 0]
+            assert_match "OK" [R $target_idx DEBUG SET-ACTIVE-EXPIRE 0]
+            populate 100 "$slot_to_migrate_tag:live:" 100 -$source_idx
+            populate 100 "$slot_to_migrate_tag:dead:" 100 -$source_idx false 0.1
+            # Only keys that expired more than one second before the fork are skipped
+            after 1200
+            # The expired keys are still in memory on the source
+            assert_match "200" [R $source_idx CLUSTER COUNTKEYSINSLOT $slot_to_migrate]
+
+            assert_match "OK" [R $source_idx CLUSTER MIGRATESLOTS SLOTSRANGE $slot_to_migrate $slot_to_migrate NODE $target_id]
+            set jobname [get_job_name $source_idx $slot_to_migrate]
+            wait_for_migration_field $source_idx $jobname state waiting-to-pause
+            assert_match "100" [R $target_idx CLUSTER COUNTKEYSINSLOT $slot_to_migrate]
+
+            # In import mode the skipped keys would be live again for an import source
+            assert_error "*Cannot enable import-mode*" {R $source_idx CONFIG SET import-mode yes}
+
+            # Cleanup for the next test
+            assert_match "OK" [R $source_idx DEBUG SET-ACTIVE-EXPIRE 1]
+            assert_match "OK" [R $target_idx DEBUG SET-ACTIVE-EXPIRE 1]
+            assert_match "OK" [R $source_idx FLUSHALL SYNC]
+            assert_match "OK" [R $target_idx FLUSHALL SYNC]
+            wait_for_migration_field $source_idx $jobname state failed
+            wait_for_migration_field $target_idx $jobname state failed
+
+            # With no export running, import-mode can be enabled again
+            assert_match "OK" [R $source_idx CONFIG SET import-mode yes]
+            assert_match "OK" [R $source_idx CONFIG SET import-mode no]
+        }
+
+        test "Failed CONFIG SET restores import-mode during an export (slot $slot_to_migrate from node $source_idx to $target_idx)" {
+            test_config_set [list R $source_idx] import-mode yes
+            assert_match "OK" [R $source_idx SET "$slot_to_migrate_tag:key" value]
+            assert_match "OK" [R $source_idx CLUSTER MIGRATESLOTS SLOTSRANGE $slot_to_migrate $slot_to_migrate NODE $target_id]
+            test_defer_fail "
+                catch {R $source_idx CLUSTER CANCELSLOTMIGRATIONS}
+                R $source_idx FLUSHALL SYNC
+                R $target_idx FLUSHALL SYNC
+            "
+            set jobname [get_job_name $source_idx $slot_to_migrate]
+            wait_for_migration_field $source_idx $jobname state waiting-to-pause
+
+            # The old value is put back even though an export is running
+            assert_error "*maxclients*" {R $source_idx CONFIG SET import-mode no maxclients 0}
+            assert_match "yes" [lindex [R $source_idx CONFIG GET import-mode] 1]
+
+            # A normal attempt to enable it is still rejected
+            assert_match "OK" [R $source_idx CONFIG SET import-mode no]
+            assert_error "*Cannot enable import-mode*" {R $source_idx CONFIG SET import-mode yes}
 
             # Cleanup for the next test
             assert_match "OK" [R $source_idx FLUSHALL SYNC]

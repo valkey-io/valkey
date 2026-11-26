@@ -443,7 +443,7 @@ int connTcpSocketIsClosing(connection *conn) {
         infolen < offsetof(struct tcp_info, tcpi_state) + sizeof(info.tcpi_state))
         return false; /* Cannot retrieve TCP info, or the state field was not returned. */
     return (info.tcpi_state == TCP_CLOSE_WAIT || info.tcpi_state == TCP_CLOSE);
-#elif defined(__APPLE__)
+#elif defined(__APPLE__) && defined(TCP_CONNECTION_INFO)
     struct tcp_connection_info info;
     socklen_t infolen = sizeof(info);
     if (getsockopt(conn->fd, IPPROTO_TCP, TCP_CONNECTION_INFO, &info, &infolen) != 0 ||

@@ -107,7 +107,10 @@ static bool findSingleSlotKeyDb(slotKeyCounts *key_counts) {
     serverDb *db;
     forEachCreatedDb(db) {
         if (!dbHasSlotKeys(db)) continue;
-        if (key_counts->single_db != NULL) return false;
+        if (key_counts->single_db != NULL) {
+            key_counts->single_db = NULL;
+            return false;
+        }
         key_counts->single_db = db;
     }
     return true;

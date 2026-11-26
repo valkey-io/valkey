@@ -5,6 +5,33 @@ source tests/support/cli.tcl
 # cluster creation is complicated with TLS, and the current tests don't really need that coverage
 tags {tls:skip external:skip cluster singledb} {
 
+test {valkey-cli rejects invalid cluster migration pipeline sizes} {
+    foreach pipeline {0 -5 abc 1junk 2147483648 4294967296 999999999999999999999999 {}} {
+        assert_error {*Invalid --cluster-pipeline*} {
+            exec $::VALKEY_CLI_BIN --cluster reshard 127.0.0.1:0 \
+                --cluster-pipeline $pipeline
+        }
+    }
+}
+
+test {valkey-cli rejects invalid cluster reshard slot counts} {
+    foreach slots {0 -5 abc 1junk 16385 20000 2147483648 4294967296 999999999999999999999999 {}} {
+        assert_error {*Invalid --cluster-slots*} {
+            exec $::VALKEY_CLI_BIN --cluster reshard 127.0.0.1:0 \
+                --cluster-slots $slots
+        }
+    }
+}
+
+test {valkey-cli accepts cluster reshard slot count boundaries} {
+    foreach slots {1 16384} {
+        assert_error {*Invalid arguments:*} {
+            exec $::VALKEY_CLI_BIN --cluster reshard 127.0.0.1:0 \
+                --cluster-slots $slots
+        }
+    }
+}
+
 set base_conf [list cluster-enabled yes cluster-node-timeout 1000]
 start_multiple_servers 3 [list overrides $base_conf] {
     test {Create 1 node cluster} {

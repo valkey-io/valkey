@@ -38,7 +38,7 @@
  * SPDX-License-Identifier: BSD-3-Clause
  */
 
-#include "server.h"
+#include "object_internals.h"
 #include "ordered_index.h"
 #include "hashtable.h"
 #include "eval.h"

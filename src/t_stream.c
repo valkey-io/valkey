@@ -163,7 +163,7 @@ robj *streamDup(robj *o) {
 
     serverAssert(objectGetType(o) == OBJ_STREAM);
 
-    switch (o->encoding) {
+    switch (objectGetEncoding(o)) {
     case OBJ_ENCODING_STREAM: sobj = createStreamObject(); break;
     default: serverPanic("Wrong encoding."); break;
     }

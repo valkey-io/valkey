@@ -60,6 +60,17 @@ bool streamCodecNeedsBoundedFramesForIntegrity(compressionAlgo algo) {
     }
 }
 
+bool streamCodecSupportsUncompressedBlocks(compressionAlgo algo) {
+    switch (algo) {
+    case ALGO_LZ4:
+        return true;
+    case ALGO_ZSTD:
+        return false;
+    default:
+        panic("Unsupported stream compression algorithm: %d", algo);
+    }
+}
+
 /* ===== Compressor ===== */
 
 /* Compressor lifecycle. Codec dispatch used by streamWriter and by the

@@ -222,6 +222,248 @@ tags {"aof external:skip logreqres:skip"} {
         }
     }
 
+    ## A zero-padded tail of the last AOF file is truncated if aof-load-truncated is yes
+    set zeros [string repeat "\x00" 152]
+    set half_cmd [string range [formatCommand set bar world] 0 end-8]
+
+    create_aof $aof_dirpath $aof_file {
+        append_to_aof [formatCommand set foo hello]
+        append_to_aof $zeros
+    }
+
+    start_server_aof [list dir $server_path aof-load-truncated yes] {
+        test "Zero-padded tail: Server should start and truncate it if load-truncated is yes" {
+            set client [valkey [srv host] [srv port] 0 $::tls]
+            wait_done_loading $client
+            assert_equal "hello" [$client get foo]
+            assert_equal [formatCommand set foo hello] [read_binary_file $aof_file]
+            verify_log_message 0 "*Truncating the AOF * at offset * dropping 152 bytes*" 0
+            verify_log_message 0 "*short read followed by zero padding*" 0
+            $client set bar world
+        }
+    }
+
+    start_server_aof [list dir $server_path aof-load-truncated no] {
+        test "Zero-padded tail: The write after the truncation is loaded" {
+            set client [valkey [srv host] [srv port] 0 $::tls]
+            wait_done_loading $client
+            assert_equal "hello" [$client get foo]
+            assert_equal "world" [$client get bar]
+        }
+    }
+
+    create_aof $aof_dirpath $aof_file {
+        append_to_aof [formatCommand set foo hello]
+        append_to_aof $zeros
+    }
+
+    start_server_aof_ex [list dir $server_path aof-load-truncated no] [list wait_ready false] {
+        test "Zero-padded tail: Server should fail to start if load-truncated is no" {
+            wait_for_log_messages 0 {"*Bad file format reading the append only file*"} 0 10 1000
+            assert_equal "[formatCommand set foo hello]$zeros" [read_binary_file $aof_file]
+        }
+    }
+
+    create_aof $aof_dirpath $aof_file {
+        append_to_aof [formatCommand set foo hello]
+        append_to_aof $zeros
+        append_to_aof "x"
+    }
+
+    start_server_aof_ex [list dir $server_path aof-load-truncated yes] [list wait_ready false] {
+        test "Zero-padded tail: Server should fail to start if non-zero data follows the zeros" {
+            wait_for_log_messages 0 {"*Bad file format reading the append only file*"} 0 10 1000
+            assert_equal "[formatCommand set foo hello]${zeros}x" [read_binary_file $aof_file]
+        }
+    }
+
+    create_aof $aof_dirpath $aof_file {
+        append_to_aof [formatCommand set foo hello]
+        append_to_aof "!!!"
+        append_to_aof $zeros
+    }
+
+    start_server_aof_ex [list dir $server_path aof-load-truncated yes] [list wait_ready false] {
+        test "Zero-padded tail: Server should fail to start if garbage precedes the zeros" {
+            wait_for_log_messages 0 {"*Bad file format reading the append only file*"} 0 10 1000
+            assert_equal "[formatCommand set foo hello]!!!$zeros" [read_binary_file $aof_file]
+        }
+    }
+
+    create_aof $aof_dirpath $aof_file {
+        append_to_aof [formatCommand set foo hello]
+        append_to_aof [formatCommand multi]
+        append_to_aof [formatCommand set bar world]
+        append_to_aof $zeros
+    }
+
+    start_server_aof [list dir $server_path aof-load-truncated yes] {
+        test "Zero-padded tail in MULTI: Discard incomplete transaction" {
+            set client [valkey [srv host] [srv port] 0 $::tls]
+            wait_done_loading $client
+            assert_equal "hello" [$client get foo]
+            assert_equal {} [$client get bar]
+            assert_equal [formatCommand set foo hello] [read_binary_file $aof_file]
+        }
+    }
+
+    create_aof $aof_dirpath $aof_file {
+        append_to_aof [formatCommand set foo hello]
+        append_to_aof $half_cmd
+        append_to_aof $zeros
+    }
+
+    start_server_aof [list dir $server_path aof-load-truncated yes] {
+        test "Zero-padded short read: Server should start and drop the incomplete command" {
+            set client [valkey [srv host] [srv port] 0 $::tls]
+            wait_done_loading $client
+            assert_equal "hello" [$client get foo]
+            assert_equal {} [$client get bar]
+            assert_equal [formatCommand set foo hello] [read_binary_file $aof_file]
+        }
+    }
+
+    # The padding must be longer than an annotation line buffer, otherwise the
+    # annotation reaches EOF and it is handled as a plain short read.
+    create_aof $aof_dirpath $aof_file {
+        append_to_aof [formatCommand set foo hello]
+        append_to_aof "#TS:17000"
+        append_to_aof [string repeat "\x00" 4096]
+    }
+
+    start_server_aof [list dir $server_path aof-load-truncated yes] {
+        test "Zero-padded torn annotation: Server should start and truncate it" {
+            set client [valkey [srv host] [srv port] 0 $::tls]
+            wait_done_loading $client
+            assert_equal "hello" [$client get foo]
+            assert_equal [formatCommand set foo hello] [read_binary_file $aof_file]
+            verify_log_message 0 "*short read followed by zero padding*" 0
+        }
+    }
+
+    create_aof $aof_dirpath $aof_file {
+        append_to_aof [formatCommand set foo hello]
+        append_to_aof "#TS:1700000000\r\n"
+        append_to_aof $half_cmd
+        append_to_aof $zeros
+    }
+
+    start_server_aof [list dir $server_path aof-load-truncated yes] {
+        test "Zero-padded short read after an annotation: Server should start and truncate it" {
+            set client [valkey [srv host] [srv port] 0 $::tls]
+            wait_done_loading $client
+            assert_equal "hello" [$client get foo]
+            assert_equal {} [$client get bar]
+            assert_equal [formatCommand set foo hello] [read_binary_file $aof_file]
+        }
+    }
+
+    ## A corrupt tail of the last AOF file is truncated if it is not larger than
+    ## aof-load-corrupt-tail-max-size
+    set corrupt_tail "!!![formatCommand set bar world][string repeat x 64]"
+
+    create_aof $aof_dirpath $aof_file {
+        append_to_aof [formatCommand set foo hello]
+        append_to_aof $corrupt_tail
+    }
+
+    start_server_aof [list dir $server_path aof-load-truncated no aof-load-corrupt-tail-max-size 4kb] {
+        test "Corrupt tail: Server should start and truncate it if it fits aof-load-corrupt-tail-max-size" {
+            set client [valkey [srv host] [srv port] 0 $::tls]
+            wait_done_loading $client
+            assert_equal "hello" [$client get foo]
+            assert_equal {} [$client get bar]
+            assert_equal [formatCommand set foo hello] [read_binary_file $aof_file]
+            verify_log_message 0 "*Truncating the AOF * dropping [string length $corrupt_tail] bytes*" 0
+            verify_log_message 0 "*not larger than aof-load-corrupt-tail-max-size*" 0
+            $client set bar world
+        }
+    }
+
+    start_server_aof [list dir $server_path aof-load-truncated no] {
+        test "Corrupt tail: The write after the truncation is loaded" {
+            set client [valkey [srv host] [srv port] 0 $::tls]
+            wait_done_loading $client
+            assert_equal "hello" [$client get foo]
+            assert_equal "world" [$client get bar]
+        }
+    }
+
+    create_aof $aof_dirpath $aof_file {
+        append_to_aof [formatCommand set foo hello]
+        append_to_aof $corrupt_tail
+    }
+
+    start_server_aof_ex [list dir $server_path aof-load-truncated yes aof-load-corrupt-tail-max-size 16] [list wait_ready false] {
+        test "Corrupt tail: Server should fail to start if it is larger than aof-load-corrupt-tail-max-size" {
+            wait_for_log_messages 0 {"*Bad file format reading the append only file*"} 0 10 1000
+            assert_equal "[formatCommand set foo hello]$corrupt_tail" [read_binary_file $aof_file]
+        }
+    }
+
+    ## Enabling aof-load-corrupt-tail-max-size while loading applies to the next load only
+    create_aof $aof_dirpath $aof_file {
+        for {set i 0} {$i < 4096} {incr i} {
+            append_to_aof [formatCommand incr foo]
+        }
+        append_to_aof "!!!"
+    }
+    set aof_content [read_binary_file $aof_file]
+
+    start_server_aof_ex [list dir $server_path aof-load-truncated no key-load-delay 1000] [list wait_ready false] {
+        test "Corrupt tail: Enabling aof-load-corrupt-tail-max-size while loading does not truncate" {
+            set client [valkey [srv host] [srv port] 0 $::tls]
+            wait_for_condition 100 50 {
+                [catch {$client config set aof-load-corrupt-tail-max-size 1gb}] == 0
+            } else {
+                fail "CONFIG SET failed while loading"
+            }
+            wait_for_log_messages 0 {"*Bad file format reading the append only file*"} 0 200 100
+            assert_equal $aof_content [read_binary_file $aof_file]
+        }
+    }
+
+    ## A corrupt tail of an AOF file that is not the last one is never truncated
+    set aof_file2 "$server_path/$aof_dirname/${aof_basename}.2$::incr_aof_suffix$::aof_format_suffix"
+
+    foreach {name tail} [list "Zero-padded tail" $zeros "Corrupt tail" $corrupt_tail] {
+        create_aof $aof_dirpath $aof_file {
+            append_to_aof [formatCommand set foo hello]
+            append_to_aof $tail
+        }
+
+        create_aof $aof_dirpath $aof_file2 {
+            append_to_aof [formatCommand set bar world]
+        }
+
+        create_aof_manifest $aof_dirpath $aof_manifest_file {
+            append_to_manifest "file appendonly.aof.1.incr.aof seq 1 type i\n"
+            append_to_manifest "file appendonly.aof.2.incr.aof seq 2 type i\n"
+        }
+
+        start_server_aof_ex [list dir $server_path aof-load-truncated yes aof-load-corrupt-tail-max-size 4kb] [list wait_ready false] {
+            test "$name: Server should fail to start if it is not in the last file" {
+                wait_for_log_messages 0 {"*Bad file format reading the append only file*"} 0 10 1000
+                assert_equal "[formatCommand set foo hello]$tail" [read_binary_file $aof_file]
+            }
+        }
+    }
+
+    file delete $aof_file2
+    create_aof_manifest $aof_dirpath $aof_manifest_file {
+        append_to_manifest "file appendonly.aof.1.incr.aof seq 1 type i\n"
+    }
+
+    start_server {} {
+        test "CONFIG SET/GET aof-load-corrupt-tail-max-size" {
+            assert_equal {aof-load-corrupt-tail-max-size 0} [r config get aof-load-corrupt-tail-max-size]
+            r config set aof-load-corrupt-tail-max-size 1mb
+            assert_equal {aof-load-corrupt-tail-max-size 1048576} [r config get aof-load-corrupt-tail-max-size]
+            assert_error "*argument must be a memory value*" {r config set aof-load-corrupt-tail-max-size -1}
+            r config set aof-load-corrupt-tail-max-size 0
+        }
+    }
+
     ## Test that SPOP (that modifies the client's argc/argv) is correctly free'd
     create_aof $aof_dirpath $aof_file {
         append_to_aof [formatCommand sadd set foo]

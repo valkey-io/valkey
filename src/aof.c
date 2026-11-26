@@ -1706,13 +1706,148 @@ loadCommandResult loadCommandFromArgv(client *fakeClient, robj **argv, int argc,
     return res;
 }
 
+/* Truncate the AOF file at 'offset' while loading it, and make sure
+ * server.aof_fd points to the new end of the file. Returns C_OK on success,
+ * or C_ERR after logging the reason. */
+static int aofTruncateLoadedFile(const char *filename, const char *aof_filepath, off_t offset) {
+    if (offset == -1) {
+        serverLog(LL_WARNING, "Last valid command offset is invalid");
+        return C_ERR;
+    }
+    if (truncate(aof_filepath, offset) == -1) {
+        serverLog(LL_WARNING, "Error truncating the AOF file %s: %s", filename, strerror(errno));
+        return C_ERR;
+    }
+    /* Make sure the AOF file descriptor points to the end of the
+     * file after the truncate call. */
+    if (server.aof_fd != -1 && lseek(server.aof_fd, 0, SEEK_END) == -1) {
+        serverLog(LL_WARNING, "Can't seek the end of the AOF file %s: %s", filename, strerror(errno));
+        return C_ERR;
+    }
+    return C_OK;
+}
+
+/* A reader over a FILE that stops at 'end', so the RESP parser sees the bytes
+ * from the current position up to 'end' as the whole input. */
+typedef struct aofBoundedReader {
+    FILE *fp;
+    off_t end;
+} aofBoundedReader;
+
+/* Like aofFileReader(), but never reads beyond r->end. A read that would
+ * cross r->end consumes the bytes up to r->end and fails. */
+static size_t aofBoundedRead(void *ctx, void *buf, size_t len) {
+    aofBoundedReader *r = ctx;
+    off_t pos = ftello(r->fp);
+    if (pos == -1 || pos >= r->end) return 0;
+    size_t avail = (size_t)(r->end - pos);
+    size_t want = len > avail ? avail : len;
+    return (fread(buf, 1, want, r->fp) == len) ? len : 0;
+}
+
+/* Like fgets(), but never reads at or beyond r->end. */
+static char *aofBoundedReadLine(void *ctx, char *buf, int size) {
+    aofBoundedReader *r = ctx;
+    off_t pos = ftello(r->fp);
+    if (pos == -1 || pos >= r->end || size < 2) return NULL;
+    if (size - 1 > r->end - pos) size = (int)(r->end - pos) + 1;
+    return fgets(buf, size, r->fp);
+}
+
+/* Return the offset right after the last non-NUL byte of fp in [start, end),
+ * 'start' if all the bytes in that range are NUL, or -1 on read error. */
+static off_t aofFindEndOfNonZeroData(FILE *fp, off_t start, off_t end) {
+    char buf[4096];
+    while (end > start) {
+        size_t len = (end - start < (off_t)sizeof(buf)) ? (size_t)(end - start) : sizeof(buf);
+        if (fseeko(fp, end - (off_t)len, SEEK_SET) == -1 || fread(buf, 1, len, fp) != len) return -1;
+        for (size_t i = len; i > 0; i--) {
+            if (buf[i - 1] != '\0') return end - (off_t)len + (off_t)i;
+        }
+        end -= (off_t)len;
+    }
+    return start;
+}
+
+/* Return 1 if the bytes of fp from 'offset' to 'file_size', once the NUL bytes
+ * at the end of the file are dropped, are empty or an incomplete command or
+ * annotation, that is a short read followed by zero padding. This is what a
+ * power loss can leave behind when the new file size reached the disk but the
+ * data did not (e.g. ext4 with data=writeback). Return 0 otherwise.
+ *
+ * 'offset' must be right after the last command that was loaded. The position
+ * of fp is restored before returning. */
+static int aofTailIsZeroPaddedShortRead(FILE *fp, off_t offset, off_t file_size) {
+    char buf[AOF_ANNOTATION_LINE_MAX_LEN];
+    int argc = 0, res = 0;
+    robj **argv = NULL;
+    respParseResult pr;
+    off_t saved_pos = ftello(fp);
+    if (saved_pos == -1) return 0;
+
+    off_t end = aofFindEndOfNonZeroData(fp, offset, file_size);
+    aofBoundedReader r = {fp, end};
+    if (end == -1) goto done;
+    if (end == offset) {
+        /* Only NUL bytes after the last command. */
+        res = 1;
+        goto done;
+    }
+
+    /* Parse [offset, end) again with the same rules as the main loop of
+     * loadSingleAppendOnlyFile(). Annotations don't move the offset of the
+     * last loaded command, so there may be complete ones to skip first. */
+    if (fseeko(fp, offset, SEEK_SET) == -1) goto done;
+    while (ftello(fp) < end) {
+        int ch = getc(fp);
+        if (ch == EOF) goto done;
+        if (ch != '#') {
+            ungetc(ch, fp);
+            break;
+        }
+        off_t line_start = ftello(fp);
+        if (aofBoundedReadLine(&r, buf, sizeof(buf)) == NULL) {
+            /* Only the '#' was written. */
+            res = 1;
+            goto done;
+        }
+        off_t line_end = ftello(fp);
+        if (line_end == -1 || line_start == -1) goto done;
+        if (line_end == end && buf[line_end - line_start - 1] != '\n') {
+            /* A torn annotation. */
+            res = 1;
+            goto done;
+        }
+    }
+
+    pr = parseRespCommandFromReader(aofBoundedRead, aofBoundedReadLine, &r, &argc, &argv);
+    if (pr == RESP_PARSE_OK) {
+        /* The same bytes failed to parse before, so this is not expected.
+         * Don't treat it as a short read. */
+        for (int j = 0; j < argc; j++) decrRefCount(argv[j]);
+        zfree(argv);
+    } else if (pr == RESP_PARSE_EOF && !ferror(fp) && ftello(fp) == end) {
+        /* The parser ran out of bytes at the end of the non-zero data. It
+         * also returns RESP_PARSE_EOF for a NUL byte inside a line, which
+         * is not a short read. */
+        res = 1;
+    }
+
+done:
+    if (fseeko(fp, saved_pos, SEEK_SET) == -1) res = 0;
+    return res;
+}
+
 /* Replay an append log file. On success AOF_OK or AOF_TRUNCATED is returned,
  * otherwise, one of the following is returned:
  * AOF_OPEN_ERR: Failed to open the AOF file.
  * AOF_NOT_EXIST: AOF file doesn't exist.
  * AOF_EMPTY: The AOF file is empty (nothing to load).
- * AOF_FAILED: Failed to load the AOF file. */
-int loadSingleAppendOnlyFile(char *filename) {
+ * AOF_FAILED: Failed to load the AOF file.
+ *
+ * 'last_file' is true if this is the last file in the manifest. Only the last
+ * file may have a corrupt tail truncated on a format error. */
+int loadSingleAppendOnlyFile(char *filename, int last_file) {
     struct client *fakeClient;
     struct valkey_stat sb;
     int old_aof_state = server.aof_state;
@@ -1721,6 +1856,11 @@ int loadSingleAppendOnlyFile(char *filename) {
     off_t valid_before_multi = 0; /* Offset before MULTI command loaded. */
     off_t last_progress_report_size = 0;
     int ret = AOF_OK;
+    /* CONFIG SET can run while loading, from processEventsWhileBlocked().
+     * valid_up_to is only tracked if one of these is enabled, so read them
+     * once: enabling one mid-load must not truncate at a stale offset. */
+    int load_truncated = server.aof_load_truncated;
+    off_t corrupt_tail_max_size = server.aof_load_corrupt_tail_max_size;
 
     sds aof_filepath = makePath(server.aof_dirname, filename);
     FILE *fp = fopen(aof_filepath, "r");
@@ -1824,7 +1964,13 @@ int loadSingleAppendOnlyFile(char *filename) {
 
         /* Read the next command into the fake client's argv. */
         respParseResult pr = parseRespCommandFromReader(aofFileReader, aofFileReadLine, fp, &argc, &argv);
-        if (pr == RESP_PARSE_EOF) goto readerr;
+        if (pr == RESP_PARSE_EOF) {
+            /* The parser also returns RESP_PARSE_EOF for a NUL byte inside a
+             * line, which looks like a line cut short. If the file did not
+             * actually end and could be read, that is a format error. */
+            if (!feof(fp) && !ferror(fp)) goto fmterr;
+            goto readerr;
+        }
         if (pr == RESP_PARSE_FMTERR) goto fmterr;
         if (pr == RESP_PARSE_OOM) goto oomerr;
 
@@ -1841,7 +1987,7 @@ int loadSingleAppendOnlyFile(char *filename) {
         }
         if (lr == LOAD_CMD_MULTI_START) valid_before_multi = valid_up_to;
 
-        if (server.aof_load_truncated) valid_up_to = ftello(fp);
+        if (load_truncated || corrupt_tail_max_size) valid_up_to = ftello(fp);
         if (server.key_load_delay) debugDelay(server.key_load_delay);
     }
 
@@ -1868,26 +2014,14 @@ uxeof: /* Unexpected AOF end of file. */
         serverLog(LL_WARNING, "Revert incomplete MULTI/EXEC transaction in AOF file %s", filename);
         valid_up_to = valid_before_multi;
     }
-    if (server.aof_load_truncated) {
+    if (load_truncated) {
         serverLog(LL_WARNING, "!!! Warning: short read while loading the AOF file %s!!!", filename);
         serverLog(LL_WARNING, "!!! Truncating the AOF %s at offset %llu !!!", filename,
                   (unsigned long long)valid_up_to);
-        if (valid_up_to == -1 || truncate(aof_filepath, valid_up_to) == -1) {
-            if (valid_up_to == -1) {
-                serverLog(LL_WARNING, "Last valid command offset is invalid");
-            } else {
-                serverLog(LL_WARNING, "Error truncating the AOF file %s: %s", filename, strerror(errno));
-            }
-        } else {
-            /* Make sure the AOF file descriptor points to the end of the
-             * file after the truncate call. */
-            if (server.aof_fd != -1 && lseek(server.aof_fd, 0, SEEK_END) == -1) {
-                serverLog(LL_WARNING, "Can't seek the end of the AOF file %s: %s", filename, strerror(errno));
-            } else {
-                serverLog(LL_WARNING, "AOF %s loaded anyway because aof-load-truncated is enabled", filename);
-                ret = AOF_TRUNCATED;
-                goto loaded_ok;
-            }
+        if (aofTruncateLoadedFile(filename, aof_filepath, valid_up_to) == C_OK) {
+            serverLog(LL_WARNING, "AOF %s loaded anyway because aof-load-truncated is enabled", filename);
+            ret = AOF_TRUNCATED;
+            goto loaded_ok;
         }
     }
     serverLog(
@@ -1900,6 +2034,33 @@ uxeof: /* Unexpected AOF end of file. */
     goto cleanup;
 
 fmterr: /* Format error. */
+    if (last_file) {
+        /* The corrupt tail runs from the last loaded command to the end of
+         * the file. An incomplete MULTI/EXEC is dropped with it. */
+        off_t truncate_at = fakeClient->flag.multi ? valid_before_multi : valid_up_to;
+        const char *reason = NULL;
+
+        if (load_truncated && valid_up_to != -1 &&
+            aofTailIsZeroPaddedShortRead(fp, valid_up_to, sb.st_size)) {
+            reason = "the tail is a short read followed by zero padding and aof-load-truncated is enabled";
+        } else if (corrupt_tail_max_size > 0 && truncate_at != -1 &&
+                   sb.st_size - truncate_at <= corrupt_tail_max_size) {
+            reason = "the corrupt tail is not larger than aof-load-corrupt-tail-max-size";
+        }
+
+        if (reason) {
+            if (fakeClient->flag.multi)
+                serverLog(LL_WARNING, "Revert incomplete MULTI/EXEC transaction in AOF file %s", filename);
+            serverLog(LL_WARNING, "!!! Warning: corrupt tail found while loading the AOF file %s !!!", filename);
+            serverLog(LL_WARNING, "!!! Truncating the AOF %s at offset %lld, dropping %lld bytes !!!", filename,
+                      (long long)truncate_at, (long long)(sb.st_size - truncate_at));
+            if (aofTruncateLoadedFile(filename, aof_filepath, truncate_at) == C_OK) {
+                serverLog(LL_WARNING, "AOF %s loaded anyway because %s", filename, reason);
+                ret = AOF_TRUNCATED;
+                goto loaded_ok;
+            }
+        }
+    }
     serverLog(LL_WARNING,
               "Bad file format reading the append only file %s: "
               "make a backup of your AOF file, then use ./valkey-check-aof --fix <filename.manifest>",
@@ -1976,7 +2137,7 @@ int loadAppendOnlyFiles(aofManifest *am) {
         base_size = getAppendOnlyFileSize(aof_name, NULL);
         last_file = ++aof_num == total_num;
         start = ustime();
-        ret = loadSingleAppendOnlyFile(aof_name);
+        ret = loadSingleAppendOnlyFile(aof_name, last_file);
         if (ret == AOF_OK || (ret == AOF_TRUNCATED && last_file)) {
             serverLog(LL_NOTICE, "DB loaded from base file %s: %.3f seconds", aof_name,
                       (float)(ustime() - start) / 1000000);
@@ -2006,7 +2167,7 @@ int loadAppendOnlyFiles(aofManifest *am) {
             updateLoadingFileName(aof_name);
             last_file = ++aof_num == total_num;
             start = ustime();
-            ret = loadSingleAppendOnlyFile(aof_name);
+            ret = loadSingleAppendOnlyFile(aof_name, last_file);
             if (ret == AOF_OK || (ret == AOF_TRUNCATED && last_file)) {
                 serverLog(LL_NOTICE, "DB loaded from incr file %s: %.3f seconds", aof_name,
                           (float)(ustime() - start) / 1000000);

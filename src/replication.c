@@ -2982,6 +2982,21 @@ void bufferReplData(connection *conn) {
 }
 
 /* Replication: Replica side.
+ * While the local buffer is streamed into the DB the primary client has no
+ * read handler, so a dropped connection is only noticed when the progress
+ * callback's write to it fails. When that happens the rest of the buffer is
+ * discarded and the sync is aborted, the same way the transfer is aborted when
+ * the main channel is lost while buffering (see readIntoReplDataBlock). The
+ * replica can't complete or acknowledge the sync without the link, and it
+ * resyncs once it reconnects. */
+static int primaryConnBrokenWhileStreaming(client *c) {
+    if (!c->conn || connGetState(c->conn) == CONN_STATE_CONNECTED) return 0;
+    dualChannelServerLog(LL_WARNING, "Primary connection lost while streaming local replication buffer: %s",
+                         connGetLastError(c->conn));
+    return 1;
+}
+
+/* Replication: Replica side.
  * Streams accumulated replication data into the database while freeing read nodes */
 int streamReplDataBufToDb(client *c) {
     serverAssert(c->flag.primary);
@@ -3000,6 +3015,10 @@ int streamReplDataBufToDb(client *c) {
         offset += used;
         listDelNode(server.pending_repl_data.blocks, cur);
         replStreamProgressCallback(offset, used, &last_progress_callback);
+        if (!server.pending_repl_data.blocks || primaryConnBrokenWhileStreaming(c)) {
+            blockingOperationEnds();
+            return C_ERR;
+        }
     }
     blockingOperationEnds();
     if (!server.pending_repl_data.blocks) {
@@ -3024,7 +3043,7 @@ void dualChannelSyncSuccess(void) {
         /* Verify sync is still in progress */
         if (server.repl_rdb_channel_state != REPL_DUAL_CHANNEL_STATE_NONE) {
             replicationAbortDualChannelSyncTransfer();
-            replicationUnsetPrimary();
+            freeClientAsync(server.primary);
         }
         return;
     }

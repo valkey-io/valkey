@@ -4182,7 +4182,7 @@ ValkeyModuleKey *VM_OpenKey(ValkeyModuleCtx *ctx, robj *keyname, int mode) {
     }
 
     /* Setup the key handle. */
-    kp = zmalloc(sizeof(*kp));
+    kp = zcalloc(sizeof(*kp));
     moduleInitKey(kp, ctx, keyname, value, mode);
     autoMemoryAdd(ctx, VALKEYMODULE_AM_KEY, kp);
     return kp;

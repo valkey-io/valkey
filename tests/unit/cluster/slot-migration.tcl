@@ -1213,10 +1213,18 @@ start_cluster 3 5 {tags {tls:skip external:skip cluster} overrides {cluster-allo
         # R6 becomes a primary of another shard, first at a lower epoch than
         # R7's, then at a newer one. R7 is in another shard by then, so the
         # migration stays with R7.
+        # Each claim goes on its own connection, so wait for R3 to apply the
+        # first one before sending the second.
         set E_hi [expr {$E7 + 5}]
-        foreach e [list $E6 $E_hi] {
-            send_cluster_packet [srv -3 port] [create_primary_ping $R6_id $R6_port $R6_cport $e $e $new_shard_id]
+        send_cluster_packet [srv -3 port] [create_primary_ping $R6_id $R6_port $R6_cport $E6 $E6 $new_shard_id]
+        wait_for_condition 1000 10 {
+            [cluster_has_flag [cluster_get_node_by_id 3 $R6_id] master] &&
+            [node_shard_id 3 $R6_id] eq $new_shard_id
+        } else {
+            fail "R3 did not record R6 as a primary of its new shard"
         }
+        assert_equal "\[609->-$R7_id\]" [get_open_slots 3]
+        send_cluster_packet [srv -3 port] [create_primary_ping $R6_id $R6_port $R6_cport $E_hi $E_hi $new_shard_id]
         wait_for_condition 1000 10 {
             [dict get [cluster_get_node_by_id 3 $R6_id] config_epoch] == $E_hi &&
             [node_shard_id 3 $R6_id] eq $new_shard_id

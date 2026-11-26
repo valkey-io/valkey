@@ -4546,6 +4546,9 @@ void commandProcessed(client *c) {
                  * of the client is the one the proxied stream ends in. */
                 replicationFeedStreamFromSlotImport(c->repl_data->repl_applied_dbid, c->db->id, stream, applied);
                 c->repl_data->repl_applied_dbid = c->db->id;
+                /* The imported writes are now covered by primary_repl_offset:
+                 * stamp what postExecutionUnitOperations() left pending. */
+                if (server.bio_aof_offload_enabled && server.execution_nesting == 0) replyBlockingStampExecutionUnit();
             } else {
                 replicationFeedStreamFromPrimaryStream(stream, applied);
             }

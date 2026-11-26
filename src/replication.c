@@ -1077,6 +1077,10 @@ void replicationFeedStreamFromSlotImport(int start_dbid, int end_dbid, char *buf
         replicationFeedSelectDb(start_dbid);
         feedReplicationBuffer(buf, buflen);
         server.replicas_eldb = end_dbid;
+    } else if (server.aof_state != AOF_OFF) {
+        /* As in replicationFeedReplicas(): without a backlog the offset still
+         * advances, since AOF fsyncs (and reply blocking) are tracked by it. */
+        server.primary_repl_offset += 1;
     }
 }
 

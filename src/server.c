@@ -4137,10 +4137,8 @@ void postExecutionUnitOperations(void) {
          * propagatePendingCommands() so the offset is final.
          * hasPostExecutionUnitPendingWork() accounts for them, so this is never
          * skipped by the gate above. */
-        if (server.bio_aof_offload_enabled) {
-            stampPendingUncommittedData(server.primary_repl_offset);
-            replyBlockingStampPlaceholderResponses(server.primary_repl_offset);
-            certifyPendingDeferredTasks();
+        if (server.bio_aof_offload_enabled && !replyBlockingIsSlotImportRunning()) {
+            replyBlockingStampExecutionUnit();
         }
 
         /* Module subsystem post-execution-unit logic */

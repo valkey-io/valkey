@@ -463,6 +463,24 @@ static inline int isCommandReplicatedToMonitors(void) {
     return listLength(server.monitors) && !server.loading;
 }
 
+/* Give the keys, databases, held replies and deferred tasks of the execution
+ * unit that just ended their final offset, once it has propagated. */
+void replyBlockingStampExecutionUnit(void) {
+    stampPendingUncommittedData(server.primary_repl_offset);
+    replyBlockingStampPlaceholderResponses(server.primary_repl_offset);
+    certifyPendingDeferredTasks();
+}
+
+/* True while a command of a slot import client runs. Its writes reach the AOF
+ * but not the replication stream: commandProcessed() proxies the import
+ * stream afterwards, and only then does primary_repl_offset cover them. So
+ * the unit is stamped there, after the stream is fed, not at the
+ * end of the command, when the offset would still be the pre-import one. */
+bool replyBlockingIsSlotImportRunning(void) {
+    client *c = server.current_client;
+    return c != NULL && c->slot_migration_job != NULL && isImportSlotMigrationJob(c->slot_migration_job);
+}
+
 /* Set the real offset on replies held at the LLONG_MAX placeholder. Called
  * once the execution unit has propagated. Placeholders are always the newest
  * held response of a client, so only the tail of each list is visited. */

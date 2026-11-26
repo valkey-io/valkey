@@ -3321,6 +3321,12 @@ static void clusterRepairMigrationTargetsOfPrimary(clusterNode *sender, uint64_t
         if (bitmapTestBit(slots, j)) continue;
         clusterNode *mn = dictGetVal(de);
         if (!isMigrationTargetRepairNeeded(mn, sender, senderConfigEpoch)) continue;
+        /* In a shard without slots, a higher epoch does not show that the
+         * old target lost the shard: a stale primary's epoch can rise without
+         * a failover (CLUSTER BUMPEPOCH, an import, epoch collision handling),
+         * and nothing demotes the old target then. Only move the migration
+         * away from a target that we know is gone. */
+        if (!nodeIsReplica(mn) && !nodeFailed(mn)) continue;
         serverLog(LL_VERBOSE,
                   "Failover occurred in migration target."
                   " Slot %d is now being migrated to node %.40s (%s) in shard %.40s.",
@@ -3844,8 +3850,10 @@ static char *getLoadableIpExtension(char *value, int af) {
 /* We previously validated the extensions, so this function just needs to
  * handle the extensions. Returns 1 if the link is still valid after
  * processing, or 0 if the link was freed due to invalid data. */
-int clusterProcessPingExtensions(clusterMsg *hdr, clusterLink *link) {
-    clusterNode *sender = link->node ? link->node : clusterLookupNode(hdr->sender, CLUSTER_NAMELEN);
+/* 'sender' is the node clusterProcessPacket() resolved for the message. It can
+ * differ from link->node: an inbound link can stay bound to a handshake node
+ * after the peer became known through another link. */
+int clusterProcessPingExtensions(clusterMsg *hdr, clusterLink *link, clusterNode *sender) {
     char *ext_hostname = NULL;
     char *ext_humannodename = NULL;
     char *ext_availability_zone = NULL;
@@ -4872,7 +4880,7 @@ int clusterProcessPacket(clusterLink *link) {
         /* Get info from the gossip section */
         if (sender) {
             if (!clusterProcessGossipSection(msg, link)) return 0;
-            if (!clusterProcessPingExtensions(msg, link)) return 0;
+            if (!clusterProcessPingExtensions(msg, link, sender)) return 0;
         }
 
         /* A primary that owns no slots (e.g. in an empty shard) can take over

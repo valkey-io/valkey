@@ -48,6 +48,7 @@ proc clean_persistence config {
     set aof_dirpath [format "%s/%s" $dir $aofdir]
     clean_aof_persistence $aof_dirpath
     catch {exec rm -rf $rdb}
+    catch {exec rm -f [format "%s/%s" $dir "nodes.conf"]}
 }
 
 # config is actually a srv

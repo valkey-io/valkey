@@ -730,6 +730,26 @@ foreach type {single multiple single_multiple} {
         assert_equal 0 [r exists setres{t}]
     }
 
+    test "SUNIONSTORE result encoding follows the result size" {
+        r del set1{t} set2{t} setres{t}
+
+        # The largest input fits in an intset, so the result stays an intset.
+        for {set i 0} {$i < 300} {incr i} { r sadd set1{t} $i }
+        for {set i 200} {$i < 500} {incr i} { r sadd set2{t} $i }
+        assert_equal 500 [r sunionstore setres{t} set1{t} set2{t}]
+        assert_encoding intset setres{t}
+
+        # The largest input is bigger than an intset or a listpack can hold.
+        r del set1{t} set2{t}
+        for {set i 0} {$i < 600} {incr i} { r sadd set1{t} $i }
+        r sadd set2{t} a b 0
+        assert_encoding hashtable set1{t}
+        assert_equal 602 [r sunionstore setres{t} set1{t} set2{t}]
+        assert_encoding hashtable setres{t}
+        assert_equal 1 [r sismember setres{t} a]
+        assert_equal 1 [r sismember setres{t} 599]
+    }
+
     foreach {type contents} {listpack {a b c} intset {1 2 3}} {
         test "SPOP basics - $type" {
             create_set myset $contents

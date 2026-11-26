@@ -132,6 +132,8 @@ The commit protocol follows the PacificA framework. A **sync replica** is a repl
 
 **Durability configuration**
 
+These settings and their names are pending (see [Durability settings](#durability-settings) in Open Questions).
+
 Two settings are configured on each node. Only the current primary's values take effect: replicas' values are ignored until they are promoted, and a newly promoted primary applies its own values. Set the same values on every node in a shard, so behavior doesn't change after a failover:
 
 | Setting | Meaning |
@@ -515,6 +517,8 @@ Cluster V2, the new durable, Raft-based cluster bus, is specified in its own des
 * **Slot ownership and migration fencing.** Slot assignments and migration fences are committed to the cluster bus, so two shards can never own a slot at once. This removes the slot migration rollback scenario described in the background section.  
 * **Self-contained.** It runs on the Valkey nodes, with no external coordination service.
 
+The shard configuration can live in any strongly consistent store that supports compare-and-set. This design uses Cluster V2.
+
 # Consistency and Durability Properties
 
 | Property | Guarantee |
@@ -648,6 +652,10 @@ Modules get a generic way to learn when writes become durable, and to tell the c
 4. **Module notifications.** On a write-ahead replica, should module keyspace notifications fire when a write is logged or when it is applied?  
 5. **Log persistence.** With `appendfsync always`, a write-ahead replica must have its log on disk before it acknowledges. Is that log the AOF or a separate file? Whatever the answer, a replica that restarts from it follows the write-ahead restart rule (Restarts in section 5): it applies its log only up to its last applied offset until a `REPLCONF COMMIT` in the same replication history passes the rest, it answers reads with `-LOADING` until such a `COMMIT` passes its applied offset (section 2), and it keeps its incarnation only if the restored log covers every write it acknowledged (section 6).  
 6. **Linearizable reads on write-ahead replicas.** A read lease promises that the primary commits no write without the replica's acknowledgement, so every write committed before a read arrives is in the replica's log. The replica may not know that the write has committed, because its committed offset trails the primary's. Waiting until the replica has applied up to the committed offset it knows is therefore not enough: the primary can commit a write and reply to its client before the replica's `REPLCONF COMMIT` arrives, and a read on the replica would then miss the write. One option is dirty key tracking over the log instead of over the keyspace. None of this is decided, and the Lean proof doesn't cover it.
+
+## Durability settings
+
+Whether `min-sync-replicas`, `target-sync-replicas` and the replica settings are per node, as section 2 describes, or shard- or cluster-wide values stored in Cluster V2 (for example `CLUSTER CONFIG min-sync-replicas 1 target-sync-replicas 2`). Per-node values have to be set the same on every node, and a failover can change them. Cluster-wide values avoid both, but need a way to set them after the cluster starts. Whether one cluster can mix durable and non-durable shards follows from this choice. The setting names are also still open.
 
 # Future Work
 

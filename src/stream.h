@@ -23,12 +23,8 @@ typedef struct stream {
     uint64_t entries_added;        /* All time count of elements added. */
 } stream;
 
-/* We define an iterator to iterate stream items in an abstract way, without
- * caring about the radix tree + listpack representation. Technically speaking
- * the iterator is only used inside streamReplyWithRange(), so could just
- * be implemented inside the function, but practically there is the AOF
- * rewriting code that also needs to iterate the stream to emit the XADD
- * commands. */
+/* Iterate stream items without exposing the radix tree and listpack layout.
+ * Used by stream replies, AOF rewriting, and forward searches for sparse IDs. */
 typedef struct streamIterator {
     stream *stream;                      /* The stream we are iterating. */
     streamID primary_id;                 /* ID of the primary entry at listpack head. */
@@ -50,6 +46,37 @@ typedef struct streamIterator {
     unsigned char field_buf[LP_INTBUF_SIZE];
     unsigned char value_buf[LP_INTBUF_SIZE];
 } streamIterator;
+
+/* Borrowed entry returned by streamForwardIteratorFind. Valid until the next
+ * Find or Stop, provided the stream is not modified. Read fields through
+ * streamForwardEntryNextField, which advances the iterator's shared cursor; the
+ * remaining members are private state. */
+typedef struct streamForwardEntry {
+    streamID id;
+    int64_t numfields;
+    int64_t fields_left;
+    streamIterator *cursor;
+} streamForwardEntry;
+
+/* Forward searches for sparse, strictly increasing IDs in an immutable stream.
+ * Keep the iterator at the same address between Start and Stop: its entry
+ * points back to the iterator's stream cursor.
+ * si.ri.rt is NULL until the first Find initializes the stream cursor.
+ * entry caches a live entry, possibly beyond the last requested target.
+ * next_ri tracks the successor of node_primary_id; when has_next_node is set,
+ * next_primary_id bounds that node's listpack without scanning its last entry. */
+typedef struct streamForwardIterator {
+    streamIterator si;
+    raxIterator next_ri;
+    streamForwardEntry entry;
+    streamID node_primary_id;
+    streamID next_primary_id;
+    streamID last_target;
+    int has_last_target;
+    int has_entry;
+    int has_node_bound;
+    int has_next_node;
+} streamForwardIterator;
 
 /* Consumer group. */
 typedef struct streamCG {
@@ -135,6 +162,14 @@ void streamIteratorGetField(streamIterator *si,
                             int64_t *valuelen);
 void streamIteratorRemoveEntry(streamIterator *si, streamID *current);
 void streamIteratorStop(streamIterator *si);
+void streamForwardIteratorStart(streamForwardIterator *xi, stream *s, streamID *start);
+streamForwardEntry *streamForwardIteratorFind(streamForwardIterator *xi, streamID *target);
+void streamForwardIteratorStop(streamForwardIterator *xi);
+int streamForwardEntryNextField(streamForwardEntry *entry,
+                                unsigned char **fieldptr,
+                                unsigned char **valueptr,
+                                int64_t *fieldlen,
+                                int64_t *valuelen);
 streamCG *streamLookupCG(stream *s, sds groupname);
 streamConsumer *streamLookupConsumer(streamCG *cg, sds name);
 streamConsumer *streamCreateConsumer(streamCG *cg, sds name, robj *key, int dbid, int flags);

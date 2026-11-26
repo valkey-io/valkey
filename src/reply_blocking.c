@@ -1,6 +1,7 @@
 #include "server.h"
 #include "zmalloc.h"
 #include "script.h"
+#include "forkless.h"
 #include <stdatomic.h>
 
 /* Forward declarations from module.h to avoid pulling in full module internals
@@ -1047,8 +1048,41 @@ void replyBlockingClearDatasetState(void) {
 
 /* Clear the reply-blocking attributes specific to the primary.
  * Invoked when a primary node becomes a replica. */
-void replyBlockingClearPrimaryState(void) {
+/* On demotion, nothing past the durable offset may reach anyone: the new
+ * primary does not have it, and a crash would lose it. Held replies are
+ * dropped with their clients (replyBlockingResetPrimaryState()). The rest is
+ * handled here: replicas were held at the durable offset, but as a replica we
+ * no longer cap what they are sent, so disconnect them, and cancel a forkless
+ * sync that waits for the durable offset before its EOF. They resync once we
+ * are connected to the new primary. A client a module blocked on a keyspace
+ * event holds its reply in the deferred buffer, not on clients_waiting_ack,
+ * so it is dropped here too. */
+static void dropUndurableTailOnDemotion(void) {
+    long long durable = getDurablyCommittedOffset();
+    if (durable >= server.primary_repl_offset) return;
+    serverLog(LL_NOTICE,
+              "Demoted with writes not durable yet (durable offset %lld, replication offset %lld): "
+              "disconnecting replicas",
+              durable, server.primary_repl_offset);
+    forklessSaveCancelReplicaSync();
+    disconnectReplicas();
+
+    listIter li;
+    listNode *ln;
+    listRewind(server.clients, &li);
+    while ((ln = listNext(&li))) {
+        client *c = listNodeValue(ln);
+        if (c->reply_blocking_state.deferred_block_offset > durable) {
+            c->reply_blocking_state.deferred_block_offset = -1;
+            server.reply_blocking.clients_disconnected_before_unblocking++;
+            freeClientAsync(c);
+        }
+    }
+}
+
+void replyBlockingClearPrimaryState(bool was_primary) {
     if (!isReplyBlockingEnabled()) return;
+    if (was_primary) dropUndurableTailOnDemotion();
     replyBlockingResetPrimaryState(true);
     /* Our offset now follows the new primary and may drop below the acked
      * watermark, which would then never be exceeded after a re-promotion. */

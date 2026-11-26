@@ -281,6 +281,9 @@ static int waitForDurableCutOffset(forklessSaveInfo *saveInfo, bool *terminated)
         }
         usleep(1000);
     }
+    /* A cancel (e.g. on demotion) can come with a durable offset of
+     * LLONG_MAX, which ends the loop above before it sees the cancel. */
+    if (forklessSaveShouldAbort(&saveInfo->save_rio)) *terminated = true;
     return C_OK;
 }
 
@@ -859,6 +862,14 @@ void forklessSaveCancel(void) {
         currentForklessSave->cancel_requested = true;
         pthread_mutex_unlock(&forkless_rename_mutex);
     }
+}
+
+/* Cancels the running forkless save if it streams to replicas. */
+void forklessSaveCancelReplicaSync(void) {
+    serverAssert(onServerMainThread());
+    if (currentForklessSave == NULL || currentForklessSave->write_target != RDB_WRITE_TARGET_SOCKET) return;
+    serverLog(LL_NOTICE, "forkless-save: cancelling the replica sync");
+    forklessSaveCancel();
 }
 
 int isForklessSaveInProgress(void) {

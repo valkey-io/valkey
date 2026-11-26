@@ -191,7 +191,7 @@ void replyBlockingCleanup(void);
 void replyBlockingReset(void);
 void replyBlockingClientInit(struct client *c);
 void replyBlockingClientReset(struct client *c);
-void replyBlockingClearPrimaryState(void);
+void replyBlockingClearPrimaryState(bool was_primary);
 void replyBlockingClearDatasetState(void);
 
 /* Command processing hooks for offset and COB tracking */

@@ -9,6 +9,7 @@
 int forklessSaveToDisk(const char *filename);
 int forklessSaveToSockets(int req, int rdbver);
 void forklessSaveCancel(void);
+void forklessSaveCancelReplicaSync(void);
 int isForklessSaveInProgress(void);
 sds forkless_catInfo(sds info);
 sds forkless_catDebugInfo(sds info);

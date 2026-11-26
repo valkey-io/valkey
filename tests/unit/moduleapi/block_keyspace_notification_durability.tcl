@@ -149,3 +149,30 @@ start_server {tags {"modules durability"} overrides {appendonly yes appendfsync 
         }
     }
 }
+
+start_server {tags {"modules durability"} overrides {appendonly yes appendfsync always bio-aof-offload-enabled yes}} {
+    r module load $testmodule
+
+    test "A KSN-blocked write is not acknowledged after the primary is demoted" {
+        wait_for_blocked_clients_count 0
+        r DEBUG reply-blocking-pause aof
+        set rd [valkey_deferring_client]
+        # With the redirect capability, the client is left
+        # blocked by the demotion and later unblocked by the module.
+        $rd client capa redirect
+        $rd read
+        $rd hset ksn:dem f v
+        wait_for_blocked_clients_count 1
+        r replicaof 127.0.0.1 1
+        # The module unblocks the client after ~1s.
+        after 1500
+        set fd [$rd channel]
+        fconfigure $fd -blocking 0
+        set got [read $fd]
+        fconfigure $fd -blocking 1
+        assert_no_match {*:1*} $got
+        r replicaof no one
+        r DEBUG reply-blocking-resume aof
+        catch {$rd close}
+    }
+}

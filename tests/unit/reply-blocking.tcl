@@ -3030,3 +3030,69 @@ start_server {tags {"repl durability external:skip"} overrides {appendonly yes a
         }
     }
 }
+
+start_server {tags {"repl durability external:skip"} overrides {appendonly yes appendfsync always bio-aof-offload-enabled yes}} {
+    set primary [srv 0 client]
+    set primary_host [srv 0 host]
+    set primary_port [srv 0 port]
+    start_server {} {
+        set replica [srv 0 client]
+        test "A demoted primary does not send its replicas writes that are not durable" {
+            $replica replicaof $primary_host $primary_port
+            wait_for_condition 100 50 {[s 0 master_link_status] eq {up}} else {fail "replica did not sync"}
+            wait_for_ofs_sync $primary $replica
+            # Stop the replica so durable writes queue up in its output and its
+            # write handler stays installed.
+            set replica_pid [srv 0 pid]
+            pause_process $replica_pid
+            set big [string repeat x 100000]
+            for {set i 0} {$i < 50} {incr i} { $primary set dem:fill:$i $big }
+            wait_for_condition 50 20 {
+                [getInfoProperty [$primary info debug] reply_blocking_clients_waiting_ack] == 0
+            } else {
+                fail "filler writes were not acked"
+            }
+            $primary debug reply-blocking-pause aof
+            set w [valkey_deferring_client -1]
+            $w set dem:k not-durable
+            # Demote to a primary that does not exist, so the replica cannot
+            # resync from us afterwards.
+            $primary replicaof 127.0.0.1 1
+            resume_process $replica_pid
+            after 1500
+            assert_equal {} [$replica get dem:k]
+            $primary debug reply-blocking-resume aof
+            $primary replicaof no one
+            catch {$w close}
+        }
+    }
+}
+
+start_server {tags {"repl durability external:skip"} overrides {appendonly yes appendfsync always bio-aof-offload-enabled yes forkless-infrastructure-enabled yes forkless-policy prefer-forkless repl-diskless-sync yes repl-diskless-sync-delay 0 save ""}} {
+    set primary [srv 0 client]
+    set primary_host [srv 0 host]
+    set primary_port [srv 0 port]
+    start_server {} {
+        set replica [srv 0 client]
+        test "Demotion cancels a forkless sync that waits for the durable offset" {
+            $primary debug populate 1000
+            $primary debug reply-blocking-pause aof
+            set w [valkey_deferring_client -1]
+            $w set dem:forkless not-durable
+            wait_for_condition 50 100 {
+                [getInfoProperty [$primary info debug] reply_blocking_clients_waiting_ack] == 1
+            } else {
+                fail "write was not held"
+            }
+            $replica replicaof $primary_host $primary_port
+            wait_for_log_messages -1 {"*waiting for offset * to be durable before the RDB EOF*"} 0 100 50
+            $primary replicaof 127.0.0.1 1
+            after 1500
+            assert_equal {} [$replica get dem:forkless]
+            assert_match {*master_link_status:down*} [$replica info replication]
+            $primary debug reply-blocking-resume aof
+            $primary replicaof no one
+            catch {$w close}
+        }
+    }
+}

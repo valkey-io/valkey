@@ -271,7 +271,7 @@ size_t reqresAppendResponse(client *c) {
     FILE *fp = fopen(server.req_res_logfile, "a");
     serverAssert(fp);
     fwrite(c->reqres.buf, c->reqres.used, 1, fp);
-    fclose(fp);
+    if (fclose(fp)) serverLog(LL_WARNING, "Failed to close req/res log file: %s", strerror(errno));
 
     return ret;
 }

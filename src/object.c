@@ -1346,13 +1346,9 @@ size_t objectComputeSize(robj *key, robj *o, size_t sample_size, int dbid) {
     } else if (objectGetType(o) == OBJ_LIST) {
         if (objectGetEncoding(o) == OBJ_ENCODING_QUICKLIST) {
             quicklist *ql = objectGetVal(o);
-            quicklistNode *node = ql->head;
-            asize += sizeof(quicklist);
-            do {
-                elesize += sizeof(quicklistNode) + zmalloc_size(node->entry);
-                samples++;
-            } while ((node = node->next) && samples < sample_size);
-            asize += (double)elesize / samples * ql->len;
+            size_t usage = quicklistMemUsage(ql);
+            debugServerAssert(usage == quicklistMemUsageDebug(ql));
+            asize += usage;
         } else if (objectGetEncoding(o) == OBJ_ENCODING_LISTPACK) {
             asize += zmalloc_size(objectGetVal(o));
         } else {
@@ -1925,6 +1921,7 @@ void memoryCommand(client *c) {
             "USAGE <key> [SAMPLES <count>]",
             "    Return memory in bytes used by <key> and its value. Nested values are",
             "    sampled up to <count> times (default: 5, 0 means sample all).",
+            "    Lists are always counted exactly, so SAMPLES does not change their result.",
             NULL,
         };
         addReplyHelp(c, help);

@@ -25,8 +25,8 @@ extern bool large_memory;
 size_t testOnlyQuicklistNodeNegFillLimit(int fill);
 quicklistNode *testOnlyQuicklistCreateNode(void);
 quicklistNode *testOnlyQuicklistCreateNodeWithValue(int container, void *value, size_t sz);
-int testOnlyQuicklistCompressNode(quicklistNode *node);
-int testOnlyQuicklistDecompressNode(quicklistNode *node);
+int testOnlyQuicklistCompressNode(quicklist *quicklist, quicklistNode *node);
+int testOnlyQuicklistDecompressNode(quicklist *quicklist, quicklistNode *node);
 int testOnlyQuicklistNodeAllowMerge(const quicklistNode *a, const quicklistNode *b, int fill);
 }
 
@@ -170,11 +170,23 @@ static int _ql_verify_compress(quicklist *ql) {
     return errors;
 }
 
+/* Verify that the O(1) memory counter matches a full walk of the nodes. */
+static int _ql_verify_mem(quicklist *ql) {
+    size_t fast = quicklistMemUsage(ql);
+    size_t slow = quicklistMemUsageDebug(ql);
+    if (fast != slow) {
+        printf("quicklist memory usage wrong: counter %zu, walk %zu", fast, slow);
+        return 1;
+    }
+    return 0;
+}
+
 /* Verify list metadata matches physical list contents. */
 static int _ql_verify(quicklist *ql, uint32_t len, uint32_t count, uint32_t head_count, uint32_t tail_count) {
     int errors = 0;
 
     ql_info(ql);
+    errors += _ql_verify_mem(ql);
     if (len != ql->len) {
         printf("quicklist length wrong: expected %d, got %lu", len, ql->len);
         errors++;
@@ -230,7 +242,7 @@ static void ql_release_iterator(quicklistIter *iter) {
     quicklist *ql = nullptr;
     if (iter) ql = iter->quicklist;
     quicklistReleaseIterator(iter);
-    if (ql && _ql_verify_compress(ql)) {
+    if (ql && (_ql_verify_compress(ql) || _ql_verify_mem(ql))) {
         abort();
     }
 }
@@ -1734,6 +1746,9 @@ TEST_F(QuicklistTest, quicklistCompressAndDecompressQuicklistListpackNode) {
 
     quicklistNode *node = testOnlyQuicklistCreateNode();
     node->entry = lpNew(0);
+    /* The node is not linked in a list. 'scratch' only receives the memory
+     * counter updates of the compress and decompress calls. */
+    quicklist *scratch = quicklistCreate();
 
     /* Just to avoid triggering the assertion in __quicklistCompressNode(),
      * it disables the passing of quicklist head or tail node. */
@@ -1751,8 +1766,8 @@ TEST_F(QuicklistTest, quicklistCompressAndDecompressQuicklistListpackNode) {
         node->sz = lpBytes(node->entry);
 
         long long start = mstime();
-        ASSERT_TRUE(testOnlyQuicklistCompressNode(node));
-        ASSERT_TRUE(testOnlyQuicklistDecompressNode(node));
+        ASSERT_TRUE(testOnlyQuicklistCompressNode(scratch, node));
+        ASSERT_TRUE(testOnlyQuicklistDecompressNode(scratch, node));
         printf("Compress and decompress: %zu MB in %.3f seconds.\n",
                node->sz / 1024 / 1024, (double)(mstime() - start) / 1000);
     }
@@ -1762,6 +1777,7 @@ TEST_F(QuicklistTest, quicklistCompressAndDecompressQuicklistListpackNode) {
     zfree(node->next);
     zfree(node->entry);
     zfree(node);
+    quicklistRelease(scratch);
 }
 
 TEST_F(QuicklistTest, quicklistCompressAndDecomressQuicklistPlainNodeLargeThanUINT32MAX) {
@@ -1783,6 +1799,9 @@ TEST_F(QuicklistTest, quicklistCompressAndDecomressQuicklistPlainNodeLargeThanUI
     memcpy(s + sz - 10, "1234567890", 10);
 
     quicklistNode *node = testOnlyQuicklistCreateNodeWithValue(QUICKLIST_NODE_CONTAINER_PLAIN, s, sz);
+    /* The node is not linked in a list. 'scratch' only receives the memory
+     * counter updates of the compress and decompress calls. */
+    quicklist *scratch = quicklistCreate();
 
     /* Just to avoid triggering the assertion in __quicklistCompressNode(),
      * it disables the passing of quicklist head or tail node. */
@@ -1790,8 +1809,8 @@ TEST_F(QuicklistTest, quicklistCompressAndDecomressQuicklistPlainNodeLargeThanUI
     node->next = testOnlyQuicklistCreateNode();
 
     long long start = mstime();
-    ASSERT_TRUE(testOnlyQuicklistCompressNode(node));
-    ASSERT_TRUE(testOnlyQuicklistDecompressNode(node));
+    ASSERT_TRUE(testOnlyQuicklistCompressNode(scratch, node));
+    ASSERT_TRUE(testOnlyQuicklistDecompressNode(scratch, node));
     printf("Compress and decompress: %zu MB in %.3f seconds.\n",
            node->sz / 1024 / 1024, (double)(mstime() - start) / 1000);
 
@@ -1802,6 +1821,7 @@ TEST_F(QuicklistTest, quicklistCompressAndDecomressQuicklistPlainNodeLargeThanUI
     zfree(node->entry);
     zfree(node);
     zfree(s);
+    quicklistRelease(scratch);
 
 #endif
 }
@@ -1881,7 +1901,7 @@ TEST_F(QuicklistTest, quicklistReadIterationDoesNotMutateCompressedNodes) {
 
     /* Verify read traversal does not opportunistically recompress a RAW interior node */
     quicklistNode *raw_interior_node = ql->head->next;
-    ASSERT_TRUE(testOnlyQuicklistDecompressNode(raw_interior_node));
+    ASSERT_TRUE(testOnlyQuicklistDecompressNode(ql, raw_interior_node));
     raw_interior_node->attempted_compress = 0;
     raw_interior_node->recompress = 0;
     fwd = quicklistGetIterator(ql, AL_START_HEAD);

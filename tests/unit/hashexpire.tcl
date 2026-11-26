@@ -4702,8 +4702,8 @@ start_server {tags {"hashexpire external:skip"}} {
                 assert_equal {-1} [$primary httl myhash fields 1 f1]
                 assert_equal {-1} [$replica httl myhash fields 1 f1]
 
-                assert_keyevent_patterns $primary_ksn myhash $primary_ksn_event($command) hexpire hexpired $primary_ksn_event($command)
-                assert_keyevent_patterns $replica_ksn myhash $replica_ksn_event($command) hexpire hset
+                assert_keyevent_patterns $primary_ksn myhash $primary_ksn_event($command) hexpire hexpired del $primary_ksn_event($command)
+                assert_keyevent_patterns $replica_ksn myhash $replica_ksn_event($command) hexpire del hset
                 $primary_ksn close
                 $replica_ksn close
                 $primary debug set-active-expire 1
@@ -4765,8 +4765,8 @@ start_server {tags {"hashexpire external:skip"}} {
             assert_equal {v2} [$primary hget myhash f1]
             assert_equal {v2} [$replica hget myhash f1]
             assert_equal [$primary HPEXPIRETIME myhash FIELDS 1 f1] [$replica HPEXPIRETIME myhash FIELDS 1 f1]
-            assert_keyevent_patterns $primary_ksn myhash hset hexpire hexpired hset
-            assert_keyevent_patterns $replica_ksn myhash hset hexpire hset
+            assert_keyevent_patterns $primary_ksn myhash hset hexpire hexpired del hset
+            assert_keyevent_patterns $replica_ksn myhash hset hexpire del hset
             $primary debug set-active-expire 1
         } {OK} {needs:debug}
 
@@ -4802,8 +4802,8 @@ start_server {tags {"hashexpire external:skip"}} {
             wait_for_ofs_sync $primary $replica
 
             assert_equal [$primary hgetall myhash] [$replica hgetall myhash]
-            assert_keyevent_patterns $primary_ksn myhash hset hexpire hexpired hset
-            assert_keyevent_patterns $replica_ksn myhash hset hexpire hset
+            assert_keyevent_patterns $primary_ksn myhash hset hexpire hexpired del hset
+            assert_keyevent_patterns $replica_ksn myhash hset hexpire del hset
             $primary debug set-active-expire 1
         } {OK} {needs:debug}
 
@@ -4858,6 +4858,28 @@ start_server {tags {"hashexpire external:skip"}} {
 
             assert_equal {v2} [$primary hget myhash f1]
             assert_equal {v2} [$replica hget myhash f1]
+            $primary debug set-active-expire 1
+        } {OK} {needs:debug}
+
+        test {HSETEX KEEPTTL over the last expired field renews the key on the replica} {
+            lassign [setup_replication_test $primary $replica $primary_host $primary_port] primary_initial_expired replica_initial_expired
+            $primary debug set-active-expire 0
+
+            $primary hsetex myhash PX 1 fields 1 f1 v1
+            $primary expire myhash 1000
+            wait_for_condition 50 100 {
+                [$primary httl myhash fields 1 f1] == -2
+            } else {
+                fail "Field was not logically expired on primary"
+            }
+
+            $primary hsetex myhash KEEPTTL fields 1 f1 v2
+            wait_for_ofs_sync $primary $replica
+
+            foreach instance [list $primary $replica] {
+                assert_equal {v2} [$instance hget myhash f1]
+                assert_equal {-1} [$instance ttl myhash]
+            }
             $primary debug set-active-expire 1
         } {OK} {needs:debug}
     }
@@ -5656,6 +5678,22 @@ start_server {tags {"hashexpire aof needs:debug external:skip"} overrides {appen
         }
     }
 
+    # myhash holds only expired fields that the server does not serve, and a key TTL.
+    proc setup_all_expired_hash_aof {fields} {
+        r flushall
+        foreach f $fields {
+            r hsetex myhash PX 1 FIELDS 1 $f v
+        }
+        r expire myhash 1000
+        foreach f $fields {
+            wait_for_condition 50 10 {
+                [r hexists myhash $f] == 0
+            } else {
+                fail "Hash is showing expired elements"
+            }
+        }
+    }
+
     foreach {encoding max_entries} {listpack 128 hashtable 0} {
         r config set hash-max-listpack-entries $max_entries
 
@@ -5696,6 +5734,70 @@ start_server {tags {"hashexpire aof needs:debug external:skip"} overrides {appen
             r debug loadaof
             assert_equal 0 [r hexists myhash live]
             assert_equal 1 [r exists myhash]
+        }
+
+        foreach {cmd propagated} {
+            {hset myhash f1 1}                         {{hset myhash f1 1}}
+            {hsetnx myhash f1 1}                       {{hset myhash f1 1}}
+            {hincrby myhash f1 1}                      {{hset myhash f1 1}}
+            {hincrbyfloat myhash f1 1}                 {{hset myhash f1 1}}
+            {hsetex myhash KEEPTTL FIELDS 1 f1 1}      {{hsetex myhash KEEPTTL FIELDS 1 f1 1}}
+            {hsetex myhash XX KEEPTTL FIELDS 1 f1 1}   {{hsetex myhash KEEPTTL FIELDS 1 f1 1}}
+        } {
+            test "[lindex $cmd 0] over the last expired field renews the key - $cmd - $encoding" {
+                setup_all_expired_hash_aof {f1}
+                assert_encoding $encoding myhash
+
+                set repl [attach_to_replication_stream]
+                r {*}$cmd
+                assert_replication_stream $repl [list {multi} {select *} {unlink myhash} {*}$propagated {exec}]
+                close_replication_stream $repl
+                assert_equal -1 [r ttl myhash]
+
+                r debug loadaof
+                assert_equal 1 [r hget myhash f1]
+                assert_equal -1 [r httl myhash FIELDS 1 f1]
+                assert_equal -1 [r ttl myhash]
+            }
+        }
+
+        test "HSET over every expired field renews the key - $encoding" {
+            setup_all_expired_hash_aof {f1 f2}
+            r hset myhash f1 1 f2 1 f1 2
+            assert_equal -1 [r ttl myhash]
+
+            r debug loadaof
+            assert_equal {2 1} [r hmget myhash f1 f2]
+            assert_equal -1 [r ttl myhash]
+        }
+
+        test "HSET over some of the expired fields keeps the key TTL - $encoding" {
+            setup_all_expired_hash_aof {f1 f2}
+            set repl [attach_to_replication_stream]
+            r hset myhash f1 1 f1 2
+            r set marker 1
+            assert_replication_stream $repl {
+                {select *}
+                {hset myhash f1 1 f1 2}
+                {set marker 1}
+            }
+            close_replication_stream $repl
+            assert_range [r ttl myhash] 900 1000
+
+            r debug loadaof
+            assert_equal 2 [r hget myhash f1]
+            assert_equal 0 [r hexists myhash f2]
+            assert_range [r ttl myhash] 900 1000
+        }
+
+        test "Renewing the key emits hexpired, del and new before hset - $encoding" {
+            setup_all_expired_hash_aof {f1}
+            set rd [setup_single_keyspace_notification r]
+            r config set notify-keyspace-events KEAn
+            r hset myhash f1 1
+            assert_keyevent_patterns $rd myhash hexpired del new hset
+            $rd close
+            r config set notify-keyspace-events ""
         }
     }
 }

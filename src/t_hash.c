@@ -1229,6 +1229,18 @@ static int hashTypeRandomElement(robj *hashobj, unsigned long hashsize, listpack
  * Hash type commands
  *----------------------------------------------------------------------------*/
 
+/* If a write overwrote every entry of the hash and all of them were expired, the hash was logically empty,
+ * so the key starts over as a new key. Replicas never expire fields, so the DEL is what makes them drop the
+ * old key TTL too. Returns true if the key was renewed. */
+static bool hashTypeRenewIfAllExpiredOverwritten(client *c, robj *key, size_t old_len, size_t expired_overwritten) {
+    if (expired_overwritten == 0 || expired_overwritten != old_len) return false;
+    removeExpire(c->db, key);
+    propagateDeletion(c->db, key, server.lazyfree_lazy_expire, c->slot);
+    notifyKeyspaceEvent(NOTIFY_GENERIC, "del", key, c->db->id);
+    notifyKeyspaceEvent(NOTIFY_NEW, "new", key, c->db->id);
+    return true;
+}
+
 void hincrbyCommand(client *c) {
     long long value, incr, oldvalue;
     robj *o;
@@ -1260,6 +1272,7 @@ void hincrbyCommand(client *c) {
     new = sdsfromlonglong(value);
     bool has_volatile_fields = hashTypeHasVolatileFields(o);
     bool expired_overwritten = false;
+    size_t old_len = hashTypeLength(o);
     hashTypeSet(o, objectGetVal(c->argv[2]), new, expiry, HASH_SET_TAKE_VALUE, &expired_overwritten);
     if (has_volatile_fields != hashTypeHasVolatileFields(o)) {
         dbUpdateObjectWithVolatileItemsTracking(c->db, o);
@@ -1269,6 +1282,7 @@ void hincrbyCommand(client *c) {
     if (expired_overwritten) {
         server.stat_expiredfields++;
         notifyKeyspaceEvent(NOTIFY_HASH, "hexpired", c->argv[1], c->db->id);
+        hashTypeRenewIfAllExpiredOverwritten(c, c->argv[1], old_len, 1);
     }
     notifyKeyspaceEvent(NOTIFY_HASH, "hincrby", c->argv[1], c->db->id);
     server.dirty++;
@@ -1344,6 +1358,7 @@ void hincrbyfloatCommand(client *c) {
     new = sdsnewlen(buf, len);
     bool has_volatile_fields = hashTypeHasVolatileFields(o);
     bool expired_overwritten = false;
+    size_t old_len = hashTypeLength(o);
     hashTypeSet(o, objectGetVal(c->argv[2]), new, expiry, HASH_SET_TAKE_VALUE, &expired_overwritten);
     if (has_volatile_fields != hashTypeHasVolatileFields(o)) {
         dbUpdateObjectWithVolatileItemsTracking(c->db, o);
@@ -1353,6 +1368,7 @@ void hincrbyfloatCommand(client *c) {
     if (expired_overwritten) {
         server.stat_expiredfields++;
         notifyKeyspaceEvent(NOTIFY_HASH, "hexpired", c->argv[1], c->db->id);
+        hashTypeRenewIfAllExpiredOverwritten(c, c->argv[1], old_len, 1);
     }
     notifyKeyspaceEvent(NOTIFY_HASH, "hincrbyfloat", c->argv[1], c->db->id);
     server.dirty++;
@@ -1664,6 +1680,7 @@ void hsetnxCommand(client *c) {
     } else {
         hashTypeTryConversion(o, c->argv, 2, 3);
         bool has_volatile_fields = hashTypeHasVolatileFields(o), expired_overwritten = false;
+        size_t old_len = hashTypeLength(o);
         hashTypeSet(o, objectGetVal(c->argv[2]), objectGetVal(c->argv[3]), EXPIRY_NONE, HASH_SET_COPY, &expired_overwritten);
         if (has_volatile_fields != hashTypeHasVolatileFields(o)) {
             dbUpdateObjectWithVolatileItemsTracking(c->db, o);
@@ -1673,6 +1690,7 @@ void hsetnxCommand(client *c) {
         if (expired_overwritten) {
             server.stat_expiredfields++;
             notifyKeyspaceEvent(NOTIFY_HASH, "hexpired", c->argv[1], c->db->id);
+            hashTypeRenewIfAllExpiredOverwritten(c, c->argv[1], old_len, 1);
         }
         notifyKeyspaceEvent(NOTIFY_HASH, "hset", c->argv[1], c->db->id);
         server.dirty++;
@@ -1697,6 +1715,7 @@ void hsetCommand(client *c) {
     if ((o = hashTypeLookupWriteOrCreate(c, c->argv[1])) == NULL) return;
     hashTypeTryConversion(o, c->argv, 2, c->argc - 1);
     bool has_volatile_fields = hashTypeHasVolatileFields(o);
+    size_t old_len = hashTypeLength(o);
     int expired_overwritten = 0;
     for (i = 2; i < c->argc; i += 2) {
         bool expired = false;
@@ -1713,6 +1732,7 @@ void hsetCommand(client *c) {
     if (expired_overwritten) {
         server.stat_expiredfields += expired_overwritten;
         notifyKeyspaceEvent(NOTIFY_HASH, "hexpired", c->argv[1], c->db->id);
+        hashTypeRenewIfAllExpiredOverwritten(c, c->argv[1], old_len, expired_overwritten);
     }
     notifyKeyspaceEvent(NOTIFY_HASH, "hset", c->argv[1], c->db->id);
     server.dirty += (c->argc - 2) / 2;
@@ -1863,6 +1883,7 @@ void hsetexCommand(client *c) {
     }
 
     bool has_volatile_fields = hashTypeHasVolatileFields(o);
+    size_t old_len = hashTypeLength(o);
 
     /* Prepare a new argv when rewriting the command. If set_expired is true,
      * all expired fields will be deleted. Otherwise, if rewriting is needed due to NX/XX/FNX/FXX flags,
@@ -1951,16 +1972,22 @@ void hsetexCommand(client *c) {
         if (expired_overwritten > 0) {
             server.stat_expiredfields += expired_overwritten;
             notifyKeyspaceEvent(NOTIFY_HASH, "hexpired", c->argv[1], c->db->id);
+            bool renewed = hashTypeRenewIfAllExpiredOverwritten(c, c->argv[1], old_len, expired_overwritten);
             /* Propagate deletions for expired/non-existent fields in batches.
              * When KEEPTTL is used the replica has noway telling if, at the time the primary was executing the command,
              * the fields were expired or not. When the replica executes the command it will ALWAYS overwrite the field, so
-             * we need to propagate hdel explicitly to prevent the replica from keeping the TTL on it's side. */
+             * we need to propagate hdel explicitly to prevent the replica from keeping the TTL on it's side.
+             * If the key was renewed, the DEL already removed these fields on the replica. */
             if (keepttl_fields != NULL) {
-                /* Propagate individual fields deletions */
-                int idx = 0;
-                while (idx < expired_overwritten) {
-                    idx += propagateFieldsDeletion(c->db, o, expired_overwritten - idx,
-                                                   &keepttl_fields[idx], c->slot);
+                if (renewed) {
+                    for (i = 0; i < expired_overwritten; i++) decrRefCount(keepttl_fields[i]);
+                } else {
+                    /* Propagate individual fields deletions */
+                    int idx = 0;
+                    while (idx < expired_overwritten) {
+                        idx += propagateFieldsDeletion(c->db, o, expired_overwritten - idx,
+                                                       &keepttl_fields[idx], c->slot);
+                    }
                 }
                 zfree(keepttl_fields);
                 keepttl_fields = NULL;

@@ -8,6 +8,8 @@ source tests/support/cluster_util.tcl
 
 start_cluster 10 0 {tags {external:skip cluster}} {
     config_set_all_nodes cluster-allow-replica-migration no
+    # Increase the timeout so a CI stall does not fail the cluster.
+    config_set_all_nodes cluster-node-timeout 10000
 
 set key_count [expr {$::valgrind ? 10000 : 40000}]
 set migration_slots [expr {$::valgrind ? 250 : 1000}]

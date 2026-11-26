@@ -2382,6 +2382,36 @@ bool vsetIsValid(vset *set) {
     return false;
 }
 
+bool vsetHasExpired(vset *set, vsetGetExpiryFunc getExpiry, mstime_t now) {
+    assert(set->bucket);
+    switch (vsetBucketType(set->bucket)) {
+    case VSET_BUCKET_NONE:
+        return false;
+    case VSET_BUCKET_SINGLE:
+        return getExpiry(vsetBucketSingle(set->bucket)) <= now;
+    case VSET_BUCKET_VECTOR: {
+        pVector *pv = vsetBucketVector(set->bucket);
+        return pvLen(pv) > 0 && getExpiry(pvGet(pv, 0)) <= now;
+    }
+    case VSET_BUCKET_HT:
+        panic("Unsupported hashtable bucket type for vset");
+    case VSET_BUCKET_RAX: {
+        rax *buckets = vsetBucketRax(set->bucket);
+        if (raxSize(buckets) == 0) return false;
+        raxIterator it;
+        raxStart(&it, buckets);
+        raxSeek(&it, "^", NULL, 0);
+        assert(raxNext(&it));
+        long long time_bucket_ts = decodeExpiryKey(it.key);
+        raxStop(&it);
+        return time_bucket_ts <= now;
+    }
+    default:
+        panic("Unknown set type encountered in vsetHasExpired");
+    }
+    return false;
+}
+
 /* Checks whether a volatile set is empty.
  *
  * This function simply checks if the set's current bucket type is VSET_BUCKET_NONE.

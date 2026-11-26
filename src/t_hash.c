@@ -3084,6 +3084,27 @@ static int hashTypeExpireEntry(void *entry, void *c) {
     return 0;
 }
 
+/* Return true if the hash object currently has at least one expired field at `now`. */
+bool hashTypeHasExpiredFields(robj *o, mstime_t now) {
+    if (objectGetEncoding(o) == OBJ_ENCODING_LISTPACK) {
+        unsigned char *zl = objectGetVal(o);
+        unsigned char *p = lpFirst(zl);
+        while (p) {
+            unsigned char *vptr = lpNext(zl, p);
+            if (!vptr) break;
+            mstime_t expiry = hashTypeListpackGetExpiry(zl, vptr);
+            if (expiry != EXPIRY_NONE && expiry <= now) return true;
+            p = lpNext(zl, vptr);
+        }
+        return false;
+    }
+
+    serverAssert(objectGetEncoding(o) == OBJ_ENCODING_HASHTABLE);
+    vset *vset = hashTypeGetVolatileSet(o);
+    if (!vset || vsetIsEmpty(vset)) return false;
+    return vsetHasExpired(vset, entryGetExpiryVsetFunc, now);
+}
+
 /* Extract expired entries from a hash object's volatile set.
  * Returns number of expired entries, populates `out_entries`. */
 size_t hashTypeDeleteExpiredFields(robj *o, mstime_t now, unsigned long max_fields, robj **out_entries) {

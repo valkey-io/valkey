@@ -2132,4 +2132,62 @@ start_server {overrides {save ""}} {
     }
 }
 
+proc count_reaped_two_hashes {count} {
+    set reaped 0
+    for {set i 0} {$i < $count} {incr i} {
+        if {[r hlen two:$i] == 2} { incr reaped }
+    }
+    return $reaped
+}
+
+start_server {overrides {forkless-infrastructure-enabled yes forkless-policy prefer-forkless save ""}} {
+    foreach {encoding max_lp} {listpack 512 hashtable 1} {
+        test "Active hash field expiry during forkless bgsave preserves hashes ($encoding)" {
+            r flushall
+            r config set hash-max-listpack-entries $max_lp
+            r debug populate 2000 filler 100
+            for {set i 0} {$i < 200} {incr i} {
+                r hset two:$i f0 v f1 v f2 v
+                r hpexpire two:$i 600 FIELDS 1 f0
+                r hset one:$i f0 v
+                r hpexpire one:$i 600 FIELDS 1 f0
+            }
+            assert_equal $encoding [r object encoding two:0]
+
+            r config set rdb-key-save-delay 1000
+            r bgsave
+            wait_for_condition 50 50 {
+                [s rdb_bgsave_in_progress] == 1
+            } else {
+                fail "forkless bgsave did not start"
+            }
+
+            # Wait for active field expiry to reap fields while the forkless save is running.
+            wait_for_condition 100 50 {
+                [count_reaped_two_hashes 200] >= 50
+            } else {
+                fail "active field expiry did not run during forkless bgsave"
+            }
+            assert_equal 1 [s rdb_bgsave_in_progress]
+
+            r config set rdb-key-save-delay 0
+            waitForBgsave r
+            assert_equal "forkless" [s rdb_last_bgsave_type]
+
+            set reload_loglines [count_log_lines 0]
+            r debug reload nosave
+
+            # Every two:* hash must survive in the RDB with its persistent fields intact.
+            for {set i 0} {$i < 200} {incr i} {
+                assert_equal "v" [r hget two:$i f1]
+                assert_equal "v" [r hget two:$i f2]
+            }
+
+            # No empty hashes should have been written to the RDB.
+            wait_for_log_messages 0 {"*Done loading RDB*"} $reload_loglines 50 50
+            verify_no_log_message 0 "*empty keys skipped*" $reload_loglines
+        } {} {needs:debug}
+    }
+}
+
 } ;# tags

@@ -3552,3 +3552,66 @@ TEST_F(BgIterationTest, queueTargetGrowsWithExpeditedKeysWaiting) {
 
     expectAnythingCleanup(it);
 }
+
+TEST_F(BgIterationTest, expediteEntryForConsistentDefersAndPreservesSnapshot) {
+    bgIterator *it = bgIteratorCreateFullScanIter("iter", BGITERATOR_CONSISTENCY_START, NULL,
+                                                  iteratorCleanupFn, PRIVDATA);
+    expectReadKey(it, 0);
+
+    dbEntry *target = getItem(4);
+    ASSERT_NE(target, nullptr);
+    EXPECT_FALSE(bgIteration_isEntryInuse(target));
+
+    // Expediting an unvisited entry for a consistent iterator queues it and asks caller to defer.
+    EXPECT_TRUE(bgIteration_expediteEntryForConsistent(0, target));
+    EXPECT_TRUE(bgIteration_isEntryInuse(target));
+
+    // Calling again while still in use keeps deferring without re-adding to early_iterate_entries.
+    EXPECT_TRUE(bgIteration_expediteEntryForConsistent(0, target));
+
+    // Background thread reads the expedited entry, then releases it on the next read.
+    expectReadKey(it, 4);
+    expectReadKey(it, 1);
+    EXPECT_FALSE(bgIteration_isEntryInuse(target));
+
+    // Once already expedited and released, caller may mutate/modify the entry without deferring.
+    EXPECT_FALSE(bgIteration_expediteEntryForConsistent(0, target));
+    bgIteration_dbEntryModified(target);
+
+    // Remaining keys iterate cleanly and key 4 is not emitted a second time.
+    expectReadKeySequence(it, 2, 3);
+    expectReadKeySequence(it, 5, LAST_ITEM);
+    expectReadComplete(it);
+}
+
+TEST_F(BgIterationTest, expediteEntryForConsistentIgnoresNonConsistentAndDeleteAfterExpedite) {
+    bgIterator *itConsistent = bgIteratorCreateFullScanIter("consistent", BGITERATOR_CONSISTENCY_START, NULL,
+                                                            iteratorCleanupFn, PRIVDATA);
+    bgIterator *itEventual = bgIteratorCreateFullScanIter("eventual", BGITERATOR_CONSISTENCY_EVENTUAL, NULL,
+                                                          iteratorCleanupFn, PRIVDATA);
+    expectReadKey(itConsistent, 0);
+    expectReadKey(itEventual, 0);
+
+    dbEntry *target = getItem(4);
+    ASSERT_NE(target, nullptr);
+    EXPECT_TRUE(bgIteration_expediteEntryForConsistent(0, target));
+    EXPECT_TRUE(bgIteration_isEntryInuse(target));
+
+    // Consistent iterator consumes and releases key 4; eventual iterator was not forced to expedite it.
+    expectReadKey(itConsistent, 4);
+    expectReadKey(itConsistent, 1);
+    EXPECT_FALSE(bgIteration_isEntryInuse(target));
+    EXPECT_FALSE(bgIteration_expediteEntryForConsistent(0, target));
+
+    // Deleting key 4 after consistent expedite (as when all hash fields expire) must not re-expedite it.
+    bgIteration_keyDelete(0, objectGetKey(target));
+    simpleDelItem(4);
+
+    expectReadKeySequence(itConsistent, 2, 3);
+    expectReadKeySequence(itConsistent, 5, LAST_ITEM);
+    expectReadComplete(itConsistent);
+
+    expectReadKeySequence(itEventual, 1, 3);
+    expectReadKeySequence(itEventual, 5, LAST_ITEM);
+    expectReadComplete(itEventual);
+}

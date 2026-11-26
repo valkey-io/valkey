@@ -99,6 +99,11 @@ bool __wrap_tokenBucket_tryConsume(tokenBucket *bucket, double tokens, bool forc
 double __wrap_tpsCalculator_averageTps(tpsCalculator *calc);
 double __wrap_trendCalculator_changePerSecShortTerm(trendCalculator *calc);
 
+/* RDB load mocks: the event loop run by the load progress callback, and the
+ * RDB checker that a failed disk load runs (and exits). */
+void __wrap_processEventsWhileBlocked(void);
+int __wrap_redis_check_rdb_main(int argc, char **argv, FILE *fp);
+
 #undef protected
 #undef _Bool
 #undef typename

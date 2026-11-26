@@ -399,6 +399,15 @@ static int connSocketBlockingConnect(connection *conn, const char *addr, int por
         return C_ERR;
     }
 
+    /* aeWait() also reports a socket whose connection failed (POLLERR or
+     * POLLHUP) as writable, so check the result of the connection. */
+    int sockerr = anetGetError(fd);
+    if (sockerr) {
+        conn->state = CONN_STATE_ERROR;
+        conn->last_errno = sockerr;
+        return C_ERR;
+    }
+
     conn->state = CONN_STATE_CONNECTED;
     return C_OK;
 }

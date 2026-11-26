@@ -3102,7 +3102,7 @@ bool hashTypeHasExpiredFields(robj *o, mstime_t now) {
     serverAssert(objectGetEncoding(o) == OBJ_ENCODING_HASHTABLE);
     vset *vset = hashTypeGetVolatileSet(o);
     if (!vset || vsetIsEmpty(vset)) return false;
-    return vsetHasExpired(vset, entryGetExpiryVsetFunc, now);
+    return vsetEstimatedEarliestExpiry(vset, entryGetExpiryVsetFunc) <= now;
 }
 
 /* Extract expired entries from a hash object's volatile set.

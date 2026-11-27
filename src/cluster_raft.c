@@ -230,6 +230,7 @@ typedef struct {
     unsigned int todo_persist_log : 1;
     unsigned int todo_save_config : 1;
     unsigned int todo_send_ae_ack : 1;
+    unsigned int reset_until_meet : 1; /* Reset: ignore the old cluster until a MEET */
     unsigned int todo_send_vote_response : 1;
     unsigned int todo_broadcast_vote_request : 1;
     unsigned int slot_change_pending : 1;
@@ -721,6 +722,7 @@ static void clusterRaftSendGreeting(clusterLink *link, const char *verb) {
 
 /* Send MEET with singleton|cluster flag. */
 static void clusterRaftSendMeet(clusterLink *link) {
+    RAFT_STATE()->reset_until_meet = 0;
     const char *flag = clusterRaftIsSingleton() ? "singleton" : "cluster";
     sds msg = wireNewMsg("MEET");
     msg = sdscatfmt(msg, " %s", flag);
@@ -837,6 +839,7 @@ static int clusterRaftProcessMeet(clusterLink *link, int argc, sds *argv) {
     serverLog(LL_NOTICE, "Received MEET %s from %.40s.", flag, sender->name);
 
     clusterRaftState *rs = RAFT_STATE();
+    rs->reset_until_meet = 0;
 
     if (!clusterRaftIsSingleton() && !sender_is_singleton) {
         /* Both sides are in a cluster — reject. Merging non-singleton
@@ -3755,7 +3758,14 @@ static int clusterRaftProcessMessage(struct clusterLink *link) {
     }
 
     RAFT_STATE()->processing_link = link;
-    if (!strcasecmp(argv[0], "HELLO")) {
+    if (RAFT_STATE()->reset_until_meet &&
+        (!strcasecmp(argv[0], "AE") || !strcasecmp(argv[0], "INSTALL_SNAPSHOT") || !strcasecmp(argv[0], "VOTE_REQ") ||
+         !strcasecmp(argv[0], "PRE_VOTE_REQ") || !strcasecmp(argv[0], "TIMEOUT_NOW"))) {
+        /* After CLUSTER RESET, the old cluster may still send us AE or vote
+         * requests before it forgets us. Following them would pull us back
+         * into it, so ignore them until we send or get a MEET. */
+        ret = 1;
+    } else if (!strcasecmp(argv[0], "HELLO")) {
         ret = clusterRaftProcessHello(link, argc, argv);
     } else if (!strcasecmp(argv[0], "HI")) {
         ret = clusterRaftProcessHi(link, argc, argv);
@@ -5313,6 +5323,7 @@ static void clusterRaftResetCluster(int hard) {
 
     clearCachedClusterSlotsResponse();
     rs->todo_save_config = 1;
+    rs->reset_until_meet = 1;
     serverLog(LL_NOTICE, "Cluster %s reset, now I'm %.40s",
               hard ? "hard" : "soft", myself->name);
 }

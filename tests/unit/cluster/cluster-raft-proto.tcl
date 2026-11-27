@@ -1615,6 +1615,50 @@ test "Raft proto: the leader answers UNCHANGED only after a quorum acks a later 
     }
 }
 
+test "Raft proto: one voter ACK confirms two reads in order while another voter lags" {
+    start_server {overrides {cluster-enabled yes cluster-protocol raft cluster-node-timeout 20000}} {
+        set leader [R 0 CLUSTER MYID]
+        set voter_id [string repeat "a" 40]
+        set lagging_id [string repeat "b" 40]
+        set voter [raft_join_fake_follower $voter_id [string repeat "8" 40]]
+        set lagging [raft_join_fake_follower $lagging_id [string repeat "9" 40]]
+        R 0 cluster addslots 0 1
+        raft_ack_until_idle $voter
+        raft_add_voter [srv 0 client] $voter_id
+
+        # Propose the second promotion on the same link as its catch-up ACK.
+        # The first voter and the leader commit it.
+        raft_ack_until_idle $lagging
+        raft_send $lagging "PROPOSE ADD_VOTER $lagging_id"
+        raft_reply_ae_ack $voter [raft_recv_until $voter "AE *ADD_VOTER $lagging_id*"] 0
+        wait_for_condition 50 100 {[CI 0 cluster_size] == 3} else {fail "Third voter did not join"}
+        set commit [raft_ack_until_idle $voter]
+
+        # The REJECT marks when the leader has received each read. Wait for
+        # a broadcast after it before proposing the next read.
+        set invalid "PROPOSE SLOT_CHANGE $leader 1 $leader 1 16384"
+        set expected {}
+        foreach slot {0 1} {
+            set entry "SLOT_CHANGE $leader 1 $leader 1 $slot"
+            lappend expected "UNCHANGED $commit $entry"
+            puts -nonewline $voter "[raft_msg "PROPOSE $entry"][raft_msg $invalid]"
+            flush $voter
+            while {![string match "REJECT *" [set msg [raft_recv $voter]]]} {
+                assert_no_match "UNCHANGED *" $msg
+            }
+            set ae [raft_recv_until $voter "AE *"]
+        }
+
+        # Only the up-to-date voter ACKs, and only once, for the later round.
+        raft_reply_ae_ack $voter $ae 0
+        foreach reply $expected {
+            assert_equal $reply [raft_recv_until $voter "UNCHANGED *"]
+        }
+        close $voter
+        close $lagging
+    }
+}
+
 test "Raft proto: a read confirmed by the ACK that commits a change isn't unchanged" {
     # The ACK that confirms the read also commits a change appended after
     # it. The leader decides again before applying that change, and since it

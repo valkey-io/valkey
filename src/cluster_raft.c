@@ -2340,10 +2340,15 @@ static int clusterRaftProcessAppendEntries(clusterLink *link, int argc, sds *arg
         raftLogAppend(raftLogCreate(e_term, new_index, e_type, e_data));
     }
 
-    /* Update commit index and apply. */
+    /* Update commit index, limited to what we can apply*/
     if (leader_commit > rs->commit_index) {
         rs->commit_index = leader_commit;
-        if (rs->commit_index > raftLogLastIndex()) rs->commit_index = raftLogLastIndex();
+
+        if (entry_line_count == 0) {
+            if (rs->commit_index > raftLogLastIndex()) rs->commit_index = raftLogLastIndex();
+        } else {
+            if (rs->commit_index > new_index - 1) rs->commit_index = new_index - 1;
+        }
     }
     raftApplyCommitted();
     clusterRaftReleaseSlotChangePendingIfCaughtUp();

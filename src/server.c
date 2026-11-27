@@ -5394,6 +5394,12 @@ int finishShutdown(void) {
     /* Handle cluster-related matters when shutdown. */
     if (server.cluster_enabled) clusterHandleServerShutdown(failover);
 
+    /* The auto failover above feeds CLUSTER FAILOVER to the replicas but not
+     * to the AOF, which was fsynced already. With the AOF buffer empty this
+     * marks everything propagated as fsynced, so reply blocking's replica
+     * send limit does not hold the failover request back. */
+    if (server.aof_state != AOF_OFF) flushAppendOnlyFile(1);
+
     /* Best effort flush of replica output buffers, so that we hopefully
      * send them pending writes. */
     flushReplicasOutputBuffers();

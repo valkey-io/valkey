@@ -1504,7 +1504,7 @@ static void clusterRaftProcessPendingReads(void) {
             confirmed_round = clusterRaftConfirmedRound();
             have_confirmed_round = true;
         }
-        if (r->round > confirmed_round) continue;
+        if (r->round > confirmed_round) break;
         listUnlinkNode(rs->pending_reads, ln);
         clusterRaftResolvePendingRead(r);
         raftPendingReadFree(r);

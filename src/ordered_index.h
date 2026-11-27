@@ -207,6 +207,12 @@ void orderedIndexSeekToScoreRange(OrderedIndexIterator *iter, double min, double
  * range. Only meaningful when all items in the range share the same score. */
 void orderedIndexSeekToLexRange(OrderedIndexIterator *iter, const_sds min, const_sds max, bool min_ex, bool max_ex, long offset);
 
+/* Position the cursor strictly past (reverse=0) or strictly before (reverse=1)
+ * the given (score, ele) key, whether or not that key is currently in the
+ * index. After seeking, orderedIndexNext() (when reverse=0) or
+ * orderedIndexPrev() (when reverse=1) returns the adjacent item, or NULL. */
+void orderedIndexSeekFromKey(OrderedIndexIterator *iter, double score, const char *ele, size_t len, int reverse);
+
 /* ============================================================
  * Memory
  * ============================================================ */

@@ -206,6 +206,31 @@ typedef struct ValkeyModuleCtx ValkeyModuleCtx;
 #define VALKEYMODULE_CTX_KEYSPACE_NOTIFICATION (1 << 10) /* Context created a keyspace notification event */
 #define VALKEYMODULE_CTX_SCRIPT_EXECUTION (1 << 11)      /* Context created to serve a scripting engine execution */
 
+/* A sorted set range walk. Allocated by the range start functions and freed by
+ * VM_ZsetRangeStop(), so it lives outside the key handle's type-specific
+ * union: the value's type can change under an open handle, and the handle's
+ * own field says whether a walk is active.
+ * Attached: 'lp_eptr' (listpack) or 'btree_item' (B+tree) points at the entry
+ * the walk sits on. Detached: 'current' and 'score' hold it and both pointers
+ * are NULL. Neither: the range is empty. */
+typedef struct ValkeyModuleZsetWalk {
+    listNode *node;                     /* This walk's node in module_zset_walks. */
+    uint32_t type;                      /* VALKEYMODULE_ZSET_RANGE_* */
+    zrangespec rs;                      /* Score range. */
+    zlexrangespec lrs;                  /* Lex range. */
+    unsigned char *lp_eptr;             /* Listpack: current member entry. */
+    OrderedIndexIterator oi;            /* B+tree: cursor next to 'btree_item'. */
+    const OrderedIndexItem *btree_item; /* B+tree: current item. */
+    int fwd;                            /* B+tree: 1 when 'oi' is just after
+                                           'btree_item', 0 when just before it. */
+    sds current;                        /* Detached: member last returned. */
+    double score;                       /* Detached: its score. */
+    int er;                             /* End reached flag. */
+    int thread_safe;                    /* Started in a thread safe context... */
+    pthread_t owner;                    /* ...by this thread... */
+    uint64_t seq;                       /* ...as the seq-th walk ever started. */
+} ValkeyModuleZsetWalk;
+
 /* This represents a key opened with VM_OpenKey(). */
 struct ValkeyModuleKey {
     ValkeyModuleCtx *ctx;
@@ -214,6 +239,8 @@ struct ValkeyModuleKey {
     robj *value; /* Value object, or NULL if the key was not found. */
     void *iter;  /* Iterator. */
     int mode;    /* Opening mode. */
+    /* Active sorted set range walk, or NULL. */
+    struct ValkeyModuleZsetWalk *zset_walk;
 
     union {
         struct {
@@ -221,21 +248,6 @@ struct ValkeyModuleKey {
             listTypeEntry entry; /* Current entry in iteration. */
             long index;          /* Current 0-based index in iteration. */
         } list;
-        struct {
-            /* Zset iterator, use only if value->type == OBJ_ZSET */
-            uint32_t type;           /* VALKEYMODULE_ZSET_RANGE_* */
-            zrangespec rs;           /* Score range. */
-            zlexrangespec lrs;       /* Lex range. */
-            uint32_t start;          /* Start pos for positional ranges. */
-            uint32_t end;            /* End pos for positional ranges. */
-            void *current;           /* Zset iterator current node. */
-            OrderedIndexIterator oi; /* OrderedIndex iterator for OBJ_ENCODING_BTREE encoding. */
-            int er;                  /* Zset iterator end reached flag
-                                         (true if end was reached). */
-            int fwd;                 /* The ordered index cursor sits between
-                                         items: 1 when it is just after
-                                         'current', 0 when just before it. */
-        } zset;
         struct {
             /* Stream, use only if value->type == OBJ_STREAM */
             streamID currentid;    /* Current entry while iterating. */
@@ -330,6 +342,9 @@ static size_t moduleTempClientMinCount = 0; /* Min client count in pool since
 /* We need a mutex that is unlocked / relocked in beforeSleep() in order to
  * allow thread safe contexts to execute commands at a safe moment. */
 static pthread_mutex_t moduleGIL = PTHREAD_MUTEX_INITIALIZER;
+/* Set while the calling thread holds moduleGIL (see moduleAcquireGIL()). The
+ * sorted set walk hooks decide by it whether they may touch module_zset_walks. */
+static __thread int module_gil_held = 0;
 
 /* Function pointer type for keyspace event notification subscriptions from modules. */
 typedef int (*ValkeyModuleNotificationFunc)(ValkeyModuleCtx *ctx, int type, const char *event, ValkeyModuleString *key);
@@ -527,7 +542,12 @@ void VM_CloseKey(ValkeyModuleKey *key);
 void autoMemoryCollect(ValkeyModuleCtx *ctx);
 robj **moduleCreateArgvFromUserFormat(const char *cmdname, const char *fmt, int *argcp, int *flags, va_list ap);
 void VM_ZsetRangeStop(ValkeyModuleKey *kp);
-static void zsetKeyReset(ValkeyModuleKey *key);
+static void moduleZsetWalksDetachAll(void);
+static void moduleZsetWalksThreadDone(void);
+static uint64_t moduleZsetWalksMark(void);
+static void moduleZsetWalksCallbackDone(uint64_t mark);
+static void moduleZsetWalksDetachKey(serverDb *db, robj *keyname);
+static void moduleZsetWalksContextFreed(ValkeyModuleCtx *ctx);
 static void moduleInitKeyTypeSpecific(ValkeyModuleKey *key);
 void VM_FreeDict(ValkeyModuleCtx *ctx, ValkeyModuleDict *d);
 void VM_FreeServerInfo(ValkeyModuleCtx *ctx, ValkeyModuleServerInfoData *data);
@@ -936,6 +956,7 @@ void moduleFreeContext(ValkeyModuleCtx *ctx) {
         postExecutionUnitOperations();
     }
     autoMemoryCollect(ctx);
+    moduleZsetWalksContextFreed(ctx);
     poolAllocRelease(ctx);
     if (ctx->postponed_arrays) {
         /* Fill the placeholders, since a NULL node left in the reply list
@@ -2601,6 +2622,7 @@ void VM_Yield(ValkeyModuleCtx *ctx, int flags, const char *busy_reply) {
 
     long long now = getMonotonicUs();
     if (now >= ctx->next_yield_time) {
+        moduleZsetWalksDetachAll(); /* Defrag and other clients run below. */
         /* In loading mode, there's no need to handle busy_module_yield_reply,
          * and busy_module_yield_flags, since the server is anyway rejecting all
          * commands with -LOADING. */
@@ -2636,8 +2658,10 @@ void VM_Yield(ValkeyModuleCtx *ctx, int flags, const char *busy_reply) {
                     }
                 } else {
                     /* Release the GIL, yielding CPU to give the main thread an opportunity to start
-                     * event processing, and then acquire the GIL again until the main thread releases it. */
-                    moduleReleaseGIL();
+                     * event processing, and then acquire the GIL again until the main thread releases it.
+                     * A temporary release: the walks of this thread's contexts go on (detached, they
+                     * re-seek at the next step). */
+                    moduleReleaseGILTemporarily();
                     sched_yield();
                     moduleAcquireGIL();
                 }
@@ -4340,6 +4364,7 @@ int VM_SelectDb(ValkeyModuleCtx *ctx, int newid) {
  * calling VM_CloseKey on the opened key.
  */
 int VM_KeyExists(ValkeyModuleCtx *ctx, robj *keyname) {
+    moduleZsetWalksDetachKey(ctx->client->db, keyname); /* The lookup can expire the key. */
     robj *value = lookupKeyReadWithFlags(ctx->client->db, keyname, LOOKUP_NOTOUCH);
     return (value != NULL);
 }
@@ -4353,13 +4378,13 @@ static void moduleInitKey(ValkeyModuleKey *kp, ValkeyModuleCtx *ctx, robj *keyna
     kp->value = value;
     kp->iter = NULL;
     kp->mode = mode;
+    kp->zset_walk = NULL;
     if (kp->value) moduleInitKeyTypeSpecific(kp);
 }
 
 /* Initialize the type-specific part of the key. Only when key has a value. */
 static void moduleInitKeyTypeSpecific(ValkeyModuleKey *key) {
     switch (objectGetType(key->value)) {
-    case OBJ_ZSET: zsetKeyReset(key); break;
     case OBJ_STREAM: key->u.stream.signalready = 0; break;
     }
 }
@@ -4403,6 +4428,7 @@ ValkeyModuleKey *VM_OpenKey(ValkeyModuleCtx *ctx, robj *keyname, int mode) {
     flags |= (mode & VALKEYMODULE_OPEN_KEY_NOEXPIRE ? LOOKUP_NOEXPIRE : 0);
     flags |= (mode & VALKEYMODULE_OPEN_KEY_NOEFFECTS ? LOOKUP_NOEFFECTS : 0);
 
+    moduleZsetWalksDetachKey(ctx->client->db, keyname); /* The lookup can expire the key. */
     if (mode & VALKEYMODULE_WRITE) {
         value = lookupKeyWriteWithFlags(ctx->client->db, keyname, flags);
         if (value && bgIteration_isEntryInuse(value)) return NULL;
@@ -4441,10 +4467,12 @@ int VM_GetOpenKeyModesAll(void) {
 static void moduleCloseKey(ValkeyModuleKey *key) {
     int signal = SHOULD_SIGNAL_MODIFIED_KEYS(key->ctx);
     if ((key->mode & VALKEYMODULE_WRITE) && signal) signalModifiedKey(key->ctx->client, key->db, key->key);
+    /* The walk is tracked on the handle, not on the value: the value may have
+     * changed type or been deleted since the walk started. */
+    if (key->zset_walk) VM_ZsetRangeStop(key);
     if (key->value) {
         if (key->iter) moduleFreeKeyIterator(key);
         switch (objectGetType(key->value)) {
-        case OBJ_ZSET: VM_ZsetRangeStop(key); break;
         case OBJ_STREAM:
             if (key->u.stream.signalready) /* One or more VM_StreamAdd() have been done. */
                 signalKeyAsReady(key->db, key->key, OBJ_STREAM);
@@ -4455,7 +4483,10 @@ static void moduleCloseKey(ValkeyModuleKey *key) {
     decrRefCount(key->key);
 }
 
-/* Close a key handle. The key handle is freed and should not be accessed anymore. */
+/* Close a key handle. The key handle is freed and should not be accessed
+ * anymore. A handle opened in a thread safe context is closed with the lock
+ * held, as every key API call from a module thread, and so is freeing a
+ * context that still holds such a handle. */
 void VM_CloseKey(ValkeyModuleKey *key) {
     if (key == NULL) return;
     moduleCloseKey(key);
@@ -4519,6 +4550,7 @@ size_t VM_ValueLength(ValkeyModuleKey *key) {
 int VM_DeleteKey(ValkeyModuleKey *key) {
     if (!(key->mode & VALKEYMODULE_WRITE)) return VALKEYMODULE_ERR;
     if (key->value) {
+        moduleZsetWalksDetachKey(key->db, key->key);
         dbDelete(key->db, key->key);
         key->value = NULL;
     }
@@ -4533,6 +4565,7 @@ int VM_DeleteKey(ValkeyModuleKey *key) {
 int VM_UnlinkKey(ValkeyModuleKey *key) {
     if (!(key->mode & VALKEYMODULE_WRITE)) return VALKEYMODULE_ERR;
     if (key->value) {
+        moduleZsetWalksDetachKey(key->db, key->key);
         dbAsyncDelete(key->db, key->key);
         key->value = NULL;
     }
@@ -4565,6 +4598,7 @@ int VM_SetExpire(ValkeyModuleKey *key, mstime_t expire) {
         mstime_t basetime = commandTimeSnapshot();
         if (expire > LLONG_MAX - basetime) return VALKEYMODULE_ERR;
         expire += basetime;
+        moduleZsetWalksDetachKey(key->db, key->key); /* setExpire() can reallocate the object. */
         key->value = setExpire(key->ctx->client, key->db, key->key, expire);
     } else {
         removeExpire(key->db, key->key);
@@ -4594,6 +4628,7 @@ int VM_SetAbsExpire(ValkeyModuleKey *key, mstime_t expire) {
     if (!(key->mode & VALKEYMODULE_WRITE) || key->value == NULL || (expire < 0 && expire != VALKEYMODULE_NO_EXPIRE))
         return VALKEYMODULE_ERR;
     if (expire != VALKEYMODULE_NO_EXPIRE) {
+        moduleZsetWalksDetachKey(key->db, key->key); /* setExpire() can reallocate the object. */
         key->value = setExpire(key->ctx->client, key->db, key->key, expire);
     } else {
         removeExpire(key->db, key->key);
@@ -4606,6 +4641,7 @@ int VM_SetAbsExpire(ValkeyModuleKey *key, mstime_t expire) {
  * propagated to the AOF file.
  * When async is set to true, db contents will be freed by a background thread. */
 void VM_ResetDataset(int restart_aof, int async) {
+    moduleZsetWalksDetachAll();
     if (restart_aof && server.aof_state != AOF_OFF) stopAppendOnly();
     flushAllDataAndResetRDB((async ? EMPTYDB_ASYNC : EMPTYDB_NO_FLAGS) | EMPTYDB_NOFUNCTIONS);
     if (server.aof_enabled && restart_aof) restartAOFAfterSYNC();
@@ -4618,6 +4654,7 @@ unsigned long long VM_DbSize(ValkeyModuleCtx *ctx) {
 
 /* Returns a name of a random key, or NULL if current db is empty. */
 ValkeyModuleString *VM_RandomKey(ValkeyModuleCtx *ctx) {
+    moduleZsetWalksDetachAll(); /* dbRandomKey() can expire keys. */
     robj *key = dbRandomKey(ctx->client->db);
     autoMemoryAdd(ctx, VALKEYMODULE_AM_STRING, key);
     return key;
@@ -5109,6 +5146,7 @@ int VM_ZsetAdd(ValkeyModuleKey *key, double score, ValkeyModuleString *ele, int 
     int in_flags = 0, out_flags = 0;
     if (!(key->mode & VALKEYMODULE_WRITE)) return VALKEYMODULE_ERR;
     if (key->value && objectGetType(key->value) != OBJ_ZSET) return VALKEYMODULE_ERR;
+    if (key->value) moduleZsetWalksDetachKey(key->db, key->key);
     if (key->value == NULL) moduleCreateEmptyKey(key, VALKEYMODULE_KEYTYPE_ZSET);
     if (flagsptr) in_flags = moduleZsetAddFlagsToCoreFlags(*flagsptr);
     if (zsetAdd(key->value, score, objectGetVal(ele), in_flags, &out_flags, NULL) == 0) {
@@ -5137,6 +5175,7 @@ int VM_ZsetIncrby(ValkeyModuleKey *key, double score, ValkeyModuleString *ele, i
     int in_flags = 0, out_flags = 0;
     if (!(key->mode & VALKEYMODULE_WRITE)) return VALKEYMODULE_ERR;
     if (key->value && objectGetType(key->value) != OBJ_ZSET) return VALKEYMODULE_ERR;
+    if (key->value) moduleZsetWalksDetachKey(key->db, key->key);
     if (key->value == NULL) moduleCreateEmptyKey(key, VALKEYMODULE_KEYTYPE_ZSET);
     if (flagsptr) in_flags = moduleZsetAddFlagsToCoreFlags(*flagsptr);
     in_flags |= ZADD_IN_INCR;
@@ -5170,6 +5209,7 @@ int VM_ZsetIncrby(ValkeyModuleKey *key, double score, ValkeyModuleString *ele, i
 int VM_ZsetRem(ValkeyModuleKey *key, ValkeyModuleString *ele, int *deleted) {
     if (!(key->mode & VALKEYMODULE_WRITE)) return VALKEYMODULE_ERR;
     if (key->value && objectGetType(key->value) != OBJ_ZSET) return VALKEYMODULE_ERR;
+    if (key->value != NULL) moduleZsetWalksDetachKey(key->db, key->key);
     if (key->value != NULL && zsetDel(key->value, objectGetVal(ele))) {
         if (deleted) *deleted = 1;
         moduleDelKeyIfEmpty(key);
@@ -5196,36 +5236,385 @@ int VM_ZsetScore(ValkeyModuleKey *key, ValkeyModuleString *ele, double *score) {
 
 /* --------------------------------------------------------------------------
  * ## Key API for Sorted Set iterator
+ *
+ * A range walk belongs to the key handle it was started on. It is valid until
+ * ValkeyModule_ZsetRangeStop() or ValkeyModule_CloseKey(), inside one command
+ * or one locked section of a thread safe context. A walk started in a thread
+ * safe context belongs to the thread that started it and ends when that
+ * thread releases the lock with ValkeyModule_ThreadSafeContextUnlock(): the
+ * next step reports the end of the range. The temporary release inside
+ * ValkeyModule_Yield() does not end it, and neither does another thread's
+ * unlock or a release the server makes for a moment on this thread's behalf
+ * (while a scripting engine is unregistered). A walk started inside a
+ * callback that runs with no module context (an event loop or one-shot
+ * callback, a command filter, the INFO or the module's global defrag
+ * callback, a config get or set callback, the user changed callback) ends
+ * when that callback returns, except that the INFO callback run for a crash
+ * report ends nothing. A walk started before the callback, for example by a
+ * module thread that calls ValkeyModule_Call() while command filters are
+ * registered, goes on. To continue in a later command or locked section,
+ * keep the last (score, member) returned and start a new walk from there.
+ * Stopping a walk started in a thread safe context, closing its key handle,
+ * and freeing a context that still holds such a handle must run with the
+ * lock held, as every key API call from a module thread must.
+ *
+ * While the sorted set does not change, a step follows a pointer into the
+ * listpack or the B+tree and copies nothing. Sorted sets that no module is
+ * walking pay nothing for this API.
+ *
+ * The sorted set may change during the walk: through the write functions on
+ * the same key handle (ValkeyModule_ZsetAdd(), ValkeyModule_ZsetIncrby(),
+ * ValkeyModule_ZsetRem()), through another handle on the same key, through
+ * ValkeyModule_Call(), or while the GIL is released. Before such a change
+ * the module layer detaches every active walk on the key: it saves the
+ * (score, member) the walk sits on and drops its pointers. The next step
+ * finds the key again, seeks from the saved position and attaches again.
+ * A callback that runs with a module context in the middle of a command,
+ * such as a keyspace notification callback fired by a command run through
+ * ValkeyModule_Call() before it has finished writing, may step a walk: the
+ * walk is detached again when that context is freed. Not covered are the
+ * callbacks that run with no module context and no cleanup at their return:
+ * all of a data type's callbacks (rdb_load, rdb_save, aof_rewrite, aux_load,
+ * aux_save, copy, free, unlink, defrag, free_effort, mem_usage, digest and
+ * the variants with a 2 suffix; free may run on the lazy free thread without
+ * the lock) and the fork done handler. A walk stepped there, in the middle of a
+ * command that writes the sorted set again afterwards, is left pointing into
+ * freed memory, so do not step a walk from such a callback. The rules are:
+ *
+ * 1. The walk's position is a point in (score, member) order: the entry it
+ *    last returned. It only moves in the direction of travel, and it never
+ *    follows an entry.
+ * 2. A step returns the first entry strictly beyond the position, in range,
+ *    in the sorted set as it is now. So an entry is returned if and only if
+ *    its current (score, member) lies ahead of the position: an entry nobody
+ *    touched is returned exactly once; an entry added or moved ahead of the
+ *    position is returned, again if it was returned before; an entry moved
+ *    behind the position is not.
+ * 3. The walk is not promised to end. A module that keeps placing entries
+ *    ahead of the position, for example by raising the score of each entry
+ *    it returns on a forward walk over an open range, keeps the walk going,
+ *    as a client looping over ZRANGEBYSCORE and ZINCRBY would. To change
+ *    scores in the direction of travel, walk the other way, bound the range,
+ *    or collect the members first.
+ * 4. ValkeyModule_ZsetRangeCurrentElement() returns the entry at the
+ *    position's (score, member) if it is in the sorted set now, else NULL.
+ *    It does not set the end-of-range flag.
+ * 5. If the key is deleted, or its value replaced by one that is not a sorted
+ *    set, the walk ends at the next step. The walk finds the key again by
+ *    name, so if a sorted set is created under the same name before that
+ *    step, the walk goes on in the new set from its position. The key handle
+ *    itself follows the existing rule: after the key is deleted or replaced
+ *    by a route other than this handle, it is no longer valid.
+ *
+ * Checklist: a new module API function that can change, free, replace or
+ * reallocate a key's value while module code runs must call
+ * moduleZsetWalksDetachKey() or moduleZsetWalksDetachAll() before the change.
+ * See the existing callers.
  * -------------------------------------------------------------------------- */
 
-void zsetKeyReset(ValkeyModuleKey *key) {
-    key->u.zset.type = VALKEYMODULE_ZSET_RANGE_NONE;
-    key->u.zset.current = NULL;
-    key->u.zset.er = 1;
+/* Key handles with an active range walk. Normally empty or one entry long, so
+ * every hook costs one length test when no module is walking. */
+static list *module_zset_walks;
+
+static inline int zsetWalkAttached(const ValkeyModuleZsetWalk *w) {
+    return w->lp_eptr != NULL || w->btree_item != NULL;
 }
 
-/* Stop a sorted set iteration. */
-void VM_ZsetRangeStop(ValkeyModuleKey *key) {
-    if (!key->value || objectGetType(key->value) != OBJ_ZSET) return;
-    /* Free resources if needed. */
-    if (key->u.zset.type == VALKEYMODULE_ZSET_RANGE_LEX) zsetFreeLexRange(&key->u.zset.lrs);
-    /* Reset the ordered index iterator if one was active. */
-    if (key->value->encoding == OBJ_ENCODING_BTREE &&
-        key->u.zset.type != VALKEYMODULE_ZSET_RANGE_NONE) {
-        orderedIndexResetIterator(&key->u.zset.oi);
+static inline int zsetWalkHasEntry(const ValkeyModuleZsetWalk *w) {
+    return zsetWalkAttached(w) || w->current != NULL;
+}
+
+/* Decode the listpack member entry at 'eptr' and its score. An integer
+ * encoded member is written as text into 'intbuf' (LONG_STR_SIZE bytes). */
+static void zsetWalkListpackEntry(unsigned char *zl, unsigned char *eptr, const char **ele, size_t *len, char *intbuf, double *score) {
+    unsigned int vlen;
+    long long vlong;
+    unsigned char *vstr = lpGetValue(eptr, &vlen, &vlong);
+    if (vstr == NULL) {
+        vlen = ll2string(intbuf, LONG_STR_SIZE, vlong);
+        vstr = (unsigned char *)intbuf;
     }
-    /* Setup sensible values so that misused iteration API calls when an
-     * iterator is not active will result into something more sensible
-     * than crashing. */
-    zsetKeyReset(key);
+    *ele = (const char *)vstr;
+    *len = vlen;
+    *score = zzlGetScore(lpNext(zl, eptr));
+}
+
+/* Read the entry an attached walk sits on. */
+static void zsetWalkReadAttached(ValkeyModuleKey *key, const char **ele, size_t *len, char *intbuf, double *score) {
+    ValkeyModuleZsetWalk *w = key->zset_walk;
+    if (w->lp_eptr) {
+        zsetWalkListpackEntry(objectGetVal(key->value), w->lp_eptr, ele, len, intbuf, score);
+    } else {
+        orderedIndexItemGetElement(w->btree_item, ele, len);
+        *score = orderedIndexItemGetScore(w->btree_item);
+    }
+}
+
+/* Is the entry (score, ele) still inside the walk's range when stepping in
+ * 'reverse' direction? A lex walk checks only the far bound in its direction
+ * of travel, as ZRANGEBYLEX and ZREVRANGEBYLEX do: entries are in (score,
+ * member) order, so on a set with several scores a member can fall before
+ * the near bound while members inside the range still follow it. A score
+ * walk checks both bounds, since (score, member) order is score order. */
+static inline int zsetWalkScoreInRange(ValkeyModuleZsetWalk *w, double score) {
+    return zsetScoreGteMin(score, &w->rs) && zsetScoreLteMax(score, &w->rs);
+}
+
+static inline int zsetWalkLexInRange(ValkeyModuleZsetWalk *w, const char *ele, size_t len, int reverse) {
+    return reverse ? zsetLexGteMin(ele, len, &w->lrs) : zsetLexLteMax(ele, len, &w->lrs);
+}
+
+static int zsetWalkInRange(ValkeyModuleZsetWalk *w, double score, const char *ele, size_t len, int reverse) {
+    if (w->type == VALKEYMODULE_ZSET_RANGE_SCORE) return zsetWalkScoreInRange(w, score);
+    if (w->type == VALKEYMODULE_ZSET_RANGE_LEX) return zsetWalkLexInRange(w, ele, len, reverse);
+    return 0;
+}
+
+/* Range checks for an attached step: decode only what the range type needs,
+ * the score for a score range, the member for a lex range. */
+static int zsetWalkListpackStepInRange(ValkeyModuleZsetWalk *w, unsigned char *zl, unsigned char *eptr, int reverse) {
+    if (w->type == VALKEYMODULE_ZSET_RANGE_SCORE) return zsetWalkScoreInRange(w, zzlGetScore(lpNext(zl, eptr)));
+    if (w->type == VALKEYMODULE_ZSET_RANGE_LEX) {
+        /* Far bound in the direction of travel only, as zsetWalkLexInRange(). */
+        return reverse ? zzlLexValueGteMin(eptr, &w->lrs) : zzlLexValueLteMax(eptr, &w->lrs);
+    }
+    return 0;
+}
+
+static int zsetWalkBtreeStepInRange(ValkeyModuleZsetWalk *w, const OrderedIndexItem *item, int reverse) {
+    if (w->type == VALKEYMODULE_ZSET_RANGE_SCORE) return zsetWalkScoreInRange(w, orderedIndexItemGetScore(item));
+    if (w->type == VALKEYMODULE_ZSET_RANGE_LEX) {
+        const char *ele;
+        size_t len;
+        orderedIndexItemGetElement(item, &ele, &len);
+        return zsetWalkLexInRange(w, ele, len, reverse);
+    }
+    return 0;
+}
+
+static void zsetWalkDropPointers(ValkeyModuleZsetWalk *w) {
+    w->lp_eptr = NULL;
+    w->btree_item = NULL;
+    orderedIndexResetIterator(&w->oi);
+}
+
+/* The walk now sits on the listpack entry 'eptr' of the key's value. */
+static void zsetWalkAttachListpack(ValkeyModuleZsetWalk *w, unsigned char *eptr) {
+    sdsfree(w->current);
+    w->current = NULL;
+    w->btree_item = NULL;
+    w->lp_eptr = eptr;
+}
+
+/* The walk now sits on 'item'; 'w->oi' is positioned next to it, after it
+ * when 'fwd' is set and before it otherwise. */
+static void zsetWalkAttachBtree(ValkeyModuleZsetWalk *w, const OrderedIndexItem *item, int fwd) {
+    sdsfree(w->current);
+    w->current = NULL;
+    w->lp_eptr = NULL;
+    w->btree_item = item;
+    w->fwd = fwd;
+}
+
+/* Save the entry the walk sits on and drop the pointers into the sorted set.
+ * Called before the sorted set, or the object holding it, can change. */
+static void zsetWalkDetach(ValkeyModuleKey *key) {
+    ValkeyModuleZsetWalk *w = key->zset_walk;
+    if (!zsetWalkAttached(w)) return;
+    const char *ele;
+    size_t len;
+    char intbuf[LONG_STR_SIZE];
+    double score;
+    zsetWalkReadAttached(key, &ele, &len, intbuf, &score);
+    w->current = sdsnewlen(ele, len);
+    w->score = score;
+    zsetWalkDropPointers(w);
+}
+
+/* Run 'visit' on every registered walk's key handle. 'visit' may stop the
+ * walk, which removes the node being visited: listNext() has already saved
+ * the next one. */
+static void moduleZsetWalksForEach(void (*visit)(ValkeyModuleKey *key, void *arg), void *arg) {
+    if (listLength(module_zset_walks) == 0) return;
+    listIter li;
+    listNode *ln;
+    listRewind(module_zset_walks, &li);
+    while ((ln = listNext(&li)) != NULL) visit(listNodeValue(ln), arg);
+}
+
+static void zsetWalkVisitDetach(ValkeyModuleKey *key, void *arg) {
+    UNUSED(arg);
+    zsetWalkDetach(key);
+}
+
+/* Detach every active walk. Call it before anything that can change, free,
+ * replace or reallocate keys the module layer cannot name in advance, such as
+ * a command run through ValkeyModule_Call(). */
+static void moduleZsetWalksDetachAll(void) {
+    moduleZsetWalksForEach(zsetWalkVisitDetach, NULL);
+}
+
+static void zsetWalkVisitStopOwn(ValkeyModuleKey *key, void *arg) {
+    UNUSED(arg);
+    ValkeyModuleZsetWalk *w = key->zset_walk;
+    if (w->thread_safe && pthread_equal(w->owner, pthread_self()))
+        VM_ZsetRangeStop(key);
+    else
+        zsetWalkDetach(key);
+}
+
+/* Called when the calling thread is done with the section in which a walk of
+ * a thread safe context may live: a module thread releasing the lock with
+ * ValkeyModule_ThreadSafeContextUnlock() and the main thread releasing it
+ * before it sleeps. (A callback that runs with no module context is a smaller
+ * section inside one of these: see moduleZsetWalksCallbackDone().) The walks
+ * that thread started in a thread safe context end here, as the section
+ * comment says (a walk of a thread safe context belongs to the thread that
+ * started it and ends when that thread releases the lock): once a
+ * module thread has released the lock it may stop the walk, close the handle
+ * or free the context without the lock, and ValkeyModule_ZsetRangeStop() must
+ * not reach module_zset_walks then. Stopped here, those calls find no walk
+ * and do nothing. Walks of other threads are only detached: another module
+ * thread may be inside ValkeyModule_Yield(), waiting to take the lock back,
+ * and its walk goes on. The temporary releases (moduleReleaseGILTemporarily)
+ * do not come here. */
+static void moduleZsetWalksThreadDone(void) {
+    moduleZsetWalksForEach(zsetWalkVisitStopOwn, NULL);
+}
+
+/* Number of walks ever started. A walk's 'seq' is its value at the start. */
+static uint64_t module_zset_walk_seq;
+
+/* Take a mark before running a module callback with no module context; pass
+ * it to moduleZsetWalksCallbackDone() when the callback returns. Without the
+ * lock the counter is not read: the cleanup does nothing then either. */
+static uint64_t moduleZsetWalksMark(void) {
+    return module_gil_held ? module_zset_walk_seq : 0;
+}
+
+static void zsetWalkVisitStopCallback(ValkeyModuleKey *key, void *arg) {
+    uint64_t mark = *(uint64_t *)arg;
+    ValkeyModuleZsetWalk *w = key->zset_walk;
+    if (w->thread_safe && w->seq > mark && pthread_equal(w->owner, pthread_self()))
+        VM_ZsetRangeStop(key);
+    else
+        zsetWalkDetach(key);
+}
+
+/* Called when a module callback that runs with no module context returns: an
+ * event loop or one-shot callback, a command filter, the INFO or the module's
+ * global defrag callback, a config get or set callback, the user changed
+ * callback. Such a callback can only walk through a detached thread safe
+ * context. Freeing that context with the lock held stops the walks of the
+ * handles it never closed (moduleZsetWalksContextFreed()), but a context the
+ * callback keeps across its return would keep them, so the walks the calling
+ * thread started inside the callback (those with a sequence number above
+ * 'mark', taken before the callback) end here. A walk the same thread started
+ * before the callback goes on: a module thread that holds the lock, walks and
+ * calls ValkeyModule_Call() runs the command filters inside its section, and
+ * the walk belongs to the section, not to the filter. Every other walk is
+ * detached: the callback may have stepped a walk held by an outer context and
+ * attached it to a sorted set the rest of the command can still change. Nested
+ * callbacks take nested marks, so each stops only its own walks. Without the
+ * lock nothing is done: the user changed callback can run from freeClient()
+ * when a module thread frees a thread safe context after unlocking, and the
+ * list must not be touched then (that thread's walks ended at its unlock). */
+static void moduleZsetWalksCallbackDone(uint64_t mark) {
+    if (!module_gil_held) return;
+    moduleZsetWalksForEach(zsetWalkVisitStopCallback, &mark);
+}
+
+struct zsetWalkDbKey {
+    serverDb *db;
+    robj *keyname;
+};
+
+static void zsetWalkVisitDetachDbKey(ValkeyModuleKey *key, void *arg) {
+    struct zsetWalkDbKey *k = arg;
+    if (key->db == k->db && equalStringObjects(key->key, k->keyname)) zsetWalkDetach(key);
+}
+
+/* Detach the active walks on key 'keyname' of 'db'. Call it before anything
+ * that can change, free, replace or reallocate that key's value. Walks are
+ * matched by name, not by object: setting an expire reallocates the object. */
+static void moduleZsetWalksDetachKey(serverDb *db, robj *keyname) {
+    struct zsetWalkDbKey k = {db, keyname};
+    moduleZsetWalksForEach(zsetWalkVisitDetachDbKey, &k);
+}
+
+static void zsetWalkVisitStopCtx(ValkeyModuleKey *key, void *arg) {
+    if (key->ctx == arg)
+        VM_ZsetRangeStop(key);
+    else
+        zsetWalkDetach(key);
+}
+
+/* Called when a module context is freed, after auto memory collection.
+ *
+ * Stops the walks of the key handles opened in 'ctx' that the module did not
+ * close: a leaked handle must not leave a walk in module_zset_walks, where
+ * the next hook would follow its pointers. Then detaches every other walk:
+ * a callback that ran in 'ctx' in the middle of a command may have stepped a
+ * walk held by an outer context and attached it to the sorted set, which the
+ * rest of that command can still change with no hook in between. A keyspace
+ * notification callback fired by a command run through ValkeyModule_Call()
+ * before that command has finished writing is one such callback: ZUNIONSTORE
+ * fires "expired" for a source key it found expired before it deletes and
+ * replaces the destination.
+ *
+ * Only with the lock held: module_zset_walks must only change under it. A
+ * context freed without the lock is a thread safe context whose thread has
+ * unlocked, and the walks it started ended at that unlock
+ * (moduleZsetWalksThreadDone), so the auto memory collection just before
+ * this point closed its keys without reaching the list; a handle such a
+ * context leaked is a memory leak, not a dangling pointer. The kind of
+ * context does not decide: the contexts the server makes for a scripting
+ * engine's callbacks carry the thread safe flag and are freed with the lock
+ * held, on the main thread or on the lazy free thread. */
+static void moduleZsetWalksContextFreed(ValkeyModuleCtx *ctx) {
+    if (!module_gil_held) return;
+    moduleZsetWalksForEach(zsetWalkVisitStopCtx, ctx);
+}
+
+/* Stop a sorted set iteration. For a walk started in a thread safe context
+ * call it with the lock held, as every key API call from a module thread;
+ * once that thread has released the lock with
+ * ValkeyModule_ThreadSafeContextUnlock() the walk has ended already and this
+ * does nothing. */
+void VM_ZsetRangeStop(ValkeyModuleKey *key) {
+    ValkeyModuleZsetWalk *w = key->zset_walk;
+    if (w == NULL) return;
+    if (w->type == VALKEYMODULE_ZSET_RANGE_LEX) zsetFreeLexRange(&w->lrs);
+    sdsfree(w->current);
+    listDelNode(module_zset_walks, w->node);
+    zfree(w);
+    key->zset_walk = NULL;
 }
 
 /* Return the "End of range" flag value to signal the end of the iteration:
  * set when the range is empty or the most recent step found no element in its
- * direction, cleared again by a step that moves. */
+ * direction, cleared again by a step that moves. It is also 1 after the thread
+ * that started the walk in a thread safe context has released the lock with
+ * ValkeyModule_ThreadSafeContextUnlock(): the walk has ended, as at the end
+ * of the range. ValkeyModule_Yield() does not end it. */
 int VM_ZsetRangeEndReached(ValkeyModuleKey *key) {
-    if (!key->value || objectGetType(key->value) != OBJ_ZSET) return 1;
-    return key->u.zset.er;
+    if (key->zset_walk == NULL) return 1;
+    return key->zset_walk->er;
+}
+
+/* Start a walk of kind 'type' on the handle, sitting on no entry yet, and
+ * register it. The caller fills in the range spec. */
+static ValkeyModuleZsetWalk *zsetWalkStart(ValkeyModuleKey *key, uint32_t type, int first) {
+    ValkeyModuleZsetWalk *w = zcalloc(sizeof(*w));
+    w->type = type;
+    w->fwd = first;
+    w->thread_safe = (key->ctx->flags & VALKEYMODULE_CTX_THREAD_SAFE) != 0;
+    w->owner = pthread_self();
+    w->seq = ++module_zset_walk_seq;
+    listAddNodeTail(module_zset_walks, key);
+    w->node = listLast(module_zset_walks);
+    key->zset_walk = w;
+    return w;
 }
 
 /* Helper function for VM_ZsetFirstInScoreRange() and VM_ZsetLastInScoreRange().
@@ -5238,29 +5627,30 @@ int zsetInitScoreRange(ValkeyModuleKey *key, double min, double max, int minex, 
     if (!key->value || objectGetType(key->value) != OBJ_ZSET) return VALKEYMODULE_ERR;
 
     VM_ZsetRangeStop(key);
-    key->u.zset.type = VALKEYMODULE_ZSET_RANGE_SCORE;
-    key->u.zset.er = 0;
+    ValkeyModuleZsetWalk *w = zsetWalkStart(key, VALKEYMODULE_ZSET_RANGE_SCORE, first);
 
     /* Set up the range structure used by the sorted set core implementation
      * in order to seek at the specified element. */
-    zrangespec *zrs = &key->u.zset.rs;
+    zrangespec *zrs = &w->rs;
     zrs->min = min;
     zrs->max = max;
     zrs->minex = minex;
     zrs->maxex = maxex;
 
     if (objectGetEncoding(key->value) == OBJ_ENCODING_LISTPACK) {
-        key->u.zset.current = first ? zzlFirstInRange(objectGetVal(key->value), zrs) : zzlLastInRange(objectGetVal(key->value), zrs);
+        unsigned char *zl = objectGetVal(key->value);
+        unsigned char *eptr = first ? zzlFirstInRange(zl, zrs) : zzlLastInRange(zl, zrs);
+        if (eptr) zsetWalkAttachListpack(w, eptr);
     } else if (objectGetEncoding(key->value) == OBJ_ENCODING_BTREE) {
         zset *zs = objectGetVal(key->value);
-        orderedIndexInitIterator(&key->u.zset.oi, zs->oi);
-        orderedIndexSeekToScoreRange(&key->u.zset.oi, zrs->min, zrs->max, zrs->minex, zrs->maxex, first ? 0 : -1);
-        key->u.zset.current = first ? orderedIndexNext(&key->u.zset.oi) : orderedIndexPrev(&key->u.zset.oi);
-        key->u.zset.fwd = first;
+        orderedIndexInitIterator(&w->oi, zs->oi);
+        orderedIndexSeekToScoreRange(&w->oi, zrs->min, zrs->max, zrs->minex, zrs->maxex, first ? 0 : -1);
+        OrderedIndexItem *item = first ? orderedIndexNext(&w->oi) : orderedIndexPrev(&w->oi);
+        if (item) zsetWalkAttachBtree(w, item, first);
     } else {
         serverPanic("Unsupported zset encoding");
     }
-    if (key->u.zset.current == NULL) key->u.zset.er = 1;
+    if (!zsetWalkAttached(w)) w->er = 1;
     return VALKEYMODULE_OK;
 }
 
@@ -5303,29 +5693,28 @@ int zsetInitLexRange(ValkeyModuleKey *key, ValkeyModuleString *min, ValkeyModule
 
     VM_ZsetRangeStop(key);
 
-    /* Set up the range structure used by the sorted set core implementation
-     * in order to seek at the specified element. */
-    zlexrangespec *zlrs = &key->u.zset.lrs;
-    if (zsetParseLexRange(min, max, zlrs) == C_ERR) return VALKEYMODULE_ERR;
+    /* Parse the range before starting the walk, so that a parse error leaves
+     * no walk behind and nothing to free. */
+    zlexrangespec zlrs;
+    if (zsetParseLexRange(min, max, &zlrs) == C_ERR) return VALKEYMODULE_ERR;
 
-    /* Set the range type to lex only after successfully parsing the range,
-     * otherwise we don't want the zlexrangespec to be freed. */
-    key->u.zset.type = VALKEYMODULE_ZSET_RANGE_LEX;
-    key->u.zset.er = 0;
+    ValkeyModuleZsetWalk *w = zsetWalkStart(key, VALKEYMODULE_ZSET_RANGE_LEX, first);
+    w->lrs = zlrs;
 
     if (objectGetEncoding(key->value) == OBJ_ENCODING_LISTPACK) {
-        key->u.zset.current =
-            first ? zzlFirstInLexRange(objectGetVal(key->value), zlrs) : zzlLastInLexRange(objectGetVal(key->value), zlrs);
+        unsigned char *zl = objectGetVal(key->value);
+        unsigned char *eptr = first ? zzlFirstInLexRange(zl, &w->lrs) : zzlLastInLexRange(zl, &w->lrs);
+        if (eptr) zsetWalkAttachListpack(w, eptr);
     } else if (objectGetEncoding(key->value) == OBJ_ENCODING_BTREE) {
         zset *zs = objectGetVal(key->value);
-        orderedIndexInitIterator(&key->u.zset.oi, zs->oi);
-        orderedIndexSeekToLexRange(&key->u.zset.oi, zlrs->min, zlrs->max, zlrs->minex, zlrs->maxex, first ? 0 : -1);
-        key->u.zset.current = first ? orderedIndexNext(&key->u.zset.oi) : orderedIndexPrev(&key->u.zset.oi);
-        key->u.zset.fwd = first;
+        orderedIndexInitIterator(&w->oi, zs->oi);
+        orderedIndexSeekToLexRange(&w->oi, w->lrs.min, w->lrs.max, w->lrs.minex, w->lrs.maxex, first ? 0 : -1);
+        OrderedIndexItem *item = first ? orderedIndexNext(&w->oi) : orderedIndexPrev(&w->oi);
+        if (item) zsetWalkAttachBtree(w, item, first);
     } else {
         serverPanic("Unsupported zset encoding");
     }
-    if (key->u.zset.current == NULL) key->u.zset.er = 1;
+    if (!zsetWalkAttached(w)) w->er = 1;
 
     return VALKEYMODULE_OK;
 }
@@ -5352,187 +5741,164 @@ int VM_ZsetLastInLexRange(ValkeyModuleKey *key, ValkeyModuleString *min, ValkeyM
     return zsetInitLexRange(key, min, max, 0);
 }
 
-/* Return the current sorted set element of an active sorted set iterator
- * or NULL if the range specified in the iterator does not include any
- * element. */
+/* Return the element at the sorted set iterator's position, or NULL if the
+ * range specified in the iterator does not include any element, or if the
+ * element at the position is no longer in the sorted set with that score
+ * (rule 4 in the section comment). Does not set the end-of-range flag. */
 ValkeyModuleString *VM_ZsetRangeCurrentElement(ValkeyModuleKey *key, double *score) {
-    ValkeyModuleString *str;
+    ValkeyModuleZsetWalk *w = key->zset_walk;
+    if (w == NULL || !zsetWalkHasEntry(w)) return NULL;
 
-    if (!key->value || objectGetType(key->value) != OBJ_ZSET) return NULL;
-    if (key->u.zset.current == NULL) return NULL;
-    if (objectGetEncoding(key->value) == OBJ_ENCODING_LISTPACK) {
-        unsigned char *eptr, *sptr;
-        eptr = key->u.zset.current;
-        sds ele = lpGetObject(eptr);
-        if (score) {
-            sptr = lpNext(objectGetVal(key->value), eptr);
-            *score = zzlGetScore(sptr);
-        }
-        str = createObject(OBJ_STRING, ele);
-    } else if (objectGetEncoding(key->value) == OBJ_ENCODING_BTREE) {
-        const OrderedIndexItem *ln = key->u.zset.current;
-        if (score) *score = orderedIndexItemGetScore(ln);
-        const char *ele;
-        size_t ele_len;
-        orderedIndexItemGetElement(ln, &ele, &ele_len);
-        str = createStringObject(ele, ele_len);
+    const char *ele;
+    size_t len;
+    char intbuf[LONG_STR_SIZE];
+    double cur_score;
+    if (zsetWalkAttached(w)) {
+        zsetWalkReadAttached(key, &ele, &len, intbuf, &cur_score);
     } else {
-        serverPanic("Unsupported zset encoding");
+        /* Detached: the object may have been reallocated, replaced or deleted
+         * since (see zsetRangeStep()), and the entry may be gone or moved. */
+        key->value = dbFind(key->db, objectGetVal(key->key));
+        if (!key->value || objectGetType(key->value) != OBJ_ZSET) return NULL;
+        if (zsetScore(key->value, w->current, &cur_score) == C_ERR || cur_score != w->score) return NULL;
+        ele = w->current;
+        len = sdslen(w->current);
     }
+    if (score) *score = cur_score;
+    ValkeyModuleString *str = createStringObject(ele, len);
     autoMemoryAdd(key->ctx, VALKEYMODULE_AM_STRING, str);
     return str;
 }
 
-/* Go to the next element of the sorted set iterator. Returns 1 if there was
- * a next element, 0 if we are already at the latest element or the range
- * does not include any item at all. */
-int VM_ZsetRangeNext(ValkeyModuleKey *key) {
-    if (!key->value || objectGetType(key->value) != OBJ_ZSET) return 0;
-    if (!key->u.zset.type || !key->u.zset.current) return 0; /* No active iterator. */
+/* Move the walk one entry forward (reverse == 0) or backward (reverse == 1).
+ * Attached: step the pointer. Detached: find the key again, seek strictly
+ * after or before the saved (score, member) in the sorted set as it is now,
+ * then attach. Returns 1 when the walk moved, 0 when it hit the end of the
+ * range; the position is unchanged in that case. */
+static int zsetRangeStep(ValkeyModuleKey *key, int reverse) {
+    ValkeyModuleZsetWalk *w = key->zset_walk;
+    if (w == NULL || !zsetWalkHasEntry(w)) return 0;
 
-    if (objectGetEncoding(key->value) == OBJ_ENCODING_LISTPACK) {
+    if (!zsetWalkAttached(w)) {
+        /* A detached walk cannot trust key->value: since it detached, the
+         * object may have been reallocated (an expire was set, defrag moved
+         * it), replaced or deleted. Find it again without an expiry check
+         * (dbFind, no side effects): the handle never checked expiry after it
+         * was opened, and a lookup that reports a logically expired key as
+         * missing would clear key->value, so that a later write through the
+         * handle would create the key over the existing one. */
+        key->value = dbFind(key->db, objectGetVal(key->key));
+    }
+    if (!key->value || objectGetType(key->value) != OBJ_ZSET) {
+        w->er = 1;
+        return 0;
+    }
+
+    const char *ele;
+    size_t len;
+    char intbuf[LONG_STR_SIZE];
+    double score;
+
+    if (w->lp_eptr) {
         unsigned char *zl = objectGetVal(key->value);
-        unsigned char *eptr = key->u.zset.current;
-        unsigned char *next;
-        next = lpNext(zl, eptr);           /* Skip element. */
-        if (next) next = lpNext(zl, next); /* Skip score. */
-        if (next == NULL) {
-            key->u.zset.er = 1;
-            return 0;
-        } else {
-            /* Are we still within the range? */
-            if (key->u.zset.type == VALKEYMODULE_ZSET_RANGE_SCORE) {
-                /* Fetch the next element score for the
-                 * range check. */
-                unsigned char *saved_next = next;
-                next = lpNext(zl, next);          /* Skip next element. */
-                double score = zzlGetScore(next); /* Obtain the next score. */
-                if (!zsetScoreLteMax(score, &key->u.zset.rs)) {
-                    key->u.zset.er = 1;
-                    return 0;
-                }
-                next = saved_next;
-            } else if (key->u.zset.type == VALKEYMODULE_ZSET_RANGE_LEX) {
-                if (!zzlLexValueLteMax(next, &key->u.zset.lrs)) {
-                    key->u.zset.er = 1;
-                    return 0;
-                }
+        unsigned char *step = reverse ? lpPrev(zl, w->lp_eptr) : lpNext(zl, w->lp_eptr);
+        if (step) step = reverse ? lpPrev(zl, step) : lpNext(zl, step);
+        if (step) {
+            if (zsetWalkListpackStepInRange(w, zl, step, reverse)) {
+                zsetWalkAttachListpack(w, step);
+                w->er = 0;
+                return 1;
             }
-            key->u.zset.current = next;
-            key->u.zset.er = 0;
+        }
+    } else if (w->btree_item) {
+        OrderedIndexIterator *oi = &w->oi;
+        /* The cursor sits between items: step over 'btree_item' first when it
+         * is on the wrong side of it, otherwise it would be returned again. */
+        if (!reverse && !w->fwd) {
+            orderedIndexNext(oi);
+            w->fwd = 1;
+        } else if (reverse && w->fwd) {
+            orderedIndexPrev(oi);
+            w->fwd = 0;
+        }
+        OrderedIndexItem *step = reverse ? orderedIndexPrev(oi) : orderedIndexNext(oi);
+        if (step) {
+            if (zsetWalkBtreeStepInRange(w, step, reverse)) {
+                zsetWalkAttachBtree(w, step, !reverse);
+                w->er = 0;
+                return 1;
+            }
+            /* Out of range: keep the cursor next to 'btree_item'. */
+            if (reverse)
+                orderedIndexNext(oi);
+            else
+                orderedIndexPrev(oi);
+        }
+    } else if (objectGetEncoding(key->value) == OBJ_ENCODING_LISTPACK) {
+        unsigned char *zl = objectGetVal(key->value);
+        unsigned char *eptr = lpSeek(zl, reverse ? -2 : 0);
+        unsigned char *sptr = eptr ? lpNext(zl, eptr) : NULL;
+        while (eptr != NULL) {
+            zsetWalkListpackEntry(zl, eptr, &ele, &len, intbuf, &score);
+            int cmp;
+            if (score != w->score)
+                cmp = score < w->score ? -1 : 1;
+            else
+                cmp = zsetLexCompare(ele, len, w->current);
+            if (reverse ? (cmp < 0) : (cmp > 0)) break;
+            if (reverse)
+                zzlPrev(zl, &eptr, &sptr);
+            else
+                zzlNext(zl, &eptr, &sptr);
+        }
+        if (eptr && zsetWalkInRange(w, score, ele, len, reverse)) {
+            zsetWalkAttachListpack(w, eptr);
+            w->er = 0;
             return 1;
         }
     } else if (objectGetEncoding(key->value) == OBJ_ENCODING_BTREE) {
-        OrderedIndexIterator *oi = &key->u.zset.oi;
-        /* After a backward step the cursor is before 'current': step over it
-         * first, otherwise 'current' would be returned again. */
-        if (!key->u.zset.fwd) {
-            orderedIndexNext(oi);
-            key->u.zset.fwd = 1;
-        }
-        OrderedIndexItem *next = orderedIndexNext(oi);
-        if (next != NULL) {
-            /* Are we still within the range? */
-            int in_range = 1;
-            if (key->u.zset.type == VALKEYMODULE_ZSET_RANGE_SCORE) {
-                in_range = zsetScoreLteMax(orderedIndexItemGetScore(next), &key->u.zset.rs);
-            } else if (key->u.zset.type == VALKEYMODULE_ZSET_RANGE_LEX) {
-                const char *ele;
-                size_t ele_len;
-                orderedIndexItemGetElement(next, &ele, &ele_len);
-                in_range = zsetLexLteMax(ele, ele_len, &key->u.zset.lrs);
-            }
-            if (!in_range) {
-                orderedIndexPrev(oi); /* Keep the cursor next to 'current'. */
-                next = NULL;
+        zset *zs = objectGetVal(key->value);
+        orderedIndexInitIterator(&w->oi, zs->oi);
+        orderedIndexSeekFromKey(&w->oi, w->score, w->current, sdslen(w->current), reverse);
+        OrderedIndexItem *item = reverse ? orderedIndexPrev(&w->oi) : orderedIndexNext(&w->oi);
+        if (item) {
+            orderedIndexItemGetElement(item, &ele, &len);
+            if (zsetWalkInRange(w, orderedIndexItemGetScore(item), ele, len, reverse)) {
+                zsetWalkAttachBtree(w, item, !reverse);
+                w->er = 0;
+                return 1;
             }
         }
-        if (next == NULL) {
-            key->u.zset.er = 1;
-            return 0;
-        }
-        key->u.zset.current = next;
-        key->u.zset.er = 0;
-        return 1;
+        orderedIndexResetIterator(&w->oi);
     } else {
         serverPanic("Unsupported zset encoding");
     }
+    w->er = 1;
+    return 0;
+}
+
+/* Go to the next element of the sorted set iterator. Returns 1 if there was
+ * a next element, 0 if we are already at the latest element or the range
+ * does not include any item at all. It also returns 0 once the thread that
+ * started the walk in a thread safe context has released the lock with
+ * ValkeyModule_ThreadSafeContextUnlock(): the walk has ended, as at the end
+ * of the range, and ValkeyModule_ZsetRangeEndReached() returns 1. To continue,
+ * keep the last (score, member) and start a new walk after locking again.
+ * ValkeyModule_Yield() does not end it. */
+int VM_ZsetRangeNext(ValkeyModuleKey *key) {
+    return zsetRangeStep(key, 0);
 }
 
 /* Go to the previous element of the sorted set iterator. Returns 1 if there was
  * a previous element, 0 if we are already at the first element or the range
- * does not include any item at all. */
+ * does not include any item at all. It also returns 0 once the thread that
+ * started the walk in a thread safe context has released the lock with
+ * ValkeyModule_ThreadSafeContextUnlock(): the walk has ended, as at the end
+ * of the range, and ValkeyModule_ZsetRangeEndReached() returns 1. To continue,
+ * keep the last (score, member) and start a new walk after locking again.
+ * ValkeyModule_Yield() does not end it. */
 int VM_ZsetRangePrev(ValkeyModuleKey *key) {
-    if (!key->value || objectGetType(key->value) != OBJ_ZSET) return 0;
-    if (!key->u.zset.type || !key->u.zset.current) return 0; /* No active iterator. */
-
-    if (objectGetEncoding(key->value) == OBJ_ENCODING_LISTPACK) {
-        unsigned char *zl = objectGetVal(key->value);
-        unsigned char *eptr = key->u.zset.current;
-        unsigned char *prev;
-        prev = lpPrev(zl, eptr);           /* Go back to previous score. */
-        if (prev) prev = lpPrev(zl, prev); /* Back to previous ele. */
-        if (prev == NULL) {
-            key->u.zset.er = 1;
-            return 0;
-        } else {
-            /* Are we still within the range? */
-            if (key->u.zset.type == VALKEYMODULE_ZSET_RANGE_SCORE) {
-                /* Fetch the previous element score for the
-                 * range check. */
-                unsigned char *saved_prev = prev;
-                prev = lpNext(zl, prev);          /* Skip element to get the score.*/
-                double score = zzlGetScore(prev); /* Obtain the prev score. */
-                if (!zsetScoreGteMin(score, &key->u.zset.rs)) {
-                    key->u.zset.er = 1;
-                    return 0;
-                }
-                prev = saved_prev;
-            } else if (key->u.zset.type == VALKEYMODULE_ZSET_RANGE_LEX) {
-                if (!zzlLexValueGteMin(prev, &key->u.zset.lrs)) {
-                    key->u.zset.er = 1;
-                    return 0;
-                }
-            }
-            key->u.zset.current = prev;
-            key->u.zset.er = 0;
-            return 1;
-        }
-    } else if (objectGetEncoding(key->value) == OBJ_ENCODING_BTREE) {
-        OrderedIndexIterator *oi = &key->u.zset.oi;
-        /* After a forward step the cursor is after 'current': step back over
-         * it first, otherwise 'current' would be returned again. */
-        if (key->u.zset.fwd) {
-            orderedIndexPrev(oi);
-            key->u.zset.fwd = 0;
-        }
-        OrderedIndexItem *prev = orderedIndexPrev(oi);
-        if (prev != NULL) {
-            /* Are we still within the range? */
-            int in_range = 1;
-            if (key->u.zset.type == VALKEYMODULE_ZSET_RANGE_SCORE) {
-                in_range = zsetScoreGteMin(orderedIndexItemGetScore(prev), &key->u.zset.rs);
-            } else if (key->u.zset.type == VALKEYMODULE_ZSET_RANGE_LEX) {
-                const char *ele;
-                size_t ele_len;
-                orderedIndexItemGetElement(prev, &ele, &ele_len);
-                in_range = zsetLexGteMin(ele, ele_len, &key->u.zset.lrs);
-            }
-            if (!in_range) {
-                orderedIndexNext(oi); /* Keep the cursor next to 'current'. */
-                prev = NULL;
-            }
-        }
-        if (prev == NULL) {
-            key->u.zset.er = 1;
-            return 0;
-        }
-        key->u.zset.current = prev;
-        key->u.zset.er = 0;
-        return 1;
-    } else {
-        serverPanic("Unsupported zset encoding");
-    }
+    return zsetRangeStep(key, 1);
 }
 
 /* --------------------------------------------------------------------------
@@ -7110,6 +7476,7 @@ static void moduleCallCommandHelper(ValkeyModuleCtx *ctx, client *c, robj **argv
     /* Mirror processInputBuffer: set pending_command so that if the command
      * blocks on keys, unblockClientOnKey will reprocess it on unblock. */
     c->flag.pending_command = 1;
+    moduleZsetWalksDetachAll();
     call(c, call_flags);
 
     /* Propagate database changes from the temporary client back to the context client
@@ -9594,13 +9961,31 @@ void VM_ThreadSafeContextUnlock(ValkeyModuleCtx *ctx) {
 
 void moduleAcquireGIL(void) {
     pthread_mutex_lock(&moduleGIL);
+    module_gil_held = 1;
 }
 
 int moduleTryAcquireGIL(void) {
-    return pthread_mutex_trylock(&moduleGIL);
+    int res = pthread_mutex_trylock(&moduleGIL);
+    if (res == 0) module_gil_held = 1;
+    return res;
 }
 
+/* Release the lock at the end of the calling thread's section: the walks it
+ * started in a thread safe context end here (moduleZsetWalksThreadDone). */
 void moduleReleaseGIL(void) {
+    moduleZsetWalksThreadDone();
+    module_gil_held = 0;
+    pthread_mutex_unlock(&moduleGIL);
+}
+
+/* Release the lock for a moment, to let other threads run, when the calling
+ * thread's section goes on and it takes the lock back with moduleAcquireGIL():
+ * ValkeyModule_Yield() on a module thread, and the drain of the lazy free
+ * worker while a scripting engine is unregistered. Other code may change any
+ * key in between, so every walk is detached; none ends. */
+void moduleReleaseGILTemporarily(void) {
+    moduleZsetWalksDetachAll();
+    module_gil_held = 0;
     pthread_mutex_unlock(&moduleGIL);
 }
 
@@ -10415,13 +10800,17 @@ static int eventLoopFromAeMask(int ae_mask) {
 static void eventLoopCbReadable(struct aeEventLoop *ae, int fd, void *user_data, int ae_mask) {
     UNUSED(ae);
     EventLoopData *data = user_data;
+    uint64_t mark = moduleZsetWalksMark();
     data->rFunc(fd, data->user_data, eventLoopFromAeMask(ae_mask));
+    moduleZsetWalksCallbackDone(mark); /* The callback had no module context to end its walks. */
 }
 
 static void eventLoopCbWritable(struct aeEventLoop *ae, int fd, void *user_data, int ae_mask) {
     UNUSED(ae);
     EventLoopData *data = user_data;
+    uint64_t mark = moduleZsetWalksMark();
     data->wFunc(fd, data->user_data, eventLoopFromAeMask(ae_mask));
+    moduleZsetWalksCallbackDone(mark);
 }
 
 /* Add a pipe / socket event to the event loop.
@@ -10568,7 +10957,9 @@ static void eventLoopHandleOneShotEvents(void) {
             /* Unlock mutex before the callback. Another oneshot event can be
              * added in the callback, it will need to lock the mutex. */
             pthread_mutex_unlock(&moduleEventLoopMutex);
+            uint64_t mark = moduleZsetWalksMark();
             oneshot->func(oneshot->user_data);
+            moduleZsetWalksCallbackDone(mark);
             zfree(oneshot);
             /* Lock again for the next iteration */
             pthread_mutex_lock(&moduleEventLoopMutex);
@@ -10592,7 +10983,9 @@ static void eventLoopHandleOneShotEvents(void) {
 void moduleNotifyUserChanged(client *c) {
     if (!c->module_data || !c->module_data->auth_callback) return;
 
+    uint64_t mark = moduleZsetWalksMark();
     c->module_data->auth_callback(c->id, c->module_data->auth_callback_privdata);
+    moduleZsetWalksCallbackDone(mark); /* The callback runs with no module context. */
 
     /* The callback will fire exactly once, even if the user remains
      * the same. It is expected to completely clean up the state
@@ -11509,7 +11902,13 @@ sds modulesCollectInfo(sds info, dict *sections_dict, int for_crash_report, int 
         struct ValkeyModule *module = listNodeValue(ln);
         if (!module->info_cb) continue;
         ValkeyModuleInfoCtx info_ctx = {module, sections_dict, info, sections, 0, 0};
+        /* No walk cleanup from the crash report: the walk list may be part of
+         * the state being reported, and walking it, allocating and reading
+         * sorted set memory could turn the report into a hang or a second
+         * fault. Nothing runs after a crash report that could step a walk. */
+        uint64_t mark = for_crash_report ? 0 : moduleZsetWalksMark();
         module->info_cb(&info_ctx, for_crash_report);
+        if (!for_crash_report) moduleZsetWalksCallbackDone(mark);
         /* Implicitly end dicts (no way to handle errors, and we must add the newline). */
         if (info_ctx.in_dict_field) VM_InfoEndDictField(&info_ctx);
         info = info_ctx.info;
@@ -11905,7 +12304,9 @@ void moduleCallCommandFilters(client *c) {
         if ((f->flags & VALKEYMODULE_CMDFILTER_NOSELF) && f->module->in_call) continue;
 
         /* Call filter */
+        uint64_t mark = moduleZsetWalksMark();
         f->callback(&filter);
+        moduleZsetWalksCallbackDone(mark); /* Filters run with no module context. */
     }
 
     /* Apply filter output */
@@ -13554,6 +13955,7 @@ dictType sdsKeyValueHashDictType = {
 
 void moduleInitModulesSystem(void) {
     moduleUnblockedClients = listCreate();
+    module_zset_walks = listCreate();
     server.loadmodule_queue = listCreate();
     modules = listCreate();
     listSetMatchMethod(modules, moduleNameMatch);
@@ -13592,7 +13994,7 @@ void moduleInitModulesSystem(void) {
 
     /* Our thread-safe contexts GIL must start with already locked:
      * it is just unlocked when it's safe. */
-    pthread_mutex_lock(&moduleGIL);
+    moduleAcquireGIL();
 }
 
 void modulesCron(void) {
@@ -14431,7 +14833,9 @@ static void propagateErrorString(ValkeyModuleString *err_in, const char **err) {
 
 int setModuleBoolConfig(ModuleConfig *config, int val, const char **err) {
     ValkeyModuleString *error = NULL;
+    uint64_t mark = moduleZsetWalksMark();
     int return_code = config->set_fn.set_bool(config->name, val, config->privdata, &error);
+    moduleZsetWalksCallbackDone(mark);
     propagateErrorString(error, err);
     return return_code == VALKEYMODULE_OK ? 1 : 0;
 }
@@ -14439,7 +14843,9 @@ int setModuleBoolConfig(ModuleConfig *config, int val, const char **err) {
 int setModuleStringConfig(ModuleConfig *config, sds strval, const char **err) {
     ValkeyModuleString *error = NULL;
     ValkeyModuleString *new = createStringObject(strval, sdslen(strval));
+    uint64_t mark = moduleZsetWalksMark();
     int return_code = config->set_fn.set_string(config->name, new, config->privdata, &error);
+    moduleZsetWalksCallbackDone(mark);
     propagateErrorString(error, err);
     decrRefCount(new);
     return return_code == VALKEYMODULE_OK ? 1 : 0;
@@ -14447,21 +14853,27 @@ int setModuleStringConfig(ModuleConfig *config, sds strval, const char **err) {
 
 int setModuleEnumConfig(ModuleConfig *config, int val, const char **err) {
     ValkeyModuleString *error = NULL;
+    uint64_t mark = moduleZsetWalksMark();
     int return_code = config->set_fn.set_enum(config->name, val, config->privdata, &error);
+    moduleZsetWalksCallbackDone(mark);
     propagateErrorString(error, err);
     return return_code == VALKEYMODULE_OK ? 1 : 0;
 }
 
 int setModuleNumericConfig(ModuleConfig *config, long long val, const char **err) {
     ValkeyModuleString *error = NULL;
+    uint64_t mark = moduleZsetWalksMark();
     int return_code = config->set_fn.set_numeric(config->name, val, config->privdata, &error);
+    moduleZsetWalksCallbackDone(mark);
     propagateErrorString(error, err);
     return return_code == VALKEYMODULE_OK ? 1 : 0;
 }
 
 int setModuleUnsignedNumericConfig(ModuleConfig *config, unsigned long long val, const char **err) {
     ValkeyModuleString *error = NULL;
+    uint64_t mark = moduleZsetWalksMark();
     int return_code = config->set_fn.set_unsigned_numeric(config->name, val, config->privdata, &error);
+    moduleZsetWalksCallbackDone(mark);
     propagateErrorString(error, err);
     return return_code == VALKEYMODULE_OK ? 1 : 0;
 }
@@ -14469,24 +14881,38 @@ int setModuleUnsignedNumericConfig(ModuleConfig *config, unsigned long long val,
 /* This is a series of get functions for each type that act as dispatchers for
  * config.c to call module set callbacks. */
 int getModuleBoolConfig(ModuleConfig *module_config) {
-    return module_config->get_fn.get_bool(module_config->name, module_config->privdata);
+    uint64_t mark = moduleZsetWalksMark();
+    int val = module_config->get_fn.get_bool(module_config->name, module_config->privdata);
+    moduleZsetWalksCallbackDone(mark);
+    return val;
 }
 
 sds getModuleStringConfig(ModuleConfig *module_config) {
+    uint64_t mark = moduleZsetWalksMark();
     ValkeyModuleString *val = module_config->get_fn.get_string(module_config->name, module_config->privdata);
+    moduleZsetWalksCallbackDone(mark);
     return val ? sdsdup(objectGetVal(val)) : NULL;
 }
 
 int getModuleEnumConfig(ModuleConfig *module_config) {
-    return module_config->get_fn.get_enum(module_config->name, module_config->privdata);
+    uint64_t mark = moduleZsetWalksMark();
+    int val = module_config->get_fn.get_enum(module_config->name, module_config->privdata);
+    moduleZsetWalksCallbackDone(mark);
+    return val;
 }
 
 long long getModuleNumericConfig(ModuleConfig *module_config) {
-    return module_config->get_fn.get_numeric(module_config->name, module_config->privdata);
+    uint64_t mark = moduleZsetWalksMark();
+    long long val = module_config->get_fn.get_numeric(module_config->name, module_config->privdata);
+    moduleZsetWalksCallbackDone(mark);
+    return val;
 }
 
 unsigned long long getModuleUnsignedNumericConfig(ModuleConfig *module_config) {
-    return module_config->get_fn.get_unsigned_numeric(module_config->name, module_config->privdata);
+    uint64_t mark = moduleZsetWalksMark();
+    unsigned long long val = module_config->get_fn.get_unsigned_numeric(module_config->name, module_config->privdata);
+    moduleZsetWalksCallbackDone(mark);
+    return val;
 }
 
 /* This function takes a module and a list of configs stored as sds NAME VALUE pairs.
@@ -14939,6 +15365,8 @@ int VM_RdbLoad(ValkeyModuleCtx *ctx, ValkeyModuleRdbStream *stream, int flags) {
         errno = ENOTSUP;
         return VALKEYMODULE_ERR;
     }
+
+    moduleZsetWalksDetachAll();
 
     /* Drop replicas if exist. */
     disconnectReplicas();
@@ -15689,7 +16117,9 @@ bool moduleDefragGlobals(monotime endtime) {
         struct ValkeyModule *module = listNodeValue(ln);
         if (module->defrag_cb) {
             ValkeyModuleDefragCtx defrag_ctx = {endtime, &defrag_module_cursor, NULL, -1};
+            uint64_t mark = moduleZsetWalksMark();
             module->defrag_cb(&defrag_ctx);
+            moduleZsetWalksCallbackDone(mark);
             if (defrag_module_cursor != 0) continue; /* more work on this module */
         }
         /* This module is done (or has no callback): advance and start the next one at cursor 0. */

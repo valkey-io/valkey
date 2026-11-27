@@ -1019,6 +1019,143 @@ TEST_F(OrderedIndexTest, SeekToIndex) {
     orderedIndexResetIterator(&iter);
 }
 
+TEST_F(OrderedIndexTest, SeekFromKey) {
+    for (int i = 1; i <= 5; i++) {
+        char buf[32];
+        snprintf(buf, sizeof(buf), "key%d", i);
+        insert((double)i, buf);
+    }
+
+    OrderedIndexIterator iter;
+
+    /* 1. Forward seek (reverse = 0): cursor positioned strictly past (score, ele),
+     * so orderedIndexNext() returns the adjacent greater item, or NULL. */
+    /* Seek from present key "key3" (score 3.0): next is adjacent item "key4" (4.0) */
+    orderedIndexInitIterator(&iter, oi);
+    orderedIndexSeekFromKey(&iter, 3.0, "key3", strlen("key3"), 0);
+    assertNextScore(&iter, 4.0);
+    orderedIndexResetIterator(&iter);
+
+    /* Seek from absent key between items (score 2.5): next is adjacent item "key3" (3.0) */
+    orderedIndexInitIterator(&iter, oi);
+    orderedIndexSeekFromKey(&iter, 2.5, "key_between", strlen("key_between"), 0);
+    assertNextScore(&iter, 3.0);
+    orderedIndexResetIterator(&iter);
+
+    /* Seek before first item (score 0.5): next is first item "key1" (1.0) */
+    orderedIndexInitIterator(&iter, oi);
+    orderedIndexSeekFromKey(&iter, 0.5, "key0", strlen("key0"), 0);
+    assertNextScore(&iter, 1.0);
+    orderedIndexResetIterator(&iter);
+
+    /* Seek from present last item "key5" (5.0): next is NULL */
+    orderedIndexInitIterator(&iter, oi);
+    orderedIndexSeekFromKey(&iter, 5.0, "key5", strlen("key5"), 0);
+    ASSERT_EQ(orderedIndexNext(&iter), nullptr);
+    orderedIndexResetIterator(&iter);
+
+    /* Seek past end (score 6.0): next is NULL */
+    orderedIndexInitIterator(&iter, oi);
+    orderedIndexSeekFromKey(&iter, 6.0, "key6", strlen("key6"), 0);
+    ASSERT_EQ(orderedIndexNext(&iter), nullptr);
+    orderedIndexResetIterator(&iter);
+
+    /* 2. Reverse seek (reverse = 1): cursor positioned strictly before (score, ele),
+     * so orderedIndexPrev() returns the adjacent lower item, or NULL. */
+    /* Seek from present key "key3" (score 3.0): prev is adjacent item "key2" (2.0) */
+    orderedIndexInitIterator(&iter, oi);
+    orderedIndexSeekFromKey(&iter, 3.0, "key3", strlen("key3"), 1);
+    assertPrevScore(&iter, 2.0);
+    orderedIndexResetIterator(&iter);
+
+    /* Seek from absent key between items (score 3.5): prev is adjacent item "key3" (3.0) */
+    orderedIndexInitIterator(&iter, oi);
+    orderedIndexSeekFromKey(&iter, 3.5, "key_between", strlen("key_between"), 1);
+    assertPrevScore(&iter, 3.0);
+    orderedIndexResetIterator(&iter);
+
+    /* Seek from present first item "key1" (1.0): prev is NULL */
+    orderedIndexInitIterator(&iter, oi);
+    orderedIndexSeekFromKey(&iter, 1.0, "key1", strlen("key1"), 1);
+    ASSERT_EQ(orderedIndexPrev(&iter), nullptr);
+    orderedIndexResetIterator(&iter);
+
+    /* Seek before first item (score 0.5): prev is NULL */
+    orderedIndexInitIterator(&iter, oi);
+    orderedIndexSeekFromKey(&iter, 0.5, "key0", strlen("key0"), 1);
+    ASSERT_EQ(orderedIndexPrev(&iter), nullptr);
+    orderedIndexResetIterator(&iter);
+
+    /* Seek past end (score 6.0): prev is last item "key5" (5.0) */
+    orderedIndexInitIterator(&iter, oi);
+    orderedIndexSeekFromKey(&iter, 6.0, "key6", strlen("key6"), 1);
+    assertPrevScore(&iter, 5.0);
+    orderedIndexResetIterator(&iter);
+
+    /* 3. Heap path: element longer than 256 bytes (total > sizeof(stackbuf)) */
+    char long_key[301];
+    memset(long_key, 'x', 300);
+    long_key[300] = '\0';
+    insert(10.0, long_key);
+
+    /* Forward seek from present long_key (10.0): next is NULL (it is the last item) */
+    orderedIndexInitIterator(&iter, oi);
+    orderedIndexSeekFromKey(&iter, 10.0, long_key, 300, 0);
+    ASSERT_EQ(orderedIndexNext(&iter), nullptr);
+    orderedIndexResetIterator(&iter);
+
+    /* Reverse seek from present long_key (10.0): prev is adjacent item "key5" (5.0) */
+    orderedIndexInitIterator(&iter, oi);
+    orderedIndexSeekFromKey(&iter, 10.0, long_key, 300, 1);
+    assertPrevScore(&iter, 5.0);
+    orderedIndexResetIterator(&iter);
+
+    /* Forward seek absent long_key at score 9.5: next is "long_key" (10.0) */
+    orderedIndexInitIterator(&iter, oi);
+    orderedIndexSeekFromKey(&iter, 9.5, long_key, 300, 0);
+    assertNextScore(&iter, 10.0);
+    orderedIndexResetIterator(&iter);
+
+    /* Reverse seek absent long_key at score 10.5: prev is "long_key" (10.0) */
+    orderedIndexInitIterator(&iter, oi);
+    orderedIndexSeekFromKey(&iter, 10.5, long_key, 300, 1);
+    assertPrevScore(&iter, 10.0);
+    orderedIndexResetIterator(&iter);
+
+    /* 4. Equal scores: test lexicographic tie-breaking for exclusive seek */
+    insert(3.0, "key3_a");
+    insert(3.0, "key3_b");
+    insert(3.0, "key3_c");
+
+    /* Forward seek from present "key3_b" (3.0): next is adjacent "key3_c" (3.0) */
+    orderedIndexInitIterator(&iter, oi);
+    orderedIndexSeekFromKey(&iter, 3.0, "key3_b", strlen("key3_b"), 0);
+    OrderedIndexItem *item = assertNextScore(&iter, 3.0);
+    assertElement(item, "key3_c");
+    orderedIndexResetIterator(&iter);
+
+    /* Reverse seek from present "key3_b" (3.0): prev is adjacent "key3_a" (3.0) */
+    orderedIndexInitIterator(&iter, oi);
+    orderedIndexSeekFromKey(&iter, 3.0, "key3_b", strlen("key3_b"), 1);
+    item = assertPrevScore(&iter, 3.0);
+    assertElement(item, "key3_a");
+    orderedIndexResetIterator(&iter);
+
+    /* Forward seek from absent "key3_ba" (3.0): next is adjacent "key3_c" (3.0) */
+    orderedIndexInitIterator(&iter, oi);
+    orderedIndexSeekFromKey(&iter, 3.0, "key3_ba", strlen("key3_ba"), 0);
+    item = assertNextScore(&iter, 3.0);
+    assertElement(item, "key3_c");
+    orderedIndexResetIterator(&iter);
+
+    /* Reverse seek from absent "key3_ba" (3.0): prev is adjacent "key3_b" (3.0) */
+    orderedIndexInitIterator(&iter, oi);
+    orderedIndexSeekFromKey(&iter, 3.0, "key3_ba", strlen("key3_ba"), 1);
+    item = assertPrevScore(&iter, 3.0);
+    assertElement(item, "key3_b");
+    orderedIndexResetIterator(&iter);
+}
+
 TEST_F(OrderedIndexTest, ReverseIteration) {
     for (int i = 1; i <= 5; i++) {
         char buf[32];

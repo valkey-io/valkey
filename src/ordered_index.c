@@ -503,6 +503,24 @@ void orderedIndexSeekToIndex(OrderedIndexIterator *iter, unsigned long index) {
     fbtreeSeekToRank((fbtreeIterator *)iter, index);
 }
 
+void orderedIndexSeekFromKey(OrderedIndexIterator *iter, double score, const char *ele, size_t len, int reverse) {
+    fbtreeIterator *fbt_iter = (fbtreeIterator *)iter;
+    if (!fbtreeIteratorGetIndex(fbt_iter)) return;
+    size_t total = SCORE_SIZE + len;
+    char stackbuf[256];
+    if (total <= sdsTypeMaxSize(SDS_TYPE_8) && sdsReqSize(total, SDS_TYPE_8) <= sizeof(stackbuf)) {
+        uint64_t sortable = scoreToSortable(score);
+        sds packed = sdswrite(stackbuf, sizeof(stackbuf), SDS_TYPE_8, SDS_NOINIT, total);
+        memcpy(packed, &sortable, SCORE_SIZE);
+        memcpy(packed + SCORE_SIZE, ele, len);
+        seekForBound(fbt_iter, packed, reverse, 0);
+    } else {
+        sds packed = packScoreElement(score, ele, len);
+        seekForBound(fbt_iter, packed, reverse, 0);
+        sdsfree(packed);
+    }
+}
+
 /* Position the iterator to begin a score-range scan.
  *
  * 'offset' encodes both direction and how many in-range elements to skip:

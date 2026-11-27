@@ -2107,4 +2107,112 @@ test "Raft proto: NODE_FORGET resets tracking from AE_ACK" {
     }
 }
 
+test "Raft proto: a reset node ignores its old leader until its MEET is answered" {
+    # After CLUSTER RESET, the old leader can still reach the node, before it
+    # MEETs anyone and while its MEET is unanswered. Following the old leader
+    # would pull the node back into the old cluster.
+    start_server {overrides {cluster-enabled yes cluster-protocol raft cluster-node-timeout 1000}} {
+        set cport [expr {[srv 0 port] + 10000}]
+        set node_id [R 0 CLUSTER MYID]
+        set node_addr "127.0.0.1:[srv 0 port]@$cport,,tls-port=0,shard-id=[string repeat a 40]"
+        set a_id [string repeat "d" 40]
+        set a_addr "127.0.0.1:9991@19991,,tls-port=0,shard-id=[string repeat b 40]"
+
+        set fd [raft_connect_fake_node 127.0.0.1 $cport $a_id $a_addr]
+        raft_send $fd "MEET cluster"
+        assert_match "ADD_ME*" [raft_recv $fd]
+        set log "1 NODE_JOIN $a_id $a_addr voter\n1 NODE_JOIN $node_id $node_addr voter"
+        raft_send $fd "AE $a_id 1 0 0 2 0 2\n$log"
+        assert_match "AE_ACK *" [raft_recv $fd]
+        close $fd
+
+        R 0 cluster reset hard
+        set term [CI 0 cluster_raft_current_term]
+
+        # The old leader reconnects and replays its log in a later term. A
+        # stale AE_ACK with a higher term and a proposal follow. The HELLO
+        # after them is answered once they have been handled.
+        set fd [raft_connect_fake_node 127.0.0.1 $cport $a_id $a_addr]
+        raft_send $fd "AE $a_id 2 0 0 2 0 2\n$log"
+        raft_send $fd "AE_ACK 5 1 2 0 0"
+        raft_send $fd "PROPOSE NOOP"
+        raft_send $fd "HELLO $a_id $a_addr"
+        assert_match "HI *" [raft_recv_until $fd "HI *"]
+        assert_equal $term [CI 0 cluster_raft_current_term]
+        assert_equal leader [CI 0 cluster_raft_role]
+        assert_equal 0 [CI 0 cluster_raft_last_applied]
+        assert_equal 0 [CI 0 cluster_raft_log_entries]
+
+        # The node MEETs a peer, which hasn't answered yet.
+        set listen_p [raft_listen p_cport]
+        set p_id [string repeat "e" 40]
+        set p_addr "127.0.0.1:[expr {$p_cport - 10000}]@$p_cport,,tls-port=0,shard-id=[string repeat c 40]"
+        set rd [valkey_deferring_client]
+        $rd cluster meet 127.0.0.1 [expr {$p_cport - 10000}] $p_cport
+        set fd_p [raft_accept $listen_p]
+        assert_match "HELLO *" [raft_recv $fd_p]
+        assert_match "MEET *" [raft_recv $fd_p]
+        raft_send $fd "AE $a_id 2 0 0 2 0 2\n$log"
+        raft_send $fd "HELLO $a_id $a_addr"
+        assert_match "HI *" [raft_recv_until $fd "HI *"]
+        assert_equal $term [CI 0 cluster_raft_current_term]
+
+        # Once the peer answers, the node is no longer a reset node.
+        raft_send $fd_p "HI $p_id $p_addr"
+        raft_send $fd_p "WELCOME"
+        assert_equal OK [$rd read]
+        raft_send $fd "AE $a_id 2 0 0 2 0 2\n$log"
+        wait_for_condition 50 100 {
+            [CI 0 cluster_raft_current_term] == 2
+        } else {
+            fail "the node didn't follow the AE after its MEET was answered"
+        }
+
+        $rd close
+        close $fd_p
+        close $fd
+    }
+}
+
+test "Raft proto: a reset node still ignores its old leader after a restart" {
+    start_server {overrides {cluster-enabled yes cluster-protocol raft cluster-node-timeout 1000}} {
+        set cport [expr {[srv 0 port] + 10000}]
+        set node_id [R 0 CLUSTER MYID]
+        set node_addr "127.0.0.1:[srv 0 port]@$cport,,tls-port=0,shard-id=[string repeat a 40]"
+        set a_id [string repeat "d" 40]
+        set a_addr "127.0.0.1:9991@19991,,tls-port=0,shard-id=[string repeat b 40]"
+
+        set fd [raft_connect_fake_node 127.0.0.1 $cport $a_id $a_addr]
+        raft_send $fd "MEET cluster"
+        assert_match "ADD_ME*" [raft_recv $fd]
+        set log "1 NODE_JOIN $a_id $a_addr voter\n1 NODE_JOIN $node_id $node_addr voter"
+        raft_send $fd "AE $a_id 1 0 0 2 0 2\n$log"
+        assert_match "AE_ACK *" [raft_recv $fd]
+        close $fd
+
+        # The reset is saved, and so is that the node hasn't MEETed yet.
+        R 0 cluster reset
+        restart_server 0 true false
+        set term [CI 0 cluster_raft_current_term]
+
+        set fd [raft_connect_fake_node 127.0.0.1 $cport $a_id $a_addr]
+        raft_send $fd "AE $a_id 2 0 0 2 0 2\n$log"
+        raft_send $fd "HELLO $a_id $a_addr"
+        assert_match "HI *" [raft_recv_until $fd "HI *"]
+        assert_equal $term [CI 0 cluster_raft_current_term]
+        assert_equal leader [CI 0 cluster_raft_role]
+
+        # A MEET ends it.
+        raft_send $fd "MEET cluster"
+        assert_match "ADD_ME*" [raft_recv_until $fd "ADD_ME*"]
+        raft_send $fd "AE $a_id 2 0 0 2 0 2\n$log"
+        wait_for_condition 50 100 {
+            [CI 0 cluster_raft_current_term] == 2
+        } else {
+            fail "the node didn't follow the AE after the MEET"
+        }
+        close $fd
+    }
+}
+
 } ;# tags

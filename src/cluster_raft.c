@@ -230,6 +230,7 @@ typedef struct {
     unsigned int todo_persist_log : 1;
     unsigned int todo_save_config : 1;
     unsigned int todo_send_ae_ack : 1;
+    unsigned int reset_until_meet : 1; /* Reset: ignore the old cluster until a MEET, saved in vars */
     unsigned int todo_send_vote_response : 1;
     unsigned int todo_broadcast_vote_request : 1;
     unsigned int slot_change_pending : 1;
@@ -824,6 +825,15 @@ static int clusterRaftProcessHi(clusterLink *link, int argc, sds *argv) {
     return 1;
 }
 
+/* The join handshake has started, so stop ignoring the old cluster after a
+ * reset. Saved, so that a restart doesn't bring the guard back. */
+static void clusterRaftEndResetGuard(void) {
+    clusterRaftState *rs = RAFT_STATE();
+    if (!rs->reset_until_meet) return;
+    rs->reset_until_meet = 0;
+    rs->todo_save_config = 1;
+}
+
 /* MEET handler: received after HELLO on a MEET-initiated connection.
  * The link is already bound to the sender by the HELLO handler. */
 static int clusterRaftProcessMeet(clusterLink *link, int argc, sds *argv) {
@@ -837,6 +847,7 @@ static int clusterRaftProcessMeet(clusterLink *link, int argc, sds *argv) {
     serverLog(LL_NOTICE, "Received MEET %s from %.40s.", flag, sender->name);
 
     clusterRaftState *rs = RAFT_STATE();
+    clusterRaftEndResetGuard();
 
     if (!clusterRaftIsSingleton() && !sender_is_singleton) {
         /* Both sides are in a cluster — reject. Merging non-singleton
@@ -893,6 +904,7 @@ static int clusterRaftProcessAddme(clusterLink *link, int argc, sds *argv) {
 
     clusterNode *sender = link->node;
     serverLog(LL_NOTICE, "Received ADDME from %.40s.", sender->name);
+    clusterRaftEndResetGuard(); /* The peer answered our MEET. */
 
     /* Unblock CLUSTER MEET client — the peer has stepped down to joiner,
      * so it can't form a competing cluster. */
@@ -913,6 +925,7 @@ static int clusterRaftProcessWelcome(clusterLink *link, int argc, sds *argv) {
     serverLog(LL_NOTICE, "Received WELCOME from %.40s, stepping down.", sender->name);
 
     clusterRaftState *rs = RAFT_STATE();
+    clusterRaftEndResetGuard(); /* The peer answered our MEET. */
     if (rs->role == RAFT_ROLE_LEADER && clusterRaftIsSingleton()) {
         clusterRaftSingletonStepDown();
     }
@@ -3771,7 +3784,15 @@ static int clusterRaftProcessMessage(struct clusterLink *link) {
     }
 
     RAFT_STATE()->processing_link = link;
-    if (!strcasecmp(argv[0], "HELLO")) {
+    if (RAFT_STATE()->reset_until_meet &&
+        strcasecmp(argv[0], "HELLO") && strcasecmp(argv[0], "HI") && strcasecmp(argv[0], "MEET") &&
+        strcasecmp(argv[0], "ADD_ME") && strcasecmp(argv[0], "WELCOME") && strcasecmp(argv[0], "MEET_REJECTED")) {
+        /* After CLUSTER RESET, the old cluster may still send us AE, votes or
+         * proposals before it forgets us. Following it would pull us back
+         * into it, so until we get a MEET or an answer to ours, only accept
+         * the messages of the join handshake. */
+        ret = 1;
+    } else if (!strcasecmp(argv[0], "HELLO")) {
         ret = clusterRaftProcessHello(link, argc, argv);
     } else if (!strcasecmp(argv[0], "HI")) {
         ret = clusterRaftProcessHi(link, argc, argv);
@@ -4024,6 +4045,7 @@ static sds clusterRaftAppendVarsLine(sds config) {
         config = sdscat(config, " raftLeader ");
         config = sdscatlen(config, rs->leader, CLUSTER_NAMELEN);
     }
+    if (rs->reset_until_meet) config = sdscat(config, " resetUntilMeet 1");
     config = sdscatlen(config, "\n", 1);
     return config;
 }
@@ -4045,6 +4067,9 @@ static int clusterRaftParseVarsLine(const char *name, const char *value) {
         return 1;
     } else if (!strcasecmp(name, "raftLeader")) {
         memcpy(rs->leader, value, CLUSTER_NAMELEN);
+        return 1;
+    } else if (!strcasecmp(name, "resetUntilMeet")) {
+        rs->reset_until_meet = atoi(value) != 0;
         return 1;
     }
     return 0;
@@ -5329,6 +5354,7 @@ static void clusterRaftResetCluster(int hard) {
 
     clearCachedClusterSlotsResponse();
     rs->todo_save_config = 1;
+    rs->reset_until_meet = 1;
     serverLog(LL_NOTICE, "Cluster %s reset, now I'm %.40s",
               hard ? "hard" : "soft", myself->name);
 }

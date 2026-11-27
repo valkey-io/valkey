@@ -284,7 +284,7 @@ Write-behind stays available because it has its own advantages:
 * **Failover doesn't wait on the log.** A write-behind replica that becomes primary has already applied its log. A write-ahead replica must first apply the rest of it.  
 * **The replica's execution path doesn't change.** A write-behind replica applies the replication stream as it arrives, as every Valkey replica does today.
 
-The default mode, write-ahead, is outside the Lean proof for now (see [Verification](#verification)).
+Both modes are in the Lean model (see [Verification](#verification)).
 
 ## 3\. Module keyspace notifications
 

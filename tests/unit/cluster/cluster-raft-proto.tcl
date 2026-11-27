@@ -1633,7 +1633,8 @@ test "Raft proto: the leader answers UNCHANGED only after a quorum acks a later 
         set node_id [R 0 CLUSTER MYID]
         set f_id [string repeat "f" 40]
         set fd [raft_join_fake_follower $f_id [string repeat "9" 40]]
-        R 0 cluster addslots 0
+        set learner [raft_join_fake_follower [string repeat "c" 40] [string repeat "8" 40]]
+        R 0 cluster addslots 0 1
         raft_ack_until_idle $fd
 
         # Make F a voter, so the quorum is both of us.
@@ -1652,20 +1653,82 @@ test "Raft proto: the leader answers UNCHANGED only after a quorum acks a later 
         raft_send $fd "PROPOSE $entry"
         set round [lindex [raft_ae_header [raft_recv_until $fd "AE *"]] 6]
 
+        # Queue a second request in a later round. Even an ACK of that round
+        # from the learner leaves both requests pending.
+        set next_entry "SLOT_CHANGE $node_id 1 $node_id 1 1"
+        raft_send $fd "PROPOSE $next_entry"
+        set next_round [lindex [raft_ae_header [raft_recv_until $fd "AE *"]] 6]
+        assert {$next_round > $round}
+        set invalid "PROPOSE SLOT_CHANGE $node_id 1 $node_id 1 16384"
+        raft_send $learner "AE_ACK $term 1 $last $next_round 0"
+        raft_send $learner $invalid
+        raft_recv_until $learner "REJECT *"
+
         # An ACK of an older round doesn't confirm it. A malformed proposal
         # follows, which gets REJECT right away. If the ACK had confirmed
         # the read, UNCHANGED would come first on the same link.
         raft_send $fd "AE_ACK $term 1 $last [expr {$round - 1}] 0"
-        raft_send $fd "PROPOSE SLOT_CHANGE $node_id 1 $node_id 1 16384"
+        raft_send $fd $invalid
         while {![string match "REJECT *" [set msg [raft_recv $fd]]]} {
             assert_no_match "UNCHANGED *" $msg
         }
 
-        # An ACK of that round confirms it, with nothing appended for it.
+        # Each voter ACK releases only the requests up to its round.
         raft_send $fd "AE_ACK $term 1 $last $round 0"
         assert_equal "UNCHANGED $commit $entry" [raft_recv_until $fd "UNCHANGED *"]
+        raft_send $fd $invalid
+        while {![string match "REJECT *" [set msg [raft_recv $fd]]]} {
+            assert_no_match "UNCHANGED *" $msg
+        }
+        raft_send $fd "AE_ACK $term 1 $last $next_round 0"
+        assert_equal "UNCHANGED $commit $next_entry" [raft_recv_until $fd "UNCHANGED *"]
         assert_equal $commit [CI 0 cluster_raft_commit_index]
+        close $learner
         close $fd
+    }
+}
+
+test "Raft proto: one voter ACK confirms two reads in order while another voter lags" {
+    start_server {overrides {cluster-enabled yes cluster-protocol raft cluster-node-timeout 20000}} {
+        set leader [R 0 CLUSTER MYID]
+        set voter_id [string repeat "a" 40]
+        set lagging_id [string repeat "b" 40]
+        set voter [raft_join_fake_follower $voter_id [string repeat "8" 40]]
+        set lagging [raft_join_fake_follower $lagging_id [string repeat "9" 40]]
+        R 0 cluster addslots 0 1
+        raft_ack_until_idle $voter
+        raft_add_voter [srv 0 client] $voter_id
+
+        # Propose the second promotion on the same link as its catch-up ACK.
+        # The first voter and the leader commit it.
+        raft_ack_until_idle $lagging
+        raft_send $lagging "PROPOSE ADD_VOTER $lagging_id"
+        raft_reply_ae_ack $voter [raft_recv_until $voter "AE *ADD_VOTER $lagging_id*"] 0
+        wait_for_condition 50 100 {[CI 0 cluster_size] == 3} else {fail "Third voter did not join"}
+        set commit [raft_ack_until_idle $voter]
+
+        # The REJECT marks when the leader has received each read. Wait for
+        # a broadcast after it before proposing the next read.
+        set invalid "PROPOSE SLOT_CHANGE $leader 1 $leader 1 16384"
+        set expected {}
+        foreach slot {0 1} {
+            set entry "SLOT_CHANGE $leader 1 $leader 1 $slot"
+            lappend expected "UNCHANGED $commit $entry"
+            puts -nonewline $voter "[raft_msg "PROPOSE $entry"][raft_msg $invalid]"
+            flush $voter
+            while {![string match "REJECT *" [set msg [raft_recv $voter]]]} {
+                assert_no_match "UNCHANGED *" $msg
+            }
+            set ae [raft_recv_until $voter "AE *"]
+        }
+
+        # Only the up-to-date voter ACKs, and only once, for the later round.
+        raft_reply_ae_ack $voter $ae 0
+        foreach reply $expected {
+            assert_equal $reply [raft_recv_until $voter "UNCHANGED *"]
+        }
+        close $voter
+        close $lagging
     }
 }
 

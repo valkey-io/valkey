@@ -2999,6 +2999,7 @@ void resetServerStats(void) {
         memset(server.inst_metric[j].samples, 0, sizeof(server.inst_metric[j].samples));
     }
     server.stat_aof_rewrites = 0;
+    server.stat_aof_offload_flush_timeouts = 0;
     server.stat_rdb_saves = 0;
     server.stat_aofrw_consecutive_failures = 0;
     server.stat_net_input_bytes = 0;
@@ -5437,6 +5438,8 @@ error:
  * DISK_ERROR_TYPE_NONE:    No problems, we can accept writes.
  * DISK_ERROR_TYPE_AOF:     Don't accept writes: AOF errors.
  * DISK_ERROR_TYPE_RDB:     Don't accept writes: RDB errors.
+ * DISK_ERROR_TYPE_AOF_STUCK: Don't accept writes: an offloaded AOF write has
+ *                          been in flight past aof-offload-flush-timeout.
  */
 int writeCommandsDeniedByDiskError(void) {
     if (server.stop_writes_on_bgsave_err && server.saveparamslen > 0 && server.lastbgsave_status == C_ERR) {
@@ -5445,6 +5448,7 @@ int writeCommandsDeniedByDiskError(void) {
         if (server.aof_last_write_status == C_ERR) {
             return DISK_ERROR_TYPE_AOF;
         }
+        if (aofOffloadFlushIsStuck()) return DISK_ERROR_TYPE_AOF_STUCK;
         /* AOF fsync error. */
         int aof_bio_fsync_status = atomic_load_explicit(&server.aof_bio_fsync_status, memory_order_acquire);
         if (aof_bio_fsync_status == C_ERR) {
@@ -5460,6 +5464,11 @@ sds writeCommandsGetDiskErrorMessage(int error_code) {
     sds ret = NULL;
     if (error_code == DISK_ERROR_TYPE_RDB) {
         ret = sdsdup(objectGetVal(shared.bgsaveerr));
+    } else if (error_code == DISK_ERROR_TYPE_AOF_STUCK) {
+        ret = sdscatfmt(sdsempty(),
+                        "-MISCONF The AOF write has been in flight for %I ms, longer than aof-offload-flush-timeout "
+                        "(%I ms). Writes are rejected until it completes.\r\n",
+                        aofOffloadFlushInFlightMs(), server.aof_offload_flush_timeout);
     } else {
         ret = sdscatfmt(sdsempty(), "-MISCONF Errors writing to the AOF file: %s\r\n",
                         strerror(server.aof_last_write_errno));
@@ -6880,7 +6889,9 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                     "aof_pending_rewrite:%d\r\n", server.aof_rewrite_scheduled,
                     "aof_buffer_length:%zu\r\n", sdslen(server.aof_buf),
                     "aof_pending_bio_fsync:%lu\r\n", bioPendingJobsOfType(BIO_AOF_FSYNC),
-                    "aof_delayed_fsync:%lu\r\n", server.aof_delayed_fsync));
+                    "aof_delayed_fsync:%lu\r\n", server.aof_delayed_fsync,
+                    "aof_offload_flush_in_flight_ms:%lld\r\n", aofOffloadFlushInFlightMs(),
+                    "aof_offload_flush_timeouts:%lld\r\n", server.stat_aof_offload_flush_timeouts));
         }
 
         if (server.loading) {

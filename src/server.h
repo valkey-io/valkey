@@ -2169,50 +2169,55 @@ struct valkeyServer {
                                                     invocation of the event loop. */
     int priority_preemptive_poll_interval_us; /* Priority event loop preemptive poll interval in microseconds */
     /* AOF persistence */
-    int aof_enabled;                    /* AOF configuration */
-    int aof_state;                      /* AOF_(ON|OFF|WAIT_REWRITE) */
-    int aof_fsync;                      /* Kind of fsync() policy */
-    char *aof_filename;                 /* Basename of the AOF file and manifest file */
-    char *aof_dirname;                  /* Name of the AOF directory */
-    int aof_no_fsync_on_rewrite;        /* Don't fsync if a rewrite is in prog. */
-    int aof_rewrite_perc;               /* Rewrite AOF if % growth is > M and... */
-    off_t aof_rewrite_min_size;         /* the AOF file is at least N bytes. */
-    off_t aof_rewrite_base_size;        /* AOF size on latest startup or rewrite. */
-    off_t aof_current_size;             /* AOF current size (Including BASE + INCRs). */
-    off_t aof_last_incr_size;           /* The size of the latest incr AOF. */
-    off_t aof_last_incr_fsync_offset;   /* AOF offset which is already requested to be synced to disk.
-                                         * Compare with the aof_last_incr_size. */
-    int aof_flush_sleep;                /* Micros to sleep before flush. (used by tests) */
-    int aof_rewrite_scheduled;          /* Rewrite once BGSAVE terminates. */
-    sds aof_buf;                        /* AOF buffer, written before entering the event loop */
-    int aof_fd;                         /* File descriptor of currently selected AOF file */
-    int aof_selected_db;                /* Currently selected DB in AOF */
-    mstime_t aof_flush_postponed_start; /* mstime of postponed AOF flush */
-    mstime_t aof_last_fsync;            /* mstime of last fsync() */
-    time_t aof_rewrite_time_last;       /* Time used by last AOF rewrite run. */
-    time_t aof_rewrite_time_start;      /* Current AOF rewrite start time. */
-    time_t aof_cur_timestamp;           /* Current record timestamp in AOF */
-    int aof_timestamp_enabled;          /* Enable record timestamp in AOF */
-    int aof_lastbgrewrite_status;       /* C_OK or C_ERR */
-    unsigned long aof_delayed_fsync;    /* delayed AOF fsync() counter */
-    int aof_rewrite_incremental_fsync;  /* fsync incrementally while aof rewriting? */
-    int rdb_save_incremental_fsync;     /* fsync incrementally while rdb saving? */
-    int aof_last_write_status;          /* C_OK or C_ERR */
-    int aof_last_write_errno;           /* Valid if aof write/fsync status is ERR */
-    int aof_load_truncated;             /* Don't stop on unexpected AOF EOF. */
-    int aof_use_rdb_preamble;           /* Specify base AOF to use RDB encoding on AOF rewrites. */
-    int aof_rewrite_use_rdb_preamble;   /* Base AOF to use RDB encoding on AOF rewrites start. */
-    _Atomic(int) aof_bio_flush_state;   /* AOF always-fsync BIO-thread flush state. */
-    _Atomic(int) aof_bio_flush_errno;   /* Errno of AOF always-fsync BIO-thread flush. */
-    _Atomic(off_t) aof_bio_flush_size;  /* Bytes written by the last BIO-thread flush. */
-    _Atomic(int) aof_bio_fsync_status;  /* Status of AOF fsync in bio job. */
-    _Atomic(int) aof_bio_fsync_errno;   /* Errno of AOF fsync in bio job. */
-    aofManifest *aof_manifest;          /* Used to track AOFs. */
-    int aof_disable_auto_gc;            /* If disable automatically deleting HISTORY type AOFs?
-                                           default no. (for testings). */
-    int bio_aof_offload_enabled;        /* Hidden feature flag to enable/disable BIO AOF offload
-                                         * and dirty key tracking. */
-    reply_blocking_t reply_blocking;    /* Reply-blocking state container. */
+    int aof_enabled;                           /* AOF configuration */
+    int aof_state;                             /* AOF_(ON|OFF|WAIT_REWRITE) */
+    int aof_fsync;                             /* Kind of fsync() policy */
+    char *aof_filename;                        /* Basename of the AOF file and manifest file */
+    char *aof_dirname;                         /* Name of the AOF directory */
+    int aof_no_fsync_on_rewrite;               /* Don't fsync if a rewrite is in prog. */
+    int aof_rewrite_perc;                      /* Rewrite AOF if % growth is > M and... */
+    off_t aof_rewrite_min_size;                /* the AOF file is at least N bytes. */
+    off_t aof_rewrite_base_size;               /* AOF size on latest startup or rewrite. */
+    off_t aof_current_size;                    /* AOF current size (Including BASE + INCRs). */
+    off_t aof_last_incr_size;                  /* The size of the latest incr AOF. */
+    off_t aof_last_incr_fsync_offset;          /* AOF offset which is already requested to be synced to disk.
+                                                * Compare with the aof_last_incr_size. */
+    int aof_flush_sleep;                       /* Micros to sleep before flush. (used by tests) */
+    int aof_rewrite_scheduled;                 /* Rewrite once BGSAVE terminates. */
+    sds aof_buf;                               /* AOF buffer, written before entering the event loop */
+    int aof_fd;                                /* File descriptor of currently selected AOF file */
+    int aof_selected_db;                       /* Currently selected DB in AOF */
+    mstime_t aof_flush_postponed_start;        /* mstime of postponed AOF flush */
+    mstime_t aof_last_fsync;                   /* mstime of last fsync() */
+    time_t aof_rewrite_time_last;              /* Time used by last AOF rewrite run. */
+    time_t aof_rewrite_time_start;             /* Current AOF rewrite start time. */
+    time_t aof_cur_timestamp;                  /* Current record timestamp in AOF */
+    int aof_timestamp_enabled;                 /* Enable record timestamp in AOF */
+    int aof_lastbgrewrite_status;              /* C_OK or C_ERR */
+    unsigned long aof_delayed_fsync;           /* delayed AOF fsync() counter */
+    int aof_rewrite_incremental_fsync;         /* fsync incrementally while aof rewriting? */
+    int rdb_save_incremental_fsync;            /* fsync incrementally while rdb saving? */
+    int aof_last_write_status;                 /* C_OK or C_ERR */
+    int aof_last_write_errno;                  /* Valid if aof write/fsync status is ERR */
+    int aof_load_truncated;                    /* Don't stop on unexpected AOF EOF. */
+    int aof_use_rdb_preamble;                  /* Specify base AOF to use RDB encoding on AOF rewrites. */
+    int aof_rewrite_use_rdb_preamble;          /* Base AOF to use RDB encoding on AOF rewrites start. */
+    _Atomic(int) aof_bio_flush_state;          /* AOF always-fsync BIO-thread flush state. */
+    _Atomic(int) aof_bio_flush_errno;          /* Errno of AOF always-fsync BIO-thread flush. */
+    _Atomic(off_t) aof_bio_flush_size;         /* Bytes written by the last BIO-thread flush. */
+    _Atomic(int) aof_bio_fsync_status;         /* Status of AOF fsync in bio job. */
+    _Atomic(int) aof_bio_fsync_errno;          /* Errno of AOF fsync in bio job. */
+    aofManifest *aof_manifest;                 /* Used to track AOFs. */
+    int aof_disable_auto_gc;                   /* If disable automatically deleting HISTORY type AOFs?
+                                                  default no. (for testings). */
+    int bio_aof_offload_enabled;               /* Hidden feature flag to enable/disable BIO AOF offload
+                                                * and dirty key tracking. */
+    long long aof_offload_flush_timeout;       /* ms an offloaded AOF write may take before writes are
+                                                * rejected; 0 = never. */
+    mstime_t aof_bio_flush_start;              /* When the in-flight offloaded AOF write was submitted. */
+    int aof_bio_flush_timed_out;               /* The in-flight offloaded write passed the timeout. */
+    long long stat_aof_offload_flush_timeouts; /* Offloaded writes that passed the timeout. */
+    reply_blocking_t reply_blocking;           /* Reply-blocking state container. */
 
     /* RDB persistence */
     long long dirty;                      /* Changes to DB from the last save */
@@ -3555,9 +3560,10 @@ void startSaving(int rdbflags);
 void stopSaving(int success);
 int allPersistenceDisabled(void);
 
-#define DISK_ERROR_TYPE_AOF 1  /* Don't accept writes: AOF errors. */
-#define DISK_ERROR_TYPE_RDB 2  /* Don't accept writes: RDB errors. */
-#define DISK_ERROR_TYPE_NONE 0 /* No problems, we can accept writes. */
+#define DISK_ERROR_TYPE_AOF 1       /* Don't accept writes: AOF errors. */
+#define DISK_ERROR_TYPE_RDB 2       /* Don't accept writes: RDB errors. */
+#define DISK_ERROR_TYPE_AOF_STUCK 3 /* Don't accept writes: an offloaded AOF write is stuck. */
+#define DISK_ERROR_TYPE_NONE 0      /* No problems, we can accept writes. */
 int writeCommandsDeniedByDiskError(void);
 sds writeCommandsGetDiskErrorMessage(int);
 
@@ -3586,6 +3592,8 @@ int aofDelHistoryFiles(void);
 int aofRewriteLimited(void);
 int rewriteSlotToAppendOnlyFileRio(rio *aof, int db_num, int hashslot, size_t *key_count);
 int aofIOFlushInProgress(void);
+long long aofOffloadFlushInFlightMs(void);
+int aofOffloadFlushIsStuck(void);
 void aofPipeReadable(aeEventLoop *el, int fd, void *privdata, int mask);
 int rewriteSelectDbRio(rio *aof, int db_num);
 

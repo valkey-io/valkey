@@ -1175,8 +1175,38 @@ int aofIOFlushInProgress(void) {
     return atomic_load_explicit(&server.aof_bio_flush_state, memory_order_acquire) == AOF_BIO_FLUSH_PENDING;
 }
 
+/* How long the in-flight offloaded AOF write has taken, in ms, or 0. */
+long long aofOffloadFlushInFlightMs(void) {
+    return aofIOFlushInProgress() ? (long long)(mstime() - server.aof_bio_flush_start) : 0;
+}
+
+/* Without the offload a hung disk blocks the main thread, so the node stops
+ * answering and fails over. With it the node keeps answering and holds every
+ * reply. Once an offloaded write has been in flight past
+ * aof-offload-flush-timeout, reject new writes instead, as for an AOF write
+ * error, so clients see the failure and stop piling up writes. */
+int aofOffloadFlushIsStuck(void) {
+    if (server.aof_offload_flush_timeout <= 0 || !isPrimaryReplyBlockingEnabled()) return 0;
+    long long ms = aofOffloadFlushInFlightMs();
+    if (ms <= server.aof_offload_flush_timeout) return 0;
+    if (!server.aof_bio_flush_timed_out) {
+        server.aof_bio_flush_timed_out = 1;
+        server.stat_aof_offload_flush_timeouts++;
+        serverLog(LL_WARNING,
+                  "Offloaded AOF write has been in flight for %lld ms (aof-offload-flush-timeout is %lld ms): "
+                  "rejecting writes until it completes (disk is busy?).",
+                  ms, server.aof_offload_flush_timeout);
+    }
+    return 1;
+}
+
 static void processAofBioFlushResult(void) {
     int state = atomic_load_explicit(&server.aof_bio_flush_state, memory_order_acquire);
+    if ((state == AOF_BIO_FLUSH_DONE || state == AOF_BIO_FLUSH_ERR) && server.aof_bio_flush_timed_out) {
+        serverLog(LL_WARNING, "Offloaded AOF write completed after %lld ms, accepting writes again.",
+                  (long long)(mstime() - server.aof_bio_flush_start));
+        server.aof_bio_flush_timed_out = 0;
+    }
     switch (state) {
     case AOF_BIO_FLUSH_IDLE:
     case AOF_BIO_FLUSH_PENDING:
@@ -1234,6 +1264,8 @@ static int tryOffloadAofFlushToBio(void) {
     atomic_store_explicit(&server.aof_bio_flush_errno, 0, memory_order_relaxed);
     atomic_store_explicit(&server.aof_bio_flush_size, 0, memory_order_relaxed);
     atomic_store_explicit(&server.aof_bio_flush_state, AOF_BIO_FLUSH_PENDING, memory_order_release);
+    server.aof_bio_flush_start = mstime();
+    server.aof_bio_flush_timed_out = 0;
 
     bioCreateAofFsyncNotifyJob(server.aof_fd, server.aof_buf, server.primary_repl_offset);
     server.aof_buf = sdsempty();

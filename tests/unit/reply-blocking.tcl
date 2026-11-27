@@ -3185,3 +3185,33 @@ start_server {tags {"repl durability external:skip"} overrides {appendonly yes a
         $s close
     }
 }
+
+start_server {tags {"repl durability external:skip"} overrides {appendonly yes appendfsync always bio-aof-offload-enabled yes}} {
+    test "Writes are rejected while an offloaded AOF write is stuck past aof-offload-flush-timeout" {
+        r config set aof-offload-flush-timeout 200
+        # The next offloaded write takes 3s, like a hung disk.
+        r debug aof-flush-sleep 3000000
+        set w [valkey_deferring_client]
+        $w set hang:k v
+        after 500
+        catch {r set hang:other v} e
+        assert_match {MISCONF*} $e
+        # Reads are still served.
+        assert_equal {} [r get hang:none]
+        assert_morethan [getInfoProperty [r info persistence] aof_offload_flush_in_flight_ms] 200
+        r debug aof-flush-sleep 0
+        # Once the write completes, the held reply goes out and writes are accepted.
+        assert_equal OK [$w read]
+        wait_for_condition 100 50 {
+            [catch {r set hang:other v}] == 0
+        } else {
+            fail "writes were not accepted again"
+        }
+        assert_equal 0 [getInfoProperty [r info persistence] aof_offload_flush_in_flight_ms]
+        assert_morethan [getInfoProperty [r info persistence] aof_offload_flush_timeouts] 0
+        verify_log_message 0 "*Offloaded AOF write has been in flight for*" 0
+        verify_log_message 0 "*Offloaded AOF write completed*accepting writes again*" 0
+        $w close
+        r config set aof-offload-flush-timeout 0
+    }
+}

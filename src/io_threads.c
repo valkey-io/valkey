@@ -348,8 +348,7 @@ int updateIOThreads(const char **err) {
     // Decrease the number of threads.
     else {
         for (int i = prev_threads_num - 1; i >= server.io_threads_num; i--) {
-            // Unblock inactive thread.
-            pthread_mutex_unlock(&io_threads_mutex[i]);
+            /* The thread is inactive, shutdownIOThread unlocks its mutex. */
             shutdownIOThread(i);
             io_threads[i] = 0;
         }

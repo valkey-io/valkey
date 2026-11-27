@@ -1339,7 +1339,7 @@ void hsetexCommand(client *c) {
     for (; fields_index < c->argc - 1; fields_index++) {
         if (!strcasecmp(c->argv[fields_index]->ptr, "fields")) {
             /* checking optional flags */
-            if (parseExtendedCommandArgumentsOrReply(c, &flags, &unit, &expire_idx, &expire, &comparison, COMMAND_HSET, fields_index++) != C_OK) return;
+            if (parseExtendedCommandArgumentsOrReply(c, &flags, &unit, &expire_idx, &expire, NULL, &comparison, COMMAND_HSET, fields_index++) != C_OK) return;
             if (getLongLongFromObjectOrReply(c, c->argv[fields_index++], &num_fields, NULL) != C_OK) return;
             break;
         }
@@ -1596,7 +1596,7 @@ void hgetexCommand(client *c) {
     for (; fields_index < c->argc - 1; fields_index++) {
         if (!strcasecmp(c->argv[fields_index]->ptr, "fields")) {
             /* checking optional flags */
-            if (parseExtendedCommandArgumentsOrReply(c, &flags, &unit, NULL, &expire, &comparison, COMMAND_HGET, fields_index++) != C_OK) return;
+            if (parseExtendedCommandArgumentsOrReply(c, &flags, &unit, NULL, &expire, NULL, &comparison, COMMAND_HGET, fields_index++) != C_OK) return;
             if (getLongLongFromObjectOrReply(c, c->argv[fields_index++], &num_fields, NULL) != C_OK) return;
             break;
         }

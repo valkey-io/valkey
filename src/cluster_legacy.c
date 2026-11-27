@@ -3391,8 +3391,11 @@ static char *getLoadableIpExtension(char *value, int af) {
 }
 
 /* We previously validated the extensions, so this function just needs to
- * handle the extensions. */
-void clusterProcessPingExtensions(clusterMsg *hdr, clusterLink *link) {
+ * handle the extensions.
+ *
+ * The function returns 1 if the link is still valid after the extensions
+ * were processed, otherwise 0 if the link was freed. */
+int clusterProcessPingExtensions(clusterMsg *hdr, clusterLink *link) {
     clusterNode *sender = link->node ? link->node : clusterLookupNode(hdr->sender, CLUSTER_NAMELEN);
     char *ext_hostname = NULL;
     char *ext_humannodename = NULL;
@@ -3432,6 +3435,13 @@ void clusterProcessPingExtensions(clusterMsg *hdr, clusterLink *link) {
         } else if (type == CLUSTERMSG_EXT_TYPE_FORGOTTEN_NODE) {
             clusterMsgPingExtForgottenNode *forgotten_node_ext = &(ext->ext[0].forgotten_node);
             clusterNode *n = clusterLookupNode(forgotten_node_ext->name, CLUSTER_NAMELEN);
+            if (n == sender) {
+                serverLog(LL_WARNING,
+                          "Received invalid FORGOTTEN_NODE extension from node %.40s naming itself; closing link",
+                          sender->name);
+                freeClusterLink(link);
+                return 0;
+            }
             if (n && n != myself && !(nodeIsReplica(myself) && myself->replicaof == n)) {
                 sds id = sdsnewlen(forgotten_node_ext->name, CLUSTER_NAMELEN);
                 dictEntry *de = dictAddOrFind(server.cluster->nodes_black_list, id);
@@ -3477,6 +3487,7 @@ void clusterProcessPingExtensions(clusterMsg *hdr, clusterLink *link) {
     if (ext_shardid == NULL) ext_shardid = clusterNodeGetPrimary(sender)->shard_id;
 
     updateShardId(sender, ext_shardid);
+    return 1;
 }
 
 static clusterNode *getNodeFromLinkAndMsg(clusterLink *link, clusterMsg *hdr) {
@@ -3707,6 +3718,20 @@ int clusterIsValidPacket(clusterLink *link) {
     }
 
     return 1;
+}
+
+/* Returns 1 if `target` is on the replicaof chain starting at `node`. Making
+ * `target` the replica of `node` would then close a cycle in our view. The
+ * walk is bounded by the node count because the chain may already contain a
+ * cycle that does not include `target`. */
+static int clusterReplicaChainReaches(clusterNode *node, clusterNode *target) {
+    unsigned long hops = dictSize(server.cluster->nodes);
+    clusterNode *n = node;
+    while (n != NULL && hops-- > 0) {
+        if (n == target) return 1;
+        n = n->replicaof;
+    }
+    return 0;
 }
 
 /* When this function is called, there is a packet to process starting
@@ -4157,8 +4182,22 @@ int clusterProcessPacket(clusterLink *link) {
                     clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_UPDATE_STATE);
                 }
 
-                /* Primary node changed for this replica? */
-                if (sender_claimed_primary && sender->replicaof != sender_claimed_primary) {
+                /* Primary node changed for this replica?
+                 *
+                 * Skip the update if the claimed primary is still a replica of
+                 * `sender` in our view. That view is stale, because `sender` now
+                 * claims it as its primary. Adopting the claim would close a
+                 * replicaof cycle and trip the assertion in clusterNodeGetPrimary().
+                 * We keep the current link and let the claimed primary's own
+                 * packet, which announces its primary role, correct our view. */
+                int primary_changed = sender_claimed_primary && sender->replicaof != sender_claimed_primary;
+                if (primary_changed && clusterReplicaChainReaches(sender_claimed_primary, sender)) {
+                    serverLog(LL_NOTICE,
+                              "Ignoring claim of node %.40s (%s) that it replicates node %.40s (%s): in our view the claimed "
+                              "primary replicates it, directly or through a chain, so adopting the claim would close a replicaof cycle",
+                              sender->name, sender->human_nodename, sender_claimed_primary->name,
+                              sender_claimed_primary->human_nodename);
+                } else if (primary_changed) {
                     if (sender->replicaof) clusterNodeRemoveReplica(sender->replicaof, sender);
                     serverLog(LL_NOTICE, "Node %.40s (%s) is now a replica of node %.40s (%s) in shard %.40s",
                               sender->name, sender->human_nodename, sender_claimed_primary->name,
@@ -4280,7 +4319,7 @@ int clusterProcessPacket(clusterLink *link) {
         /* Get info from the gossip section */
         if (sender) {
             clusterProcessGossipSection(hdr, link);
-            clusterProcessPingExtensions(hdr, link);
+            if (!clusterProcessPingExtensions(hdr, link)) return 0;
         }
     } else if (type == CLUSTERMSG_TYPE_FAIL) {
         clusterNode *failing;

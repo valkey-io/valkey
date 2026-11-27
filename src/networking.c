@@ -6722,7 +6722,10 @@ int processIOThreadsReadDone(void) {
             }
         }
 
-        if (c->argc > 0) {
+        /* With READ_FLAGS_DONT_PARSE nothing was parsed, so argc may belong to a
+         * partial command left over from an earlier read. Only a completed parse
+         * may mark a command as pending. */
+        if (c->argc > 0 && !(c->read_flags & READ_FLAGS_DONT_PARSE)) {
             c->flag.pending_command = 1;
         }
 

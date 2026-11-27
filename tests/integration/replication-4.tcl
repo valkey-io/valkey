@@ -353,8 +353,10 @@ start_server {tags {"repl external:skip sort"} overrides {save {}}} {
             $primary zadd z {*}$zargs
             $primary sadd s {*}$members
             $primary mset {*}$mset_args
-            assert_equal btree [$primary object encoding z]
-            assert_equal hashtable [$primary object encoding s]
+            if {!$::ignoreencoding} {
+                assert_equal btree [$primary object encoding z]
+                assert_equal hashtable [$primary object encoding s]
+            }
 
             set expected_asc [lsort -ascii $members]
             set expected_desc [lsort -ascii -decreasing $members]

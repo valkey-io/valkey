@@ -2453,8 +2453,10 @@ foreach {pop} {BLPOP BLMPOP_RIGHT} {
         # first PAUSE all writes for a very long time
         r client pause 10000000000000 write
 
-        # block a client on the list
-        $rd BLPOP mylist 1
+        # block a client on the list. The timeout starts when the writes are
+        # unpaused, so it must be much shorter than the time that
+        # wait_for_blocked_clients_count waits below (about 1 second).
+        $rd BLPOP mylist 0.1
         wait_for_blocked_clients_count 1
         
         # now unpause the writes

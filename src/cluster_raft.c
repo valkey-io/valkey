@@ -722,7 +722,6 @@ static void clusterRaftSendGreeting(clusterLink *link, const char *verb) {
 
 /* Send MEET with singleton|cluster flag. */
 static void clusterRaftSendMeet(clusterLink *link) {
-    RAFT_STATE()->reset_until_meet = 0;
     const char *flag = clusterRaftIsSingleton() ? "singleton" : "cluster";
     sds msg = wireNewMsg("MEET");
     msg = sdscatfmt(msg, " %s", flag);
@@ -896,6 +895,7 @@ static int clusterRaftProcessAddme(clusterLink *link, int argc, sds *argv) {
 
     clusterNode *sender = link->node;
     serverLog(LL_NOTICE, "Received ADDME from %.40s.", sender->name);
+    RAFT_STATE()->reset_until_meet = 0; /* The peer answered our MEET. */
 
     /* Unblock CLUSTER MEET client — the peer has stepped down to joiner,
      * so it can't form a competing cluster. */
@@ -916,6 +916,7 @@ static int clusterRaftProcessWelcome(clusterLink *link, int argc, sds *argv) {
     serverLog(LL_NOTICE, "Received WELCOME from %.40s, stepping down.", sender->name);
 
     clusterRaftState *rs = RAFT_STATE();
+    rs->reset_until_meet = 0; /* The peer answered our MEET. */
     if (rs->role == RAFT_ROLE_LEADER && clusterRaftIsSingleton()) {
         clusterRaftSingletonStepDown();
     }
@@ -3759,11 +3760,12 @@ static int clusterRaftProcessMessage(struct clusterLink *link) {
 
     RAFT_STATE()->processing_link = link;
     if (RAFT_STATE()->reset_until_meet &&
-        (!strcasecmp(argv[0], "AE") || !strcasecmp(argv[0], "INSTALL_SNAPSHOT") || !strcasecmp(argv[0], "VOTE_REQ") ||
-         !strcasecmp(argv[0], "PRE_VOTE_REQ") || !strcasecmp(argv[0], "TIMEOUT_NOW"))) {
-        /* After CLUSTER RESET, the old cluster may still send us AE or vote
-         * requests before it forgets us. Following them would pull us back
-         * into it, so ignore them until we send or get a MEET. */
+        strcasecmp(argv[0], "HELLO") && strcasecmp(argv[0], "HI") && strcasecmp(argv[0], "MEET") &&
+        strcasecmp(argv[0], "ADD_ME") && strcasecmp(argv[0], "WELCOME") && strcasecmp(argv[0], "MEET_REJECTED")) {
+        /* After CLUSTER RESET, the old cluster may still send us AE, votes or
+         * proposals before it forgets us. Following it would pull us back
+         * into it, so until we get a MEET or an answer to ours, only accept
+         * the messages of the join handshake. */
         ret = 1;
     } else if (!strcasecmp(argv[0], "HELLO")) {
         ret = clusterRaftProcessHello(link, argc, argv);

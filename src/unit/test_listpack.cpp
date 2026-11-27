@@ -1009,6 +1009,59 @@ TEST_F(ListpackTest, listpackLpFindWithAllMetadata) {
     lpFree(lp);
 }
 
+TEST_F(ListpackTest, listpackLpFindSixBitStringsSkipAndMetadata) {
+    unsigned char *lp = lpNew(0);
+    char max6bit[63];
+    char longval[80];
+    memset(max6bit, 'a', sizeof(max6bit));
+    memset(longval, 'x', sizeof(longval));
+
+    /* Mix 6-bit strings (including empty and 63-byte max), integers,
+     * 12-bit strings (>63B), and tagged metadata entries. */
+    lp = lpAppend(lp, (unsigned char *)"f1", 2);
+    lp = lpAppend(lp, (unsigned char *)"val1", 4);
+    lp = lpAppend(lp, (unsigned char *)"f2", 2);
+    lp = lpAppend(lp, (unsigned char *)"12345", 5); /* integer value */
+    lp = lpAppend(lp, (unsigned char *)"", 0);      /* empty 6-bit string field */
+    lp = lpAppend(lp, (unsigned char *)"emptyv", 6);
+    lp = lpAppend(lp, (unsigned char *)max6bit, sizeof(max6bit)); /* 63B 6-bit string field */
+    lp = lpAppend(lp, (unsigned char *)longval, sizeof(longval)); /* 12-bit string value */
+    lp = lpAppend(lp, (unsigned char *)"f4", 2);
+    lp = lpAppend(lp, (unsigned char *)"val4", 4);
+
+    /* Attach tagged metadata after val1 (f1's value). */
+    unsigned char *p_f1 = lpFind(lp, lpFirst(lp), (unsigned char *)"f1", 2, 1);
+    ASSERT_NE(p_f1, nullptr);
+    unsigned char *p_v1 = lpNext(lp, p_f1);
+    unsigned char meta_enc[LP_MAX_INT_ENCODING_LEN];
+    uint64_t meta_len = 0;
+    lpEncodeIntegerGetType(987654321LL, meta_enc, &meta_len);
+    lp = lpInsertMetadata(lp, meta_enc, meta_len, p_v1, LP_AFTER, nullptr);
+
+    /* Verify skip=1 finds every field and never matches a value. */
+    EXPECT_NE(lpFind(lp, lpFirst(lp), (unsigned char *)"f1", 2, 1), nullptr);
+    EXPECT_NE(lpFind(lp, lpFirst(lp), (unsigned char *)"f2", 2, 1), nullptr);
+    EXPECT_NE(lpFind(lp, lpFirst(lp), (unsigned char *)"", 0, 1), nullptr);
+    EXPECT_NE(lpFind(lp, lpFirst(lp), (unsigned char *)max6bit, sizeof(max6bit), 1), nullptr);
+    EXPECT_NE(lpFind(lp, lpFirst(lp), (unsigned char *)"f4", 2, 1), nullptr);
+    EXPECT_EQ(lpFind(lp, lpFirst(lp), (unsigned char *)"val1", 4, 1), nullptr);
+    EXPECT_EQ(lpFind(lp, lpFirst(lp), (unsigned char *)"val4", 4, 1), nullptr);
+    EXPECT_EQ(lpFind(lp, lpFirst(lp), (unsigned char *)"missing", 7, 1), nullptr);
+
+    /* Verify skip=0 finds values as well, and skip=2 steps by 3 entries. */
+    EXPECT_NE(lpFind(lp, lpFirst(lp), (unsigned char *)"val4", 4, 0), nullptr);
+    EXPECT_NE(lpFind(lp, lpFirst(lp), (unsigned char *)"12345", 5, 0), nullptr);
+    EXPECT_NE(lpFind(lp, lpFirst(lp), (unsigned char *)"12345", 5, 2), nullptr);
+    EXPECT_EQ(lpFind(lp, lpFirst(lp), (unsigned char *)"f2", 2, 2), nullptr);
+
+    /* Odd trailing 6-bit string with skip=1 must terminate cleanly at LP_EOF. */
+    lp = lpAppend(lp, (unsigned char *)"tail", 4);
+    EXPECT_NE(lpFind(lp, lpFirst(lp), (unsigned char *)"tail", 4, 1), nullptr);
+    EXPECT_EQ(lpFind(lp, lpFirst(lp), (unsigned char *)"absent", 6, 1), nullptr);
+
+    lpFree(lp);
+}
+
 TEST_F(ListpackTest, listpackMetadataInvisibleToIterators) {
     /* Metadata entries are skipped by logical iteration and excluded from
      * numele; they are reachable only through lpGetMetadata(). */

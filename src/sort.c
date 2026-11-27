@@ -160,6 +160,7 @@ int sortCompare(const void *s1, const void *s2) {
         }
     } else {
         /* Alphanumeric sorting */
+        cmp = 0;
         if (server.sort_bypattern) {
             if (!so1->u.cmpobj || !so2->u.cmpobj) {
                 /* At least one compare object is NULL */
@@ -179,8 +180,10 @@ int sortCompare(const void *s1, const void *s2) {
                     cmp = strcoll(objectGetVal(so1->u.cmpobj), objectGetVal(so2->u.cmpobj));
                 }
             }
-        } else {
-            /* Compare elements directly. */
+        }
+        if (cmp == 0) {
+            /* Compare elements directly, or break ties when BY values compare
+             * equal (including when both are NULL) so SORT is deterministic. */
             if (server.sort_store) {
                 cmp = compareStringObjects(so1->obj, so2->obj);
             } else {

@@ -322,6 +322,83 @@ foreach command {SORT SORT_RO} {
         r sort myset by score:*
     } {a aa aaa azz b c d e f g h i l m n o p q r s t u v z} {cluster:skip}
 
+    test "SORT BY ALPHA breaks ties lexicographically on missing or equal weights" {
+        r del tie_zset tie_set tie_out
+        set members {}
+        set zargs {}
+        for {set i 0} {$i < 200} {incr i} {
+            set m "m$i"
+            lappend members $m
+            lappend zargs $i $m
+        }
+        r zadd tie_zset {*}$zargs
+        r sadd tie_set {*}$members
+        assert_encoding btree tie_zset
+        assert_encoding hashtable tie_set
+
+        set expected_asc [lsort -ascii $members]
+        set expected_desc [lsort -ascii -decreasing $members]
+
+        # All BY keys missing (both compare objects NULL)
+        foreach key {tie_zset tie_set} {
+            assert_equal $expected_asc [r sort $key by tie_nosuch_* alpha]
+            assert_equal $expected_desc [r sort $key by tie_nosuch_* alpha desc]
+            assert_equal $expected_asc [r sort_ro $key by tie_nosuch_* alpha]
+            assert_equal [lrange $expected_asc 10 34] [r sort $key by tie_nosuch_* alpha limit 10 25]
+            assert_equal [lrange $expected_desc 10 34] [r sort $key by tie_nosuch_* alpha desc limit 10 25]
+
+            r sort $key by tie_nosuch_* alpha store tie_out
+            assert_equal $expected_asc [r lrange tie_out 0 -1]
+            r sort $key by tie_nosuch_* alpha desc store tie_out
+            assert_equal $expected_desc [r lrange tie_out 0 -1]
+            r sort $key by tie_nosuch_* alpha limit 10 25 store tie_out
+            assert_equal [lrange $expected_asc 10 34] [r lrange tie_out 0 -1]
+        }
+
+        # All BY keys present with equal values
+        set mset_args {}
+        foreach m $members {
+            lappend mset_args "tie_eq:$m" "same"
+        }
+        r mset {*}$mset_args
+        assert_equal $expected_asc [r sort tie_zset by tie_eq:* alpha]
+        assert_equal $expected_desc [r sort tie_zset by tie_eq:* alpha desc]
+        r sort tie_zset by tie_eq:* alpha store tie_out
+        assert_equal $expected_asc [r lrange tie_out 0 -1]
+        r sort tie_zset by tie_eq:* alpha desc limit 5 20 store tie_out
+        assert_equal [lrange $expected_desc 5 24] [r lrange tie_out 0 -1]
+
+        # Mixed missing (NULL), empty string, and equal non-empty string weights
+        r del tie_mixed tie_out
+        r sadd tie_mixed e8 e4 e1 e7 e2 e6 e3 e5
+        r mset tie_mw:e1 "" tie_mw:e6 "" tie_mw:e3 "alpha" tie_mw:e7 "alpha" tie_mw:e5 "beta" tie_mw:e8 "beta"
+        foreach {ele val} {e1 "" e6 "" e3 "alpha" e7 "alpha" e5 "beta" e8 "beta"} {
+            r hset "tie_mh:$ele" w $val
+        }
+        set mixed_asc {e2 e4 e1 e6 e3 e7 e5 e8}
+        set mixed_desc {e8 e5 e7 e3 e6 e1 e4 e2}
+        assert_equal $mixed_asc [r sort tie_mixed by tie_mw:* alpha]
+        assert_equal $mixed_desc [r sort tie_mixed by tie_mw:* alpha desc]
+        assert_equal $mixed_asc [r sort_ro tie_mixed by tie_mw:* alpha]
+        r sort tie_mixed by tie_mw:* alpha store tie_out
+        assert_equal $mixed_asc [r lrange tie_out 0 -1]
+        r sort tie_mixed by tie_mw:* alpha desc store tie_out
+        assert_equal $mixed_desc [r lrange tie_out 0 -1]
+        r sort tie_mixed by tie_mw:* alpha limit 2 4 store tie_out
+        assert_equal {e1 e6 e3 e7} [r lrange tie_out 0 -1]
+        r sort tie_mixed by tie_mh:*->w alpha store tie_out
+        assert_equal $mixed_asc [r lrange tie_out 0 -1]
+        r sort tie_mixed by tie_mh:*->w alpha desc store tie_out
+        assert_equal $mixed_desc [r lrange tie_out 0 -1]
+
+        # List with integer-encoded elements and missing BY keys
+        r del tie_list tie_out
+        r rpush tie_list 10 2 1 3
+        assert_equal {1 10 2 3} [r sort tie_list by tie_nosuch_* alpha]
+        r sort tie_list by tie_nosuch_* alpha desc store tie_out
+        assert_equal {3 2 10 1} [r lrange tie_out 0 -1]
+    } {} {cluster:skip}
+
     test "SORT GET with pattern ending with just -> does not get hash field" {
         r del mylist
         r lpush mylist a

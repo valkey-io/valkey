@@ -58,77 +58,6 @@ proc raft_recv {fd {timeout 5000}} {
     return $payload
 }
 
-# Listen on a random port for one connection. Sets the listen port in the
-# upvar port_var and returns the listening fd, to be passed to raft_accept.
-# Each listener has its own slot, so two accepts can be in flight at once.
-proc raft_listen {port_var} {
-    upvar $port_var listen_port
-    set key [incr ::_raft_listen_seq]
-    set ::_raft_accepted($key) ""
-    set listen_fd [socket -server [list _raft_on_accept $key] -myaddr 127.0.0.1 0]
-    set ::_raft_listen_key($listen_fd) $key
-    set listen_port [lindex [fconfigure $listen_fd -sockname] 2]
-    return $listen_fd
-}
-
-proc _raft_on_accept {key fd addr port} {
-    fconfigure $fd -translation binary -buffering full
-    set ::_raft_accepted($key) $fd
-}
-
-# Wait for a connection on a listener from raft_listen and close the listener.
-# Returns the accepted client fd.
-proc raft_accept {listen_fd {timeout 5000}} {
-    set key $::_raft_listen_key($listen_fd)
-    if {$::_raft_accepted($key) eq ""} {
-        set accept_after [after $timeout [list set ::_raft_accepted($key) timeout]]
-        vwait ::_raft_accepted($key)
-        after cancel $accept_after
-    }
-    close $listen_fd
-    set fd $::_raft_accepted($key)
-    unset ::_raft_accepted($key) ::_raft_listen_key($listen_fd)
-    if {$fd eq "timeout"} {
-        error "timeout waiting for connection"
-    }
-    return $fd
-}
-
-# Listen on a random port, run optional setup code, accept one connection, close
-# the listener. Returns the accepted client fd. Sets the listen port in the
-# upvar port_var before running the setup code.
-proc raft_listen_and_accept {port_var {timeout 5000} {before_accept {}}} {
-    upvar $port_var listen_port
-    set listen_fd [raft_listen listen_port]
-    if {$before_accept ne {}} {
-        uplevel 1 $before_accept
-    }
-    return [raft_accept $listen_fd $timeout]
-}
-
-# Connect a fake node to a cluster bus port and complete the HELLO/HI handshake.
-proc raft_connect_fake_node {host cport fake_id fake_addr} {
-    set fd [raft_connect $host $cport]
-    raft_send $fd "HELLO $fake_id $fake_addr"
-    set reply [raft_recv $fd]
-    assert_match "HI *" $reply
-    return $fd
-}
-
-# Reply AE_ACK to an AE message. last_index defaults to the AE's prev-log-idx
-# plus its entry count; pass it explicitly to simulate a lagging follower.
-proc raft_reply_ae_ack {fd ae_msg repl_offset {last_index ""}} {
-    set lines [split $ae_msg "\n"]
-    set fields [split [lindex $lines 0] " "]
-    # AE <leader-id> <term> <prev-log-idx> <prev-log-term> <commit> <round> <count>
-    set term [lindex $fields 2]
-    if {$last_index eq ""} {
-        set last_index [expr {[lindex $fields 3] + [lindex $fields 7]}]
-    }
-    raft_send $fd "AE_ACK $term 1 $last_index [lindex $fields 6] $repl_offset"
-    return $last_index
-}
-
 # Read messages until one matches the pattern and return it.
 proc raft_recv_until {fd pattern {timeout 5000}} {
     set deadline [expr {[clock milliseconds] + $timeout}]
@@ -1031,12 +960,12 @@ test "Raft proto: REPL_OFFSETS updates node replication offset" {
 
 # Have the server under test MEET a fake node, which joins as a follower.
 # Returns the leader's connection to the fake node after the first AE_ACK.
-proc raft_join_fake_follower {fake_id fake_shard} {
+proc raft_join_fake_follower {fake_id fake_shard {voter_policy no}} {
     # Start listening before MEET so the leader can connect.
     set cport 0
     set fd [raft_listen_and_accept cport 5000 {
         set fake_port [expr {$cport - 10000}]
-        set fake_addr "127.0.0.1:${fake_port}@${cport},,tls-port=0,shard-id=$fake_shard,voter=no"
+        set fake_addr "127.0.0.1:${fake_port}@${cport},,tls-port=0,shard-id=$fake_shard,voter=$voter_policy"
 
         # Send CLUSTER MEET without waiting for reply (it blocks until
         # NODE_JOIN commits, which needs our AE_ACK).
@@ -1064,31 +993,6 @@ proc raft_join_fake_follower {fake_id fake_shard} {
     assert_match {OK} [$meet_client read]
     $meet_client close
     return $fd
-}
-
-# CLUSTER ADDVOTER is gone. Announce cluster-voter yes for the fake node,
-# ACK until auto-promote applies, and return the leader's last applied index.
-proc raft_promote_fake_follower {fd f_id} {
-    set addr [dict get [cluster_get_node_by_id 0 $f_id] addr]
-    if {![regsub {voter=no} $addr {voter=yes} addr]} {
-        if {[string first "voter=" $addr] < 0} {
-            append addr ",voter=yes"
-        }
-    }
-    raft_send $fd "PROPOSE NODE_INFO $f_id $addr noflags"
-    set deadline [expr {[clock milliseconds] + 5000}]
-    while {[clock milliseconds] < $deadline} {
-        if {![catch {set reply [raft_recv $fd 100]}]} {
-            if {[string match "AE *" $reply]} {
-                raft_reply_ae_ack $fd $reply 0
-            }
-        }
-        if {![cluster_has_flag [cluster_get_node_by_id 0 $f_id] learner] &&
-            [CI 0 cluster_size] == 2} {
-            return [CI 0 cluster_raft_last_applied]
-        }
-    }
-    error "learner was not promoted size=[CI 0 cluster_size]"
 }
 
 test "Raft proto: leader sends REPL_OFFSETS after follower offset changes" {
@@ -1154,6 +1058,18 @@ proc raft_ack_until_idle {fd} {
         }
     }
     return $last
+}
+
+# Catch up the fake follower and wait for automatic promotion. Drain the
+# promotion's AE before the test starts inspecting later proposals.
+proc raft_wait_for_fake_voter {fd} {
+    set deadline [expr {[clock milliseconds] + 5000}]
+    while {[CI 0 cluster_size] != 2} {
+        set remaining [expr {$deadline - [clock milliseconds]}]
+        if {$remaining <= 0} {fail "Fake follower did not become a voter"}
+        raft_reply_ae_ack $fd [raft_recv_until $fd "AE *" $remaining] 0
+    }
+    return [raft_ack_until_idle $fd]
 }
 
 test "Raft proto: leader backs off next_index to the follower's last index on rejection" {
@@ -1730,12 +1646,9 @@ test "Raft proto: the leader answers UNCHANGED only after a quorum acks a later 
     start_server {overrides {cluster-enabled yes cluster-protocol raft cluster-node-timeout 20000}} {
         set node_id [R 0 CLUSTER MYID]
         set f_id [string repeat "f" 40]
-        set fd [raft_join_fake_follower $f_id [string repeat "9" 40]]
         R 0 cluster addslots 0
-        raft_ack_until_idle $fd
-
-        # Make F a voter, so the quorum is both of us.
-        set last [raft_promote_fake_follower $fd $f_id]
+        set fd [raft_join_fake_follower $f_id [string repeat "9" 40] auto]
+        set last [raft_wait_for_fake_voter $fd]
         set commit [CI 0 cluster_raft_commit_index]
         set term [CI 0 cluster_raft_current_term]
 
@@ -1769,12 +1682,9 @@ test "Raft proto: a read confirmed by the ACK that commits a change isn't unchan
     start_server {overrides {cluster-enabled yes cluster-protocol raft cluster-node-timeout 20000}} {
         set node_id [R 0 CLUSTER MYID]
         set f_id [string repeat "f" 40]
-        set fd [raft_join_fake_follower $f_id [string repeat "9" 40]]
         R 0 cluster addslots 0
-        raft_ack_until_idle $fd
-
-        # Make F a voter, so the quorum is both of us.
-        set last [raft_promote_fake_follower $fd $f_id]
+        set fd [raft_join_fake_follower $f_id [string repeat "9" 40] auto]
+        set last [raft_wait_for_fake_voter $fd]
         set term [CI 0 cluster_raft_current_term]
 
         # F forwards a SETSLOT NODE for the current owner, then a change of
@@ -1806,12 +1716,9 @@ test "Raft proto: the leader completes its proposal only with its own entry" {
     start_server {overrides {cluster-enabled yes cluster-protocol raft cluster-node-timeout 20000}} {
         set node_id [R 0 CLUSTER MYID]
         set f_id [string repeat "f" 40]
-        set fd [raft_join_fake_follower $f_id [string repeat "9" 40]]
         R 0 cluster addslots 0
-        raft_ack_until_idle $fd
-
-        # Make F a voter, so nothing commits without its ACK.
-        set last [raft_promote_fake_follower $fd $f_id]
+        set fd [raft_join_fake_follower $f_id [string repeat "9" 40] auto]
+        set last [raft_wait_for_fake_voter $fd]
         set term [CI 0 cluster_raft_current_term]
 
         # F proposes slot 1 to the node, then to F. Then a client proposes
@@ -1850,12 +1757,9 @@ test "Raft proto: a proposal completes after its leader's log tail is replaced" 
     start_server {overrides {cluster-enabled yes cluster-protocol raft cluster-node-timeout 20000}} {
         set node_id [R 0 CLUSTER MYID]
         set f_id [string repeat "f" 40]
-        set fd [raft_join_fake_follower $f_id [string repeat "9" 40]]
         R 0 cluster addslots 0
-        raft_ack_until_idle $fd
-
-        # Make F a voter, so nothing commits without its ACK.
-        set last [raft_promote_fake_follower $fd $f_id]
+        set fd [raft_join_fake_follower $f_id [string repeat "9" 40] auto]
+        set last [raft_wait_for_fake_voter $fd]
         set term [CI 0 cluster_raft_current_term]
 
         # Slots 1 and 2 are appended, but not committed.

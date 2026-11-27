@@ -346,22 +346,16 @@ start_cluster 1 2 {overrides {cluster-protocol raft cluster-node-timeout 3000}} 
         set r1_id [R 1 cluster myid]
         set r2_id [R 2 cluster myid]
 
-        # Forget each replica while another voter can still ack, then pause
-        # it so it cannot open a new link.
-        assert_equal OK [R 0 cluster forget $r2_id]
-        pause_process [srv -2 pid]
-        wait_for_condition 50 100 {
-            [CI 0 cluster_size] == 2
-        } else {
-            fail "first replica was not forgotten (size=[CI 0 cluster_size])"
+        # Leave R0 able to commit both forgets while the replicas are paused.
+        foreach id {1 2} {
+            R $id CONFIG SET cluster-voter no
         }
-        assert_equal OK [R 0 cluster forget $r1_id]
+        wait_for_raft_cluster_size 1
         pause_process [srv -1 pid]
-        wait_for_condition 50 100 {
-            [CI 0 cluster_size] == 1 && [CI 0 cluster_known_nodes] == 1
-        } else {
-            fail "size=[CI 0 cluster_size] known=[CI 0 cluster_known_nodes]"
-        }
+        pause_process [srv -2 pid]
+        assert_equal OK [R 0 cluster forget $r1_id]
+        assert_equal OK [R 0 cluster forget $r2_id]
+        assert_equal 1 [CI 0 cluster_known_nodes]
         assert_morethan [CI 0 cluster_raft_last_applied] 0
         assert_equal 0 [s 0 mem_cluster_links]
         resume_process [srv -1 pid]

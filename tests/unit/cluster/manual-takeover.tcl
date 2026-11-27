@@ -18,6 +18,16 @@ foreach id $replica_ids {
     R $id config set cluster-replica-no-failover yes
 }
 
+# With all ten nodes voting, the seven survivors can commit the takeovers
+# regardless of which primaries were promoted during cluster setup.
+if {$::cluster_raft} {
+    set node_count [llength $::servers]
+    for {set id 0} {$id < $node_count} {incr id} {
+        R $id CONFIG SET cluster-voter yes
+    }
+    wait_for_raft_cluster_size $node_count
+}
+
 set paused_pid [srv 0 pid]
 set paused_pid1 [srv -1 pid]
 set paused_pid2 [srv -2 pid]

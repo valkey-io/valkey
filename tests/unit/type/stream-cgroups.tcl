@@ -622,6 +622,10 @@ start_server {
     }
 
     test {XGROUP DESTROY should unblock XREADGROUP with -NOGROUP} {
+        # An earlier test closes clients that are still blocked on mystream.
+        # Wait until the server has dropped them: this test deletes mystream,
+        # which would unblock them with an error that the checks below count.
+        wait_for_blocked_clients_count 0
         r config resetstat
         r del mystream
         r XGROUP CREATE mystream mygroup $ MKSTREAM

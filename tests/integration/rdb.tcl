@@ -2144,25 +2144,33 @@ start_server {overrides {forkless-infrastructure-enabled yes forkless-policy pre
     foreach {encoding max_lp} {listpack 512 hashtable 1} {
         test "Active hash field expiry during forkless bgsave preserves hashes ($encoding)" {
             r flushall
+            r debug set-active-expire 0
             r config set hash-max-listpack-entries $max_lp
             r debug populate 2000 filler 100
             for {set i 0} {$i < 200} {incr i} {
                 r hset two:$i f0 v f1 v f2 v
-                r hpexpire two:$i 600 FIELDS 1 f0
                 r hset one:$i f0 v
-                r hpexpire one:$i 600 FIELDS 1 f0
+            }
+            set deadline [expr {[clock milliseconds] + 600}]
+            for {set i 0} {$i < 200} {incr i} {
+                r hpexpireat two:$i $deadline FIELDS 1 f0
+                r hpexpireat one:$i $deadline FIELDS 1 f0
             }
             assert_equal $encoding [r object encoding two:0]
+            assert_equal 0 [count_reaped_two_hashes 200]
 
             r config set rdb-key-save-delay 1000
             r bgsave
             wait_for_condition 50 50 {
                 [s rdb_bgsave_in_progress] == 1
             } else {
+                r debug set-active-expire 1
                 fail "forkless bgsave did not start"
             }
 
-            # Wait for active field expiry to reap fields while the forkless save is running.
+            # Enable active expiry only after the forkless save is running so field
+            # reclamation advances strictly while the save is active.
+            r debug set-active-expire 1
             wait_for_condition 100 50 {
                 [count_reaped_two_hashes 200] >= 50
             } else {
@@ -2172,6 +2180,7 @@ start_server {overrides {forkless-infrastructure-enabled yes forkless-policy pre
 
             r config set rdb-key-save-delay 0
             waitForBgsave r
+            assert_equal "ok" [s rdb_last_bgsave_status]
             assert_equal "forkless" [s rdb_last_bgsave_type]
 
             set reload_loglines [count_log_lines 0]

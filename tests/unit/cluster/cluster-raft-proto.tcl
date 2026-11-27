@@ -2120,13 +2120,13 @@ test "Raft proto: partially processed AE should not commit past what's verified"
         # Leader in term 2 sends two noop entries and commit 0
         # Follower responds acknowledging term, success=1, last index=2
         set fd0 [raft_connect_fake_node 127.0.0.1 $cport $l0_id $l0_addr]
-        raft_send $fd0 "AE $l0_id 2 0 0 0 2\n2 NOOP -\n2 NOOP -"
+        raft_send $fd0 "AE $l0_id 2 0 0 0 0 2\n2 NOOP -\n2 NOOP -"
         assert_match "AE_ACK 2 1 2 *" [raft_recv_until $fd0 "AE_ACK *"]
 
         # Leader in term 3 sends a new entry type, then a noop, with commit 2
         # If follower doesn't have this entry type, we can't have it committed
         set fd1 [raft_connect_fake_node 127.0.0.1 $cport $l1_id $l1_addr]
-        raft_send $fd1 "AE $l1_id 3 0 0 2 2\n3 FUTURE_ENTRY_TYPE -\n3 NOOP -"
+        raft_send $fd1 "AE $l1_id 3 0 0 2 0 2\n3 FUTURE_ENTRY_TYPE -\n3 NOOP -"
         raft_recv_until $fd1 "AE_ACK *"
 
         # We should not be able to commit any entry because FUTURE_ENTRY_TYPE isn't real

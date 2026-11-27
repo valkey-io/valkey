@@ -48,6 +48,8 @@
 #include "module.h"
 #include "io_threads.h"
 #include "bio.h"
+#include "mutexqueue.h"
+#include "anet.h"
 
 #include <stdlib.h>
 #include <sys/types.h>
@@ -63,6 +65,33 @@
  * Myself always points to server.cluster->myself, that is, the clusterNode
  * that represents this node. */
 clusterNode *myself = NULL;
+
+/* A hostname lookup done in bio. Completed requests are queued back and
+ * consumed by clusterCron(). */
+struct clusterResolveRequest {
+    uint64_t id; /* Matches node->hostname_resolve_id while current. */
+    char node_name[CLUSTER_NAMELEN];
+    uint64_t addr_version; /* node->addr_version when the lookup was requested. */
+    sds hostname;
+    int flags; /* ANET_PREFER_* flags for anetResolve(). */
+    int ok;
+    char ip[NET_IP_STR_LEN];
+    char err[ANET_ERR_LEN];
+};
+typedef struct clusterResolveRequest clusterResolveRequest;
+
+static mutexQueue *cluster_resolve_results = NULL;
+static uint64_t cluster_resolve_next_id = 0;
+static int myself_hostname_resolved = 0;
+
+/* Drop the hostname lookup state of 'node': the result of a pending lookup is
+ * ignored and a new lookup may be requested right away. */
+static void clusterResetHostnameResolve(clusterNode *node) {
+    node->hostname_resolve_id = 0;
+    node->hostname_resolve_time = 0;
+    node->hostname_resolve_failed = 0;
+    if (node == myself) myself_hostname_resolved = 0;
+}
 
 clusterNode *createClusterNode(char *nodename, int flags);
 void clusterAddNode(clusterNode *node);
@@ -1277,6 +1306,13 @@ int clusterSaveConfigFromBio(sds content, bool do_fsync) {
     return clusterSaveConfigImpl(content, true, do_fsync);
 }
 
+/* Resolve a node hostname, it is called from the bio thread. The result is
+ * handed back to the main thread, which owns all the cluster state. */
+void clusterResolveHostnameFromBio(clusterResolveRequest *r) {
+    r->ok = anetResolve(r->err, r->hostname, r->ip, sizeof(r->ip), r->flags) == ANET_OK;
+    mutexQueueAdd(cluster_resolve_results, r);
+}
+
 /* Save the cluster configuration file. If the save fails, exit the process. */
 void clusterSaveConfigOrDie(bool fsync) {
     if (clusterSaveConfig(false, fsync) == C_ERR) {
@@ -1446,6 +1482,7 @@ void clusterUpdateMyselfIp(void) {
         } else {
             myself->ip[0] = '\0'; /* Force autodetection. */
         }
+        clusterResetHostnameResolve(myself);
         clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG);
     }
 }
@@ -1566,6 +1603,8 @@ static inline uint64_t nodeEpoch(clusterNode *n) {
 /* Update my hostname based on server configuration values */
 void clusterUpdateMyselfHostname(void) {
     if (!myself) return;
+    const char *hostname = server.cluster_announce_hostname ? server.cluster_announce_hostname : "";
+    if (strcmp(hostname, myself->hostname) != 0) clusterResetHostnameResolve(myself);
     updateAnnouncedHostname(myself, server.cluster_announce_hostname);
 }
 
@@ -1626,6 +1665,8 @@ void clusterInit(void) {
     }
     server.cluster->stats_pfail_nodes = 0;
     server.cluster->stat_cluster_links_buffer_limit_exceeded = 0;
+
+    cluster_resolve_results = mutexQueueCreate();
 
     memset(server.cluster->slots, 0, sizeof(server.cluster->slots));
     clusterCloseAllSlots();
@@ -1869,6 +1910,8 @@ void clusterReset(int hard) {
         dictDelete(server.cluster->nodes, oldname);
         sdsfree(oldname);
         getRandomHexChars(myself->name, CLUSTER_NAMELEN);
+        /* A pending lookup refers to the old ID and its result would be lost. */
+        clusterResetHostnameResolve(myself);
         clusterAddNode(myself);
         serverLog(LL_NOTICE, "Node hard reset, now I'm %.40s", myself->name);
     } else {
@@ -2209,6 +2252,14 @@ clusterNode *createClusterNode(char *nodename, int flags) {
     node->announce_client_ipv4 = sdsempty();
     node->announce_client_ipv6 = sdsempty();
     node->hostname = sdsempty();
+    node->hostname_resolve_time = 0;
+    node->hostname_resolve_id = 0;
+    node->addr_version = 0;
+    node->hostname_resolve_failed = 0;
+    memset(node->noaddr_ip, 0, sizeof(node->noaddr_ip));
+    node->noaddr_tcp_port = 0;
+    node->noaddr_tls_port = 0;
+    node->noaddr_cport = 0;
     node->human_nodename = sdsempty();
     node->availability_zone = sdsempty();
     node->tcp_port = 0;
@@ -3141,6 +3192,7 @@ int clusterProcessGossipSection(clusterMsg *hdr, clusterLink *link) {
                  node->tcp_port != msg_tcp_port || node->cport != ntohs(g->cport))) {
                 if (node->link) freeClusterLink(node->link);
                 memcpy(node->ip, g->ip, NET_IP_STR_LEN);
+                node->addr_version++;
                 node->tcp_port = msg_tcp_port;
                 node->tls_port = msg_tls_port;
                 node->cport = ntohs(g->cport);
@@ -3248,6 +3300,7 @@ int nodeUpdateAddressIfNeeded(clusterNode *node, clusterLink *link, clusterMsg *
 
     /* IP / port is different, update it. */
     memcpy(node->ip, ip, sizeof(ip));
+    node->addr_version++;
     node->tcp_port = tcp_port;
     node->tls_port = tls_port;
     node->cport = cport;
@@ -4383,6 +4436,7 @@ int clusterProcessPacket(clusterLink *link) {
 
             if (connAddrSockName(link->conn, ip, sizeof(ip), NULL) != -1 && strcmp(ip, myself->ip)) {
                 memcpy(myself->ip, ip, NET_IP_STR_LEN);
+                myself->addr_version++;
                 serverLog(LL_NOTICE, "IP address for this node updated to %s", myself->ip);
                 clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG);
             }
@@ -4527,6 +4581,13 @@ int clusterProcessPacket(clusterLink *link) {
                           link->node->name, humanNodename(link->node), link->node->shard_id,
                           (int)(now - (link->node->ctime)), link->node->flags);
                 link->node->flags |= CLUSTER_NODE_NOADDR;
+                /* The IP may just be stale (e.g. reused by another node after a
+                 * restart). Remember the address so it can be restored if the
+                 * hostname of the node resolves to a new IP. */
+                memcpy(link->node->noaddr_ip, link->node->ip, NET_IP_STR_LEN);
+                link->node->noaddr_tcp_port = link->node->tcp_port;
+                link->node->noaddr_tls_port = link->node->tls_port;
+                link->node->noaddr_cport = link->node->cport;
                 link->node->ip[0] = '\0';
                 link->node->tcp_port = 0;
                 link->node->tls_port = 0;
@@ -6879,6 +6940,125 @@ static int nodeExceedsHandshakeTimeout(clusterNode *node, mstime_t now) {
     return now - node->ctime > getHandshakeTimeout() ? 1 : 0;
 }
 
+#define CLUSTER_HOSTNAME_RESOLVE_INTERVAL_MS 1000
+
+static int clusterNodeLinkConnected(clusterNode *node) {
+    return node->link && node->link->conn && connGetState(node->link->conn) == CONN_STATE_CONNECTED;
+}
+
+/* Return true if the IP we know for 'node' may be stale, so it is worth
+ * checking it against the IP its hostname currently resolves to. */
+static int clusterNodeNeedsHostnameResolve(clusterNode *node) {
+    if (node == myself) return !myself_hostname_resolved && server.cluster_announce_ip == NULL;
+    if (nodeInHandshake(node)) return 0;
+    if (node->flags & CLUSTER_NODE_NOADDR) return node->noaddr_cport != 0;
+    if (node->flags & (CLUSTER_NODE_PFAIL | CLUSTER_NODE_FAIL)) return 1;
+    /* A connect towards a stale IP may hang instead of failing, so a link
+     * that is not connected yet counts as unreachable too. */
+    return !clusterNodeLinkConnected(node);
+}
+
+/* Request a background DNS lookup of the node hostname if its address may be
+ * stale. This never blocks: the result is applied by a later clusterCron(). */
+static void clusterNodeCronResolveHostname(clusterNode *node, mstime_t now) {
+    if (!server.cluster_resolve_hostnames || sdslen(node->hostname) == 0) return;
+    if (node->hostname_resolve_id != 0) return;
+    if (now - node->hostname_resolve_time < CLUSTER_HOSTNAME_RESOLVE_INTERVAL_MS) return;
+    if (!clusterNodeNeedsHostnameResolve(node)) return;
+
+    /* Stick to the address family already in use on the cluster bus, as a
+     * hostname may resolve to addresses the bus does not listen on. Until we
+     * know any address the IP is learned from the cluster bus instead. */
+    const char *ip = node->ip[0] != '\0' ? node->ip : myself->ip;
+    if (ip[0] == '\0') return;
+    int flags = strchr(ip, ':') ? ANET_PREFER_IPV6 : ANET_PREFER_IPV4;
+
+    clusterResolveRequest *r = zcalloc(sizeof(*r));
+    r->id = ++cluster_resolve_next_id;
+    memcpy(r->node_name, node->name, CLUSTER_NAMELEN);
+    r->addr_version = node->addr_version;
+    r->hostname = sdsdup(node->hostname);
+    r->flags = flags;
+
+    node->hostname_resolve_time = now;
+    node->hostname_resolve_id = r->id;
+    bioCreateClusterResolveHostnameJob(r);
+}
+
+static void clusterApplyHostnameResolveResult(clusterResolveRequest *r) {
+    /* Ignore lookups that are no longer current: the node was removed, or its
+     * lookup state was reset, e.g. because its ID or address config changed. */
+    clusterNode *node = clusterLookupNode(r->node_name, CLUSTER_NAMELEN);
+    if (!node || node->hostname_resolve_id != r->id) return;
+    node->hostname_resolve_id = 0;
+    if (!server.cluster_resolve_hostnames || sdscmp(node->hostname, r->hostname) != 0) return;
+
+    if (!r->ok) {
+        /* Not fatal, keep using the last known address and retry later. */
+        if (!node->hostname_resolve_failed) {
+            serverLog(LL_NOTICE, "Unable to resolve hostname %s of node %.40s (%s): %s. Keeping last known address '%s'.",
+                      r->hostname, node->name, humanNodename(node), r->err, node->ip);
+        }
+        node->hostname_resolve_failed = 1;
+        return;
+    }
+    node->hostname_resolve_failed = 0;
+
+    /* The cluster bus learned an address for the node during the lookup. */
+    int bus_addr_changed = node->addr_version != r->addr_version;
+
+    if (node == myself) {
+        myself_hostname_resolved = 1;
+        serverLog(LL_DEBUG, "Hostname %s of this node resolves to %s", r->hostname, r->ip);
+        if (bus_addr_changed || server.cluster_announce_ip != NULL || strcmp(myself->ip, r->ip) == 0) return;
+        memcpy(myself->ip, r->ip, NET_IP_STR_LEN);
+        serverLog(LL_NOTICE, "IP address for this node updated to %s (resolved from hostname %s)", myself->ip,
+                  r->hostname);
+        clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG);
+        return;
+    }
+
+    int noaddr = node->flags & CLUSTER_NODE_NOADDR;
+    if ((noaddr ? node->noaddr_cport : node->cport) == 0) return;
+    /* Keep an address learned from the cluster bus after the lookup was
+     * requested once it has a working link: the result may be older. */
+    if (bus_addr_changed && clusterNodeLinkConnected(node)) return;
+    if (!noaddr && strcasecmp(node->ip, r->ip) == 0) return;
+    /* The hostname still points at the address that answered with a different
+     * node ID, e.g. the node did CLUSTER RESET HARD or lost its nodes.conf.
+     * Reconnecting would only hit the same mismatch again. */
+    if (noaddr && strcasecmp(node->noaddr_ip, r->ip) == 0) {
+        serverLog(LL_DEBUG, "Hostname %s of node %.40s (%s) still resolves to %s, which answered with another node ID",
+                  r->hostname, node->name, humanNodename(node), r->ip);
+        return;
+    }
+
+    memcpy(node->ip, r->ip, NET_IP_STR_LEN);
+    if (noaddr) {
+        node->tcp_port = node->noaddr_tcp_port;
+        node->tls_port = node->noaddr_tls_port;
+        node->cport = node->noaddr_cport;
+        node->flags &= ~CLUSTER_NODE_NOADDR;
+    }
+    node->noaddr_ip[0] = '\0';
+    if (node->link) freeClusterLink(node->link);
+    serverLog(LL_NOTICE, "Address updated for node %.40s (%s), now %s:%d (resolved from hostname %s)", node->name,
+              humanNodename(node), node->ip, getNodeDefaultClientPort(node), r->hostname);
+
+    if (nodeIsReplica(myself) && myself->replicaof == node)
+        replicationSetPrimary(node->ip, getNodeDefaultReplicationPort(node), 0, false);
+    clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_UPDATE_STATE);
+}
+
+static void clusterProcessHostnameResolveResults(void) {
+    clusterResolveRequest *r;
+    while ((r = mutexQueuePop(cluster_resolve_results, false)) != NULL) {
+        clusterApplyHostnameResolveResult(r);
+        sdsfree(r->hostname);
+        zfree(r);
+    }
+}
+
 #define NODE_CONNECTION_RETRIES_PER_TIMEOUT 10
 
 /* Check if the node is disconnected and re-establish the connection.
@@ -7009,6 +7189,7 @@ void clusterCron(void) {
     iteration++; /* Number of times this function was called so far. */
 
     clusterUpdateMyselfHostname();
+    clusterProcessHostnameResolveResults();
 
     /* Drive in progress slot import/export links. */
     clusterSlotMigrationCron();
@@ -7023,6 +7204,7 @@ void clusterCron(void) {
         /* We free the inbound or outbound link to the node if the link has an
          * oversized message send queue and immediately try reconnecting. */
         clusterNodeCronFreeLinkOnBufferLimitReached(node);
+        clusterNodeCronResolveHostname(node, now);
         /* The protocol is that function(s) below return non-zero if the node was
          * terminated.
          */

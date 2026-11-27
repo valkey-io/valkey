@@ -2457,6 +2457,7 @@ struct valkeyServer {
     char *cluster_announce_hostname;                       /* hostname to announce on cluster bus. */
     char *cluster_announce_human_nodename;                 /* Human readable node name assigned to a node. */
     int cluster_preferred_endpoint_type;                   /* Use the announced hostname when available. */
+    int cluster_resolve_hostnames;                         /* Resolve node hostnames to refresh stale IPs. */
     int cluster_announce_port;                             /* base port to announce on cluster bus. */
     int cluster_announce_tls_port;                         /* TLS port to announce on cluster bus. */
     int cluster_announce_bus_port;                         /* bus port to announce on cluster bus. */

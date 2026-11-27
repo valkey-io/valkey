@@ -2107,4 +2107,34 @@ test "Raft proto: NODE_FORGET resets tracking from AE_ACK" {
     }
 }
 
+
+test "Raft proto: partially processed AE should not commit past what's verified" {
+    start_server {overrides {cluster-enabled yes cluster-protocol raft}} {
+        set cport [expr {[srv 0 port] + 10000}]
+        
+        set l0_id [string repeat "c" 40]
+        set l0_addr "127.0.0.1:9994@19994,,tls-port=0,shard-id=[string repeat f 40]"
+        set l1_id [string repeat "d" 40]
+        set l1_addr "127.0.0.1:9995@19995,,tls-port=0,shard-id=[string repeat e 40]"
+ 
+        # Leader in term 2 sends two noop entries and commit 0
+        # Follower responds acknowledging term, success=1, last index=2
+        set fd0 [raft_connect_fake_node 127.0.0.1 $cport $l0_id $l0_addr]
+        raft_send $fd0 "AE $l0_id 2 0 0 0 2\n2 NOOP -\n2 NOOP -"
+        assert_match "AE_ACK 2 1 2 *" [raft_recv_until $fd0 "AE_ACK *"]
+
+        # Leader in term 3 sends a new entry type, then a noop, with commit 2
+        # If follower doesn't have this entry type, we can't have it committed
+        set fd1 [raft_connect_fake_node 127.0.0.1 $cport $l1_id $l1_addr]
+        raft_send $fd1 "AE $l1_id 3 0 0 2 2\n3 FUTURE_ENTRY_TYPE -\n3 NOOP -"
+        raft_recv_until $fd1 "AE_ACK *"
+
+        # We should not be able to commit any entry because FUTURE_ENTRY_TYPE isn't real
+        assert_equal 0 [CI 0 cluster_raft_commit_index]
+ 
+        close $fd0
+        close $fd1
+    }
+}
+
 } ;# tags

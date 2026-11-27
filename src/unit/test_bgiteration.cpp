@@ -3615,3 +3615,25 @@ TEST_F(BgIterationTest, expediteEntryForConsistentIgnoresNonConsistentAndDeleteA
     expectReadKeySequence(itEventual, 5, LAST_ITEM);
     expectReadComplete(itEventual);
 }
+
+TEST_F(BgIterationTest, expediteEntryForConsistentSkipsKeysCreatedAfterStart) {
+    bgIterator *it = bgIteratorCreateFullScanIter("iter", BGITERATOR_CONSISTENCY_START, NULL,
+                                                  iteratorCleanupFn, PRIVDATA);
+    expectReadKey(it, 0);
+
+    // Add a new key in DB 0 after the consistent iterator started and stamp its
+    // iterator_epoch as setKey() does in production. Expediting must skip it so
+    // it is neither deferred nor emitted into the consistent snapshot.
+    addKeyToDb(0, "K0", "K0");
+    sds postKey = sdsnew("K0");
+    dbEntry *postEntry = dbFind(server.db[0], postKey);
+    sdsfree(postKey);
+    ASSERT_NE(postEntry, nullptr);
+    bgIteration_dbEntryModified(postEntry);
+
+    EXPECT_FALSE(bgIteration_expediteEntryForConsistent(0, postEntry));
+    EXPECT_FALSE(bgIteration_isEntryInuse(postEntry));
+
+    expectReadKeySequence(it, 1, LAST_ITEM);
+    expectReadComplete(it);
+}

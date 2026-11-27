@@ -717,6 +717,27 @@ unsigned char *lpFind(unsigned char *lp, unsigned char *p, unsigned char *s, uin
 
     assert(p);
     while (p) {
+        /* Short strings are the common case in hashes and sets: compare them
+         * inline. A 6-bit string encoding can't be LP_EOF or a metadata entry. */
+        if (skipcnt == 0 && LP_ENCODING_IS_6BIT_STR(p[0])) {
+            uint32_t elen = LP_ENCODING_6BIT_STR_LEN(p);
+            uint32_t esize = elen + 2;
+            assert(p >= lp + LP_HDR_SIZE && p + esize < lp + lp_bytes);
+            if (elen == slen && (slen == 0 || memcmp(p + 1, s, slen) == 0)) return p;
+            p += esize;
+            if (skip == 1 && LP_ENCODING_IS_6BIT_STR(p[0])) {
+                p += LP_ENCODING_6BIT_STR_LEN(p) + 2;
+            } else if (skip > 0 && p[0] != LP_EOF) {
+                skipcnt = skip;
+            }
+            assert(p >= lp + LP_HDR_SIZE && p < lp + lp_bytes);
+            if (unlikely(p[0] == LP_EOF)) {
+                assert(p + 1 == lp + lp_bytes);
+                break;
+            }
+            continue;
+        }
+
         /* Check if we are reading a metadata entry if so skip it */
         if (lpIsMetadata(p)) {
             p = lpSkip(p);

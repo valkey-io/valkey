@@ -176,6 +176,12 @@ void fieldExpireScanCallback(void *privdata, void *volaKey, int didx) {
     if (bgIteration_isEntryInuse(o)) return;
 
     mstime_t now = server.mstime;
+    if (bgIteration_iterationActive() &&
+        hashTypeHasExpiredFields(o, now) &&
+        bgIteration_expediteEntryForConsistent(data->db->id, o)) {
+        return;
+    }
+
     size_t expired_fields = dbReclaimExpiredFields(o, data->db, now, data->max_entries, didx);
     if (expired_fields) {
         data->has_more_expired_entries = (expired_fields == data->max_entries);

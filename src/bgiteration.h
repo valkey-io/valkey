@@ -362,6 +362,13 @@ size_t bgIteration_memoryInuseForReplication(void);
 bool bgIteration_isEntryInuse(dbEntry *de);
 
 
+/* Expedite an entry for any active consistent iterators before modifying it outside
+ * normal client command processing (e.g. active hash field expiry). Returns true if
+ * the entry is in use by a background iterator and the caller must defer modifying it
+ * until the iterator releases it. */
+bool bgIteration_expediteEntryForConsistent(int dbid, dbEntry *de);
+
+
 /* Notify bgIteration that a dbEntry has been added/modified.
  *  - If caller has a dbEntry*, dbEntryModified is more efficient
  *  - If caller has a dbid/key, a lookup is performed to find the dbEntry */

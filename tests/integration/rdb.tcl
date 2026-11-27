@@ -2132,4 +2132,157 @@ start_server {overrides {save ""}} {
     }
 }
 
+proc count_hashes_with_hlen {prefix count target_hlen} {
+    set matched 0
+    for {set i 0} {$i < $count} {incr i} {
+        if {[r hlen ${prefix}:$i] == $target_hlen} { incr matched }
+    }
+    return $matched
+}
+
+proc count_reaped_hashes {prefix count initial_hlen} {
+    set reaped 0
+    for {set i 0} {$i < $count} {incr i} {
+        if {[r hlen ${prefix}:$i] < $initial_hlen} { incr reaped }
+    }
+    return $reaped
+}
+
+proc count_existing_hashes {prefix count} {
+    set existing 0
+    for {set i 0} {$i < $count} {incr i} {
+        if {[r exists ${prefix}:$i]} { incr existing }
+    }
+    return $existing
+}
+
+start_server {overrides {forkless-infrastructure-enabled yes forkless-policy prefer-forkless save ""}} {
+    foreach {label encoding max_lp num_volatile} {
+        {listpack}              listpack  512 1
+        {hashtable single vset} hashtable 1   1
+        {hashtable vector vset} hashtable 1   16
+        {hashtable rax vset}    hashtable 1   130
+    } {
+        test "Active hash field expiry during forkless bgsave preserves hashes ($label)" {
+            r flushall
+            r debug set-active-expire 0
+            r config set hash-max-listpack-entries $max_lp
+            r debug populate 2000 filler 100
+
+            set count 200
+            set initial_hlen [expr {2 + $num_volatile}]
+            set two_args [list p1 v p2 v]
+            set one_args {}
+            set vol_fields {}
+            for {set j 0} {$j < $num_volatile} {incr j} {
+                lappend two_args v$j v
+                lappend one_args v$j v
+                lappend vol_fields v$j
+            }
+
+            for {set i 0} {$i < $count} {incr i} {
+                r hset two:$i {*}$two_args
+                r hset one:$i {*}$one_args
+            }
+            set deadline [expr {[clock milliseconds] + 600}]
+            for {set i 0} {$i < $count} {incr i} {
+                r hpexpireat two:$i $deadline FIELDS $num_volatile {*}$vol_fields
+                r hpexpireat one:$i $deadline FIELDS $num_volatile {*}$vol_fields
+            }
+            assert_equal $encoding [r object encoding two:0]
+            assert_equal $count [count_hashes_with_hlen two $count $initial_hlen]
+
+            set save_loglines [count_log_lines 0]
+            r config set rdb-key-save-delay 1000
+            r bgsave
+            wait_for_condition 50 50 {
+                [s rdb_bgsave_in_progress] == 1
+            } else {
+                r debug set-active-expire 1
+                fail "forkless bgsave did not start"
+            }
+
+            # Verify no volatile fields were already reaped before the save started.
+            assert_equal $count [count_hashes_with_hlen two $count $initial_hlen]
+
+            # Enable active expiry only after the forkless save is running so field
+            # reclamation advances strictly while the save is active.
+            r debug set-active-expire 1
+            wait_for_condition 100 50 {
+                [count_reaped_hashes two $count $initial_hlen] >= 50
+            } else {
+                fail "active field expiry did not run during forkless bgsave"
+            }
+            assert_equal 1 [s rdb_bgsave_in_progress]
+
+            r config set rdb-key-save-delay 0
+            waitForBgsave r
+            wait_for_log_messages 0 {"*forkless save complete*"} $save_loglines 50 50
+            assert_equal "ok" [s rdb_last_bgsave_status]
+            assert_equal "forkless" [s rdb_last_bgsave_type]
+
+            # Verify all deferred hashes are actively reclaimed once the save finishes.
+            wait_for_condition 200 50 {
+                [count_hashes_with_hlen two $count 2] == $count &&
+                [count_existing_hashes one $count] == 0
+            } else {
+                fail "deferred hashes were not reclaimed after forkless bgsave"
+            }
+
+            set reload_loglines [count_log_lines 0]
+            r debug reload nosave
+
+            # Every two:* hash must survive in the RDB with its persistent fields intact.
+            for {set i 0} {$i < $count} {incr i} {
+                assert_equal "v" [r hget two:$i p1]
+                assert_equal "v" [r hget two:$i p2]
+            }
+
+            # No empty hashes should have been written to the RDB.
+            wait_for_log_messages 0 {"*Done loading RDB*"} $reload_loglines 50 50
+            verify_no_log_message 0 "*empty keys skipped*" $reload_loglines
+        } {} {needs:debug}
+    }
+
+    test "Active hash field expiry on keys created after forkless bgsave starts does not include them in RDB" {
+        r flushall
+        r debug set-active-expire 1
+        r config set hash-max-listpack-entries 1
+        r debug populate 2000 filler 100
+
+        set save_loglines [count_log_lines 0]
+        r config set rdb-key-save-delay 1000
+        r bgsave
+        wait_for_condition 50 50 {
+            [s rdb_bgsave_in_progress] == 1
+        } else {
+            fail "forkless bgsave did not start"
+        }
+
+        set count 200
+        set deadline [expr {[clock milliseconds] + 200}]
+        for {set i 0} {$i < $count} {incr i} {
+            r hset post:$i f0 v f1 v
+            r hpexpireat post:$i $deadline FIELDS 1 f0
+        }
+
+        wait_for_condition 100 50 {
+            [count_hashes_with_hlen post $count 1] >= 50
+        } else {
+            fail "active field expiry did not run on post-save hashes during forkless bgsave"
+        }
+        assert_equal 1 [s rdb_bgsave_in_progress]
+
+        r config set rdb-key-save-delay 0
+        waitForBgsave r
+        wait_for_log_messages 0 {"*forkless save complete*"} $save_loglines 50 50
+        assert_equal "ok" [s rdb_last_bgsave_status]
+        assert_equal "forkless" [s rdb_last_bgsave_type]
+
+        r debug reload nosave
+        assert_equal 2000 [r dbsize]
+        assert_equal 0 [count_existing_hashes post $count]
+    } {} {needs:debug}
+}
+
 } ;# tags

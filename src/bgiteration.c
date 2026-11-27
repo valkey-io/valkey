@@ -2728,6 +2728,37 @@ bool bgIteration_isEntryInuse(dbEntry *de) {
 
 
 // PUBLIC API
+bool bgIteration_expediteEntryForConsistent(int dbid, dbEntry *de) {
+    serverAssert(hasMainThreadExclusivity());
+    if (!bgIteration_iterationActive()) return false;
+    if (isEntryInuseByAnyIterator(de)) return true;
+
+    sds key = objectGetKey(de);
+    bgIterationEntryMetadata *md = (bgIterationEntryMetadata *)objectGetMetadata(de);
+    bool mustDefer = false;
+
+    listIter li;
+    listNode *node;
+    listRewind(allIterators, &li);
+    while ((node = listNext(&li)) != NULL) {
+        bgIterator *it = listNodeValue(node);
+        if (it->completed || it->terminated) continue;
+        if (!(it->iteration_flags & BGITERATOR_FLAG_CONSISTENT)) continue;
+        if (!it->keyset_iter->isKeyInScope(it->keyset_iter, key)) continue;
+        if (md->iterator_epoch > it->consistent_modification_id) continue;
+
+        if (!iteratorHasPassedKey(it, dbid, key, de)) {
+            if (addEarlyIterationKey(it, de, dbid)) {
+                mustDefer = true;
+            }
+        }
+    }
+
+    return mustDefer;
+}
+
+
+// PUBLIC API
 void bgIteration_dbEntryModified(dbEntry *de) {
     if (bgIteration_iterationActive()) {
         bgIterationEntryMetadata *md = (bgIterationEntryMetadata *)objectGetMetadata(de);

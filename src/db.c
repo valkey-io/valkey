@@ -451,9 +451,6 @@ void setKey(client *c, serverDb *db, robj *key, robj **valref, int flags) {
         dbSetValue(db, key, valref, 1, NULL);
     }
     bgIteration_dbEntryModified(*valref);
-    /* The stored object carries the key's expire: a newly added key has none,
-     * and an overwritten one keeps the old key's. Only consult the expires
-     * table, which costs a hash and a probe, when there is a TTL to remove. */
     if (!(flags & SETKEY_KEEPTTL) && objectGetExpire(*valref) != EXPIRY_NONE) removeExpire(db, key);
     if (!(flags & SETKEY_NO_SIGNAL)) signalModifiedKey(c, db, key);
 }

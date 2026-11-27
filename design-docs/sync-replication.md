@@ -426,6 +426,44 @@ The longer primary lease only matters when the primary itself fails or is partit
 
 **Writes can't split-brain.** A deposed primary that hasn't yet learned the new configuration may still commit, using sync replicas that haven't learned it either. This is safe because of the two ordering rules in section 4: a replica counts toward commits before it becomes eligible, and stops counting only after it has become ineligible. So every write any primary commits is held by every replica that is eligible in the latest configuration, and only those replicas can take over (apart from a forced failover).
 
+**Example: a symmetric partition.** P is primary with eligible sync replicas R1, R2 and R3, and `min-sync-replicas = 1`. A partition splits {P, R1} from {R2, R3}, and only {R2, R3} reach a cluster bus quorum.
+
+* On P's side, P keeps executing writes, but none of them can commit: its sync replica set still includes R2 and R3, and its proposal to demote them can't commit without a quorum. Clients see held replies. P stops serving reads before its lease from R2 and R3 expires. R1 keeps acknowledging P's writes, and stops serving linearizable reads once its read lease expires.  
+* On the other side, R2 and R3 see P's lease expire, and one of them, say R2, moves P to ineligible and promotes itself. R1 is still eligible in the configuration, so R2 holds its writes' replies until it has waited out the old configuration's read leases and demoted R1 (Leases across a failover, below). It then commits with R3.  
+* When the partition heals, P learns it has stepped down and returns `UNCOMMITTED` for every held reply. P and R1 rejoin as replicas of R2. The writes they hold past the log R2 inherited never committed, so they are discarded (write-ahead) or fully resynced (write-behind), as Reconciliation describes.
+
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant P as Primary P
+    participant R1 as Replica R1
+    participant B as Cluster bus
+    participant R2 as Replica R2
+    participant R3 as Replica R3
+
+    Note over P,R3: Eligible: R1, R2, R3. min-sync-replicas = 1
+    Note over P,R1: Partition: {P, R1} | {R2, R3} with the bus quorum
+    C->>P: SET k v
+    P->>R1: Write at offset 101
+    R1->>P: REPLCONF ACK 101
+    Note over P: No ACK from R2 or R3: reply held
+    P-xB: Demote R2, R3 (no quorum, never commits)
+    Note over P: Lease from R2, R3 expires:<br/>stop serving reads
+    Note over R2,R3: P's lease expires
+    R2->>B: CAS: P ineligible, R2 primary
+    B-->>R2: Committed
+    Note over R2: Wait one read lease + drift margin
+    R2->>B: CAS: demote R1
+    B-->>R2: Committed
+    Note over R2,R3: R2 commits with R3
+    Note over P,R3: Partition heals
+    B->>P: New configuration
+    P-->>C: UNCOMMITTED
+    Note over P,R1: Rejoin as replicas of R2:<br/>discard or resync writes past R2's inherited log
+```
+
+*Symmetric partition: P can't commit or demote without a cluster bus quorum, so its replies are held. R2 takes over, waits out the old read leases, demotes R1 and commits with R3. When the partition heals, P returns `UNCOMMITTED` for its held replies.*
+
 **Leases prevent stale reads in both directions.** A replica takes over only after the old primary's lease has expired, and a primary commits without a replica only after that replica's read lease has expired. In both cases, the node that lost its role has stopped serving reads before anything newer commits without it.
 
 **Leases across a failover.** These rules carry the lease guarantees through a change of primary:

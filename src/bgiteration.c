@@ -191,7 +191,6 @@ static sds createSdsFromClientArgv(int argc, robj **argv) {
 
 /* bgIteration internal (compile time) configuration values */
 enum {
-    BGITER_EARLY_ITERATE_DICT_INITIAL_SIZE = 16384,  // Prevent initial rehashing
     BGITER_MAX_CLONE_ITEM_BYTES = 512,               // Max size item to clone
     BGITER_MAX_CLONE_POOL_BYTES = (1 * 1024 * 1024), // Total limit for all cloned items
     BGITER_QUEUE_INCREASE_INCR = 100,                // Step size when increasing queue target
@@ -372,8 +371,9 @@ struct bgIterator {
 
     /* Per-original-DB sets of dbEntry, compared by pointer.  Used to track items which have already
      * been iterated over by out-of-order expedited processing (or newly created ahead of the scan
-     * cursor).  Indexed by original DB ID so SWAPDB requires no set movement and FLUSHDB can drop a
-     * single DB's entries in O(1).  Allocated lazily per DB.  Used only by main thread. */
+     * cursor).  Indexed by original DB ID so SWAPDB requires no set movement and FLUSHDB drops only
+     * that DB's entries in O(size of that DB's set).  Allocated lazily per DB.  Used only by main
+     * thread. */
     hashtable **early_iterate_entries;
     int early_iterate_dbnum;
     size_t early_iterate_count;
@@ -939,7 +939,6 @@ static bool earlyIterateAdd(bgIterator *it, int cur_dbid, dbEntry *de) {
     hashtable *ht = it->early_iterate_entries[orig_db];
     if (ht == NULL) {
         ht = hashtableCreate(&dbEntryPtrHashtableType);
-        hashtableExpand(ht, BGITER_EARLY_ITERATE_DICT_INITIAL_SIZE);
         it->early_iterate_entries[orig_db] = ht;
     }
     bool wasAdded = hashtableAdd(ht, de);
@@ -2822,7 +2821,7 @@ void bgIteration_keyModified(int dbid, const_sds key) {
 
 
 // PUBLIC API
-void bgIteration_updateDbEntryPtr(dbEntry *old, dbEntry *new) {
+void bgIteration_updateDbEntryPtr(int dbid, dbEntry *old, dbEntry *new) {
     if (!bgIteration_iterationActive() || old == new) return;
     serverAssert(hasMainThreadExclusivity());
     serverAssert(!isEntryInuseByAnyIterator(old));
@@ -2833,16 +2832,13 @@ void bgIteration_updateDbEntryPtr(dbEntry *old, dbEntry *new) {
     while ((node = listNext(&li)) != NULL) {
         bgIterator *it = listNodeValue(node);
         if (it->completed || it->terminated || it->early_iterate_count == 0) continue;
-        for (int i = 0; i < it->early_iterate_dbnum; i++) {
-            hashtable *ht = it->early_iterate_entries[i];
-            if (ht != NULL && hashtableDelete(ht, old)) {
-                if (BGITERATION_DEBUG) {
-                    debugBuffer = sdscatprintf(debugBuffer, "EARLY LIST UPDATE %p -> %p\n", (void *)old, (void *)new);
-                }
-                bool wasAdded = hashtableAdd(ht, new);
-                serverAssert(wasAdded);
-                break;
+        hashtable *ht = it->early_iterate_entries[earlyIterateOrigDb(it, dbid)];
+        if (ht != NULL && hashtableDelete(ht, old)) {
+            if (BGITERATION_DEBUG) {
+                debugBuffer = sdscatprintf(debugBuffer, "EARLY LIST UPDATE %p -> %p\n", (void *)old, (void *)new);
             }
+            bool wasAdded = hashtableAdd(ht, new);
+            serverAssert(wasAdded);
         }
     }
 }

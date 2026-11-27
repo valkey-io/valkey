@@ -380,7 +380,7 @@ static void dbSetValue(serverDb *db, robj *key, robj **valref, int overwrite, vo
         objectSetLRU(val, objectGetLRU(old));
         long long expire = objectGetExpire(old);
         new = objectSetKeyAndExpire(val, objectGetVal(key), expire);
-        bgIteration_updateDbEntryPtr(old, new);
+        bgIteration_updateDbEntryPtr(db->id, old, new);
         *oldref = new;
         /* Replace the old value at its location in the expire space. */
         if (expire >= 0) {
@@ -1986,6 +1986,9 @@ robj *setExpire(client *c, serverDb *db, robj *key, long long when) {
     long long old_when = objectGetExpire(val);
 
     robj *newval = objectSetExpire(val, when);
+    if (newval != val) {
+        bgIteration_updateDbEntryPtr(db->id, val, newval);
+    }
     if (objectGetType(newval) == OBJ_HASH && hashTypeHasVolatileFields(newval)) {
         /* Replace the pointer in the keys_with_volatile_items table without accessing the old pointer. */
         int dict_index = getKVStoreIndexUsingCachedSlot(objectGetKey(newval));

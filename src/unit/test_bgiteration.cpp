@@ -1016,6 +1016,8 @@ class BgIterationTest : public ::testing::Test {
         serverDb *aux = server.db[dbid0];
         server.db[dbid0] = server.db[dbid1];
         server.db[dbid1] = aux;
+        server.db[dbid0]->id = dbid0;
+        server.db[dbid1]->id = dbid1;
         bgIteration_swapdb(dbid0, dbid1);
 
         bgIteration_handleCommandReplication(0, c->cmd, c->argc, c->argv);
@@ -3594,6 +3596,20 @@ TEST_F(BgIterationTest, flushDB_clearsEarlyIterateEntriesInUnscannedDb) {
         freeTestClient(writer);
     }
     simulateSwapDB(0, 1);
+    // Overwrite Z9 with an EMBSTR value after SWAPDB to exercise
+    // bgIteration_updateDbEntryPtr(db->id, old, new) through the swapped DB mapping.
+    {
+        client *writer = static_cast<client *>(zcalloc(sizeof(client)));
+        writer->cmd = lookupCommandByCString("set");
+        writer->db = server.db[0];
+        writer->argc = 3;
+        writer->argv = static_cast<robj **>(zcalloc(sizeof(robj *) * 3));
+        writer->argv[0] = createStringObjectFromCString("set");
+        writer->argv[1] = createStringObjectFromCString("Z9");
+        writer->argv[2] = createStringObjectFromCString("updated");
+        simulateUnblockedWriteWithModification(writer);
+        freeTestClient(writer);
+    }
     // DB 0 now holds original DB 1 (1 key < total/2), so FLUSHDB 0 keeps the iterator alive.
     simulateFlushDB(0);
     server.db[0]->keys = kvstoreCreate(&kvstoreKeysHashtableType, 0, 0);
@@ -3613,5 +3629,16 @@ TEST_F(BgIterationTest, flushDB_clearsEarlyIterateEntriesInUnscannedDb) {
         server.db[0]->keys = kvstoreCreate(&kvstoreKeysHashtableType, 0, 0);
     }
 
-    expectAnythingCleanup(it);
+    // Drain and verify the iterator completed normally without being terminated by FLUSHDB.
+    while (true) {
+        bgIteration_feedIterators();
+        bgIteratorItem *item = bgIteratorRead(it);
+        ASSERT_NE(item->type, BGITERATOR_ITEM_TERMINATED);
+        if (item->type == BGITERATOR_ITEM_COMPLETE) {
+            bgIteratorClose(it);
+            break;
+        }
+    }
+    bgIteration_feedIterators();
+    EXPECT_EQ(cleanupCount, 1);
 }

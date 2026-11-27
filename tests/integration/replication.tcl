@@ -2952,9 +2952,10 @@ start_server {tags {"repl external:skip needs:debug"} overrides {save "" forkles
             # Test clients default to DB 9; populate DB 0 so the scan stays below DBs 1 and 2.
             $primary select 0
             $primary debug populate 20000 key 100
-            $primary config set rdb-key-save-delay 100
+            $primary config set rdb-key-save-delay 200
 
             set loglines [count_log_lines -1]
+            set sync_full_before [s -1 sync_full]
             $replica replicaof $primary_host $primary_port
             wait_for_condition 100 50 {
                 [s -1 rdb_bgsave_in_progress] == 1
@@ -2977,21 +2978,22 @@ start_server {tags {"repl external:skip needs:debug"} overrides {save "" forkles
             for {set i 0} {$i < 1500} {incr i} {
                 $rd read
             }
+            $rd close
+            assert_equal 1 [s -1 rdb_bgsave_in_progress]
 
             # Also verify SWAPDB followed by FLUSHDB on the swapped DB drops early entries.
+            # Flush SYNC, one command at a time, so a later SET reuses the freed entry
+            # address and a stale entry left under the wrong original DB asserts.
             for {set i 0} {$i < 100} {incr i} {
-                $rd select 1
-                $rd set s 1
-                $rd swapdb 1 2
-                $rd select 2
-                $rd flushdb
-                $rd set s 2
-                $rd flushdb
+                $primary select 1
+                $primary set s 1
+                $primary swapdb 1 2
+                $primary select 2
+                $primary flushdb sync
+                $primary set s 2
+                $primary flushdb sync
             }
-            for {set i 0} {$i < 700} {incr i} {
-                $rd read
-            }
-            $rd close
+            assert_equal 1 [s -1 rdb_bgsave_in_progress]
 
             $primary select 1
             $primary set final_db1 ok
@@ -3004,6 +3006,7 @@ start_server {tags {"repl external:skip needs:debug"} overrides {save "" forkles
             wait_for_ofs_sync $primary $replica
 
             assert_equal "PONG" [$primary ping]
+            assert_equal [expr {$sync_full_before + 1}] [s -1 sync_full]
             wait_for_log_messages -1 {"*target: replicas sockets*method: forkless*"} $loglines 50 100
             assert_equal [$primary debug digest] [$replica debug digest]
             $replica select 1

@@ -71,6 +71,30 @@ test "Raft: leader steps down after losing quorum freshness" {
     }
 }
 
+test "Raft: concurrent CLUSTER FORGET requests for the same node both return OK" {
+    start_multiple_servers 2 {overrides {cluster-enabled yes cluster-protocol raft cluster-node-timeout 5000}} {
+        raft_form_cluster 2 2
+        set target [R 1 CLUSTER MYID]
+        set first [valkey_deferring_client]
+        set second [valkey_deferring_client]
+        set loglines [count_log_lines 0]
+
+        # Hold the first FORGET in the log until the leader has seen the second.
+        pause_process [srv -1 pid]
+        $first CLUSTER FORGET $target
+        $second CLUSTER FORGET $target
+        wait_for_log_messages 0 {"*Leader pre-validation: rejecting NODE_FORGET*"} $loglines 50 100
+        assert_equal 2 [CI 0 cluster_size]
+        resume_process [srv -1 pid]
+
+        assert_equal OK [$first read]
+        assert_equal OK [$second read]
+        assert_equal 1 [CI 0 cluster_size]
+        $first close
+        $second close
+    }
+}
+
 test "Raft: CLUSTER FORGET transfers leadership when target is leader" {
     start_multiple_servers 3 {overrides {cluster-enabled yes cluster-protocol raft cluster-node-timeout 1000}} {
         raft_form_cluster 2 3

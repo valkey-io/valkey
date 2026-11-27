@@ -1198,8 +1198,8 @@ static int clusterValidateShardEpoch(const char *shard_id, uint64_t epoch, int a
     return 1;
 }
 
-/* Check if the shard epoch has advanced past what's in the proposal's data.
- * If so, update the epoch fields in-place and return 1. Otherwise return 0. */
+/* Return 1 if a deferred proposal can be retried. Refresh its epoch fields
+ * if the shard epoch advanced. An already forgotten node needs no refresh. */
 static int raftRefreshEpochInData(int type, sds *data) {
     int argc;
     sds *argv = sdssplitlen(*data, sdslen(*data), " ", 1, &argc);
@@ -1267,14 +1267,16 @@ static int raftRefreshEpochInData(int type, sds *data) {
         /* Format: <node-id> <epoch> */
         if (argc >= 2) {
             clusterNode *node = clusterLookupNode(argv[0], sdslen(argv[0]));
-            if (node) {
-                uint64_t entry_epoch = strtoull(argv[1], NULL, 10);
-                uint64_t current = clusterGetShardEpoch(node->shard_id);
-                if (current > entry_epoch) {
-                    advanced = 1;
-                    sdsfree(argv[1]);
-                    argv[1] = sdsfromlonglong(current);
-                }
+            if (!node) {
+                sdsfreesplitres(argv, argc);
+                return 1;
+            }
+            uint64_t entry_epoch = strtoull(argv[1], NULL, 10);
+            uint64_t current = clusterGetShardEpoch(node->shard_id);
+            if (current > entry_epoch) {
+                advanced = 1;
+                sdsfree(argv[1]);
+                argv[1] = sdsfromlonglong(current);
             }
         }
         break;
@@ -1581,7 +1583,7 @@ static int clusterRaftProcessUnchanged(clusterLink *link, int argc, sds *argv) {
         /* A late reply to an earlier identical proposal describes a state
          * before this one was made, like an older entry on apply. */
         if (index + 1 < pp->min_index) continue;
-        if (!pp->wait_index && pp->type == type && !sdscmp(pp->data, data)) {
+        if (!pp->deferred && !pp->wait_index && pp->type == type && !sdscmp(pp->data, data)) {
             pp->wait_index = index;
             break;
         }
@@ -1889,9 +1891,9 @@ static void clusterRaftCompletePendingProposal(int type, sds data, RaftProposalR
     listRewind(rs->pending_proposals, &li);
     while ((ln = listNext(&li)) != NULL) {
         raftPendingProposal *pp = listNodeValue(ln);
-        /* One that got UNCHANGED is done. Identical proposals are
-         * interchangeable, so this completes another one. */
-        if (pp->wait_index) continue;
+        /* Match only proposals still in flight. A deferred proposal has
+         * already been rejected, and one waiting on an index got UNCHANGED. */
+        if (pp->deferred || pp->wait_index) continue;
         if (index && index < pp->min_index) continue;
         if (pp->type != type || sdscmp(pp->data, data)) continue;
         clusterRaftFinishPendingProposal(ln, result);

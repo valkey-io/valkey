@@ -605,8 +605,35 @@ static void engineFreeFunction(ValkeyModuleCtx *module_ctx,
     ValkeyModule_Free(compiled_function);
 }
 
-/* Key handle left open by the "leakwalk" test hook below. */
+/* Key handle left open by the "leakwalk" test hook below, and whether its
+ * range walk started. */
 static ValkeyModuleKey *leaked_key = NULL;
+static int leaked_walk_started = 0;
+
+/* Free the functions parsed so far and reset the program. */
+static void helloFreeParsedFunctions(HelloProgram *program) {
+    for (uint32_t i = 0; i < program->num_functions; i++) {
+        HelloFunc *func = program->functions[i];
+        ValkeyModule_Free(func->name);
+        ValkeyModule_Free(func);
+        program->functions[i] = NULL;
+    }
+    program->num_functions = 0;
+}
+
+/* helloengine.leakstatus
+ *
+ * Replies {leaked_walk_started, end flag of the leaked handle or -1 when
+ * there is none}. It reads the end flag on the handle the compile hook left
+ * open, so the test checks the original handle, not a new one. */
+static int helloLeakStatus(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    VALKEYMODULE_NOT_USED(argv);
+    VALKEYMODULE_NOT_USED(argc);
+    ValkeyModule_ReplyWithArray(ctx, 2);
+    ValkeyModule_ReplyWithLongLong(ctx, leaked_walk_started);
+    ValkeyModule_ReplyWithLongLong(ctx, leaked_key ? ValkeyModule_ZsetRangeEndReached(leaked_key) : -1);
+    return VALKEYMODULE_OK;
+}
 
 static ValkeyModuleScriptingEngineCompiledFunction **createHelloLangEngine(ValkeyModuleCtx *module_ctx,
                                                                            ValkeyModuleScriptingEngineCtx *engine_ctx,
@@ -619,26 +646,8 @@ static ValkeyModuleScriptingEngineCompiledFunction **createHelloLangEngine(Valke
     VALKEYMODULE_NOT_USED(code_len);
     VALKEYMODULE_NOT_USED(type);
     VALKEYMODULE_NOT_USED(timeout);
-    VALKEYMODULE_NOT_USED(err);
 
     HelloLangCtx *ctx = (HelloLangCtx *)engine_ctx;
-
-    /* Test hook: a function named "leakwalk" makes the compile callback open the
-     * sorted set "k" and start a range walk on it without closing the key, so
-     * the walk outlives this callback. The server must end it when it frees
-     * this context (tests/unit/moduleapi/zset.tcl). A later library with a
-     * function named "closeleak" closes the handle, so the test leaks nothing. */
-    if (strstr(code, "FUNCTION leakwalk") != NULL && leaked_key == NULL) {
-        ValkeyModuleString *kn = ValkeyModule_CreateString(NULL, "k", 1);
-        leaked_key = ValkeyModule_OpenKey(module_ctx, kn, VALKEYMODULE_READ);
-        ValkeyModule_FreeString(NULL, kn);
-        if (leaked_key != NULL) {
-            ValkeyModule_ZsetFirstInScoreRange(leaked_key, VALKEYMODULE_NEGATIVE_INFINITE, VALKEYMODULE_POSITIVE_INFINITE, 0, 0);
-        }
-    } else if (strstr(code, "FUNCTION closeleak") != NULL && leaked_key != NULL) {
-        ValkeyModule_CloseKey(leaked_key);
-        leaked_key = NULL;
-    }
 
     if (ctx->program == NULL) {
         ctx->program = ValkeyModule_Alloc(sizeof(HelloProgram));
@@ -649,14 +658,54 @@ static ValkeyModuleScriptingEngineCompiledFunction **createHelloLangEngine(Valke
 
     int ret = helloLangParseCode(code, ctx->program, err);
     if (ret < 0) {
-        for (uint32_t i = 0; i < ctx->program->num_functions; i++) {
-            HelloFunc *func = ctx->program->functions[i];
-            ValkeyModule_Free(func->name);
-            ValkeyModule_Free(func);
-            ctx->program->functions[i] = NULL;
-        }
-        ctx->program->num_functions = 0;
+        helloFreeParsedFunctions(ctx->program);
         return NULL;
+    }
+
+    /* Test hooks, selected by exact function name ("leakwalk" and "closeleak"
+     * are the only reserved names). A function named "leakwalk" makes the
+     * compile callback open the sorted set "k" and start a range walk on it
+     * without closing the key, so the walk outlives this callback. The server
+     * must end it when it frees this context (tests/unit/moduleapi/zset.tcl).
+     * A later library with a function named "closeleak" closes the handle, so
+     * the test leaks nothing. A hook that cannot do its job fails the load. */
+    int want_leakwalk = 0, want_closeleak = 0;
+    for (uint32_t i = 0; i < ctx->program->num_functions; i++) {
+        if (strcmp(ctx->program->functions[i]->name, "leakwalk") == 0) want_leakwalk = 1;
+        if (strcmp(ctx->program->functions[i]->name, "closeleak") == 0) want_closeleak = 1;
+    }
+    if (want_leakwalk) {
+        const char *reason = NULL;
+        if (leaked_key != NULL) {
+            reason = "leakwalk: a leaked handle is already open";
+        } else {
+            ValkeyModuleString *kn = ValkeyModule_CreateString(NULL, "k", 1);
+            leaked_key = ValkeyModule_OpenKey(module_ctx, kn, VALKEYMODULE_READ);
+            ValkeyModule_FreeString(NULL, kn);
+            if (leaked_key == NULL) {
+                reason = "leakwalk: cannot open key k";
+            } else if (ValkeyModule_ZsetFirstInScoreRange(leaked_key, VALKEYMODULE_NEGATIVE_INFINITE,
+                                                          VALKEYMODULE_POSITIVE_INFINITE, 0, 0) != VALKEYMODULE_OK) {
+                ValkeyModule_CloseKey(leaked_key);
+                leaked_key = NULL;
+                reason = "leakwalk: cannot start the range walk";
+            }
+        }
+        if (reason != NULL) {
+            *err = ValkeyModule_CreateStringPrintf(NULL, "%s", reason);
+            helloFreeParsedFunctions(ctx->program);
+            return NULL;
+        }
+        leaked_walk_started = 1;
+    } else if (want_closeleak) {
+        if (leaked_key == NULL) {
+            *err = ValkeyModule_CreateStringPrintf(NULL, "closeleak: no leaked handle");
+            helloFreeParsedFunctions(ctx->program);
+            return NULL;
+        }
+        ValkeyModule_CloseKey(leaked_key);
+        leaked_key = NULL;
+        leaked_walk_started = 0;
     }
 
     ValkeyModuleScriptingEngineCompiledFunction **compiled_functions =
@@ -931,6 +980,9 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx,
             ValkeyModule_Log(ctx, "info", "initializing Hello scripting engine with ABI version: %s", arg_str);
         }
     }
+
+    if (ValkeyModule_CreateCommand(ctx, "helloengine.leakstatus", helloLeakStatus, "readonly", 0, 0, 0) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
 
     hello_ctx = ValkeyModule_Alloc(sizeof(HelloLangCtx));
     hello_ctx->program = NULL;

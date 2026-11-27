@@ -848,9 +848,11 @@ int zset_thread_yield_walk(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int 
  * that every command, including one run through ValkeyModule_Call(), runs
  * the command filters. */
 static ValkeyModuleCommandFilter *zset_noop_filter;
+static long long zset_noop_filter_runs = 0;
 
 static void zset_noop_filter_cb(ValkeyModuleCommandFilterCtx *fctx) {
     VALKEYMODULE_NOT_USED(fctx);
+    zset_noop_filter_runs++;
 }
 
 int zset_filter(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
@@ -859,6 +861,7 @@ int zset_filter(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     if (ValkeyModule_StringToLongLong(argv[1], &on) != VALKEYMODULE_OK)
         return ValkeyModule_ReplyWithError(ctx, "ERR invalid flag");
     if (on && zset_noop_filter == NULL) {
+        zset_noop_filter_runs = 0;
         zset_noop_filter = ValkeyModule_RegisterCommandFilter(ctx, zset_noop_filter_cb, 0);
     } else if (!on && zset_noop_filter != NULL) {
         ValkeyModule_UnregisterCommandFilter(ctx, zset_noop_filter);
@@ -867,25 +870,29 @@ int zset_filter(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     return ValkeyModule_ReplyWithSimpleString(ctx, "OK");
 }
 
-/* Walk the whole score range of 'key', opened in 'key_ctx' (no auto memory),
- * from its first element, recording up to 'max' members into 'members', and
- * run ValkeyModule_Call(PING) in 'ctx' after recording the first. Returns the
- * number recorded. The call runs the command filters, which must not end a
- * walk started before it. */
-static int zset_walk_with_call(ValkeyModuleCtx *ctx, ValkeyModuleCtx *key_ctx, ValkeyModuleKey *key, char members[][16], int max) {
+/* Walk the whole score range of 'key' (opened in a context without auto
+ * memory) from its first element, recording up to 'max' members into
+ * 'members', and run ValkeyModule_Call(PING) in 'ctx' after recording the
+ * first. Returns the number recorded. The strings in 'members' were created
+ * in a context without auto memory, so they outlive it: the caller frees them
+ * with ValkeyModule_FreeString(NULL, s). The number of times the ZSET.FILTER
+ * command filter ran during the PING is stored in *filter_runs (the caller
+ * holds the lock, so only that PING runs in between), which shows that the
+ * Call ran the command filters. The filters must not end the walk. */
+static int zset_walk_with_call(ValkeyModuleCtx *ctx, ValkeyModuleKey *key, ValkeyModuleString **members, int max, int *filter_runs) {
     int count = 0;
+    *filter_runs = 0;
     if (key == NULL || ValkeyModule_ZsetFirstInScoreRange(key, VALKEYMODULE_NEGATIVE_INFINITE,
                                                           VALKEYMODULE_POSITIVE_INFINITE, 0, 0) != VALKEYMODULE_OK)
         return 0;
     while (!ValkeyModule_ZsetRangeEndReached(key) && count < max) {
-        size_t len;
         ValkeyModuleString *ele = ValkeyModule_ZsetRangeCurrentElement(key, NULL);
         if (ele == NULL) break;
-        const char *p = ValkeyModule_StringPtrLen(ele, &len);
-        snprintf(members[count++], 16, "%.*s", (int)len, p);
-        ValkeyModule_FreeString(key_ctx, ele);
+        members[count++] = ele;
         if (count == 1) {
+            long long before = zset_noop_filter_runs;
             ValkeyModuleCallReply *rep = ValkeyModule_Call(ctx, "PING", "");
+            *filter_runs = (int)(zset_noop_filter_runs - before);
             if (rep) ValkeyModule_FreeCallReply(rep);
         }
         ValkeyModule_ZsetRangeNext(key);
@@ -899,13 +906,16 @@ static int zset_walk_with_call(ValkeyModuleCtx *ctx, ValkeyModuleCtx *key_ctx, V
  * Blocks the client and runs a thread. The thread takes a thread safe
  * context, locks, opens key, walks the whole score range running
  * ValkeyModule_Call(PING) after the first element, then unlocks, closes the
- * key and frees the context. The reply is the members visited, in order:
- * the command filters run by the call must not end the walk. */
+ * key and frees the context. The reply is a two-element array: the array of
+ * members visited, in order, then the number of command filter runs for that
+ * PING (1 with ZSET.FILTER 1, which shows that the Call ran the command
+ * filters). The filters run by the call must not end the walk. */
 struct thread_call_walk {
     ValkeyModuleBlockedClient *bc;
     ValkeyModuleString *keyname;
-    char members[16][16];
+    ValkeyModuleString *members[16];
     int count;
+    int filter_runs;
 };
 
 static void *zset_thread_call_walk_run(void *argp) {
@@ -913,7 +923,7 @@ static void *zset_thread_call_walk_run(void *argp) {
     ValkeyModuleCtx *ctx = ValkeyModule_GetThreadSafeContext(tw->bc);
     ValkeyModule_ThreadSafeContextLock(ctx);
     ValkeyModuleKey *key = ValkeyModule_OpenKey(ctx, tw->keyname, VALKEYMODULE_READ);
-    tw->count = zset_walk_with_call(ctx, ctx, key, tw->members, 16);
+    tw->count = zset_walk_with_call(ctx, key, tw->members, 16, &tw->filter_runs);
     ValkeyModule_CloseKey(key);
     ValkeyModule_ThreadSafeContextUnlock(ctx);
     ValkeyModule_FreeThreadSafeContext(ctx);
@@ -925,14 +935,18 @@ static int zset_thread_call_walk_reply(ValkeyModuleCtx *ctx, ValkeyModuleString 
     VALKEYMODULE_NOT_USED(argv);
     VALKEYMODULE_NOT_USED(argc);
     struct thread_call_walk *tw = ValkeyModule_GetBlockedClientPrivateData(ctx);
+    ValkeyModule_ReplyWithArray(ctx, 2);
     ValkeyModule_ReplyWithArray(ctx, tw->count);
-    for (int i = 0; i < tw->count; i++) ValkeyModule_ReplyWithCString(ctx, tw->members[i]);
+    for (int i = 0; i < tw->count; i++) ValkeyModule_ReplyWithString(ctx, tw->members[i]);
+    ValkeyModule_ReplyWithLongLong(ctx, tw->filter_runs);
     return VALKEYMODULE_OK;
 }
 
 static void zset_thread_call_walk_free(ValkeyModuleCtx *ctx, void *privdata) {
     VALKEYMODULE_NOT_USED(ctx);
     struct thread_call_walk *tw = privdata;
+    /* The strings were created in a context without auto memory, so they outlive it. */
+    for (int i = 0; i < tw->count; i++) ValkeyModule_FreeString(NULL, tw->members[i]);
     ValkeyModule_FreeString(NULL, tw->keyname);
     ValkeyModule_Free(tw);
 }
@@ -957,18 +971,27 @@ int zset_thread_call_walk(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int a
  * On the main thread, inside the command: takes a detached thread safe
  * context, opens key through it, walks the whole score range running
  * ValkeyModule_Call(PING) after the first element, closes the key and frees
- * the context. The reply is the members visited, in order. */
+ * the context. The reply is a two-element array: the array of members
+ * visited, in order, then the number of command filter runs for that PING
+ * (1 with ZSET.FILTER 1, which shows that the Call ran the command filters). */
 int zset_detached_call_walk(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     if (argc != 2) return ValkeyModule_WrongArity(ctx);
-    char members[16][16];
+    ValkeyModuleString *members[16];
+    int filter_runs;
     ValkeyModuleCtx *dctx = ValkeyModule_GetDetachedThreadSafeContext(ctx);
     ValkeyModule_SelectDb(dctx, ValkeyModule_GetSelectedDb(ctx));
     ValkeyModuleKey *key = ValkeyModule_OpenKey(dctx, argv[1], VALKEYMODULE_READ);
-    int count = zset_walk_with_call(ctx, dctx, key, members, 16);
+    int count = zset_walk_with_call(ctx, key, members, 16, &filter_runs);
     ValkeyModule_CloseKey(key);
     ValkeyModule_FreeThreadSafeContext(dctx);
+    ValkeyModule_ReplyWithArray(ctx, 2);
     ValkeyModule_ReplyWithArray(ctx, count);
-    for (int i = 0; i < count; i++) ValkeyModule_ReplyWithCString(ctx, members[i]);
+    /* The strings were created in a context without auto memory, so they outlive it. */
+    for (int i = 0; i < count; i++) {
+        ValkeyModule_ReplyWithString(ctx, members[i]);
+        ValkeyModule_FreeString(NULL, members[i]);
+    }
+    ValkeyModule_ReplyWithLongLong(ctx, filter_runs);
     return VALKEYMODULE_OK;
 }
 
@@ -981,7 +1004,10 @@ int zset_detached_call_walk(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int
  * that the main thread runs and refreshes the server's command time.
  * Then it steps once and adds (score, member) through the same handle. The
  * reply is the step result and the sorted set length seen through the handle
- * after the add: the add must land on the existing key. */
+ * after the add: the add must land on the existing key. hold_ms must be
+ * between 1 and 4980 (the wait is at most 5 seconds, with a 20 ms margin),
+ * else the reply is an error. The reply is also an error if the key is
+ * missing, the range cannot start or the TTL cannot be set. */
 struct thread_expired_add {
     ValkeyModuleBlockedClient *bc;
     ValkeyModuleString *keyname;
@@ -990,6 +1016,7 @@ struct thread_expired_add {
     long long hold_ms;
     int moved;
     long long len;
+    const char *err;
 };
 
 static void *zset_thread_expired_add_run(void *argp) {
@@ -997,18 +1024,25 @@ static void *zset_thread_expired_add_run(void *argp) {
     ValkeyModuleCtx *ctx = ValkeyModule_GetThreadSafeContext(ta->bc);
     ValkeyModule_ThreadSafeContextLock(ctx);
     ValkeyModuleKey *key = ValkeyModule_OpenKey(ctx, ta->keyname, VALKEYMODULE_READ | VALKEYMODULE_WRITE);
-    if (key && ValkeyModule_ZsetFirstInScoreRange(key, VALKEYMODULE_NEGATIVE_INFINITE,
-                                                  VALKEYMODULE_POSITIVE_INFINITE, 0, 0) == VALKEYMODULE_OK) {
+    if (key == NULL) {
+        ta->err = "ERR key missing";
+    } else if (ValkeyModule_ZsetFirstInScoreRange(key, VALKEYMODULE_NEGATIVE_INFINITE,
+                                                  VALKEYMODULE_POSITIVE_INFINITE, 0, 0) != VALKEYMODULE_OK) {
+        ta->err = "ERR cannot start range";
+    } else {
         /* Set the TTL through the handle, then yield until the clock is past
          * it: the main thread runs in between and moves the server clock. */
         mstime_t start = ValkeyModule_Milliseconds();
-        ValkeyModule_SetExpire(key, ta->hold_ms);
-        mstime_t until = start + ta->hold_ms + 20;
-        while (ValkeyModule_Milliseconds() <= until && ValkeyModule_Milliseconds() < start + 5000)
-            ValkeyModule_Yield(ctx, VALKEYMODULE_YIELD_FLAG_CLIENTS, NULL);
-        ta->moved = ValkeyModule_ZsetRangeNext(key);
-        if (ValkeyModule_ZsetAdd(key, ta->score, ta->member, NULL) == VALKEYMODULE_OK)
-            ta->len = ValkeyModule_ValueLength(key);
+        if (ValkeyModule_SetExpire(key, ta->hold_ms) == VALKEYMODULE_OK) {
+            mstime_t until = start + ta->hold_ms + 20;
+            while (ValkeyModule_Milliseconds() <= until && ValkeyModule_Milliseconds() < start + 5000)
+                ValkeyModule_Yield(ctx, VALKEYMODULE_YIELD_FLAG_CLIENTS, NULL);
+            ta->moved = ValkeyModule_ZsetRangeNext(key);
+            if (ValkeyModule_ZsetAdd(key, ta->score, ta->member, NULL) == VALKEYMODULE_OK)
+                ta->len = ValkeyModule_ValueLength(key);
+        } else {
+            ta->err = "ERR cannot set expire";
+        }
         ValkeyModule_ZsetRangeStop(key);
     }
     ValkeyModule_CloseKey(key);
@@ -1022,6 +1056,7 @@ static int zset_thread_expired_add_reply(ValkeyModuleCtx *ctx, ValkeyModuleStrin
     VALKEYMODULE_NOT_USED(argv);
     VALKEYMODULE_NOT_USED(argc);
     struct thread_expired_add *ta = ValkeyModule_GetBlockedClientPrivateData(ctx);
+    if (ta->err) return ValkeyModule_ReplyWithError(ctx, ta->err);
     ValkeyModule_ReplyWithArray(ctx, 2);
     ValkeyModule_ReplyWithLongLong(ctx, ta->moved);
     ValkeyModule_ReplyWithLongLong(ctx, ta->len);
@@ -1043,6 +1078,9 @@ int zset_thread_expired_add(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int
     if (ValkeyModule_StringToLongLong(argv[2], &hold_ms) != VALKEYMODULE_OK ||
         ValkeyModule_StringToDouble(argv[4], &score) != VALKEYMODULE_OK)
         return ValkeyModule_ReplyWithError(ctx, "ERR invalid number");
+    /* The worker waits at most 5 seconds and adds a 20 ms margin. */
+    if (hold_ms <= 0 || hold_ms > 5000 - 20)
+        return ValkeyModule_ReplyWithError(ctx, "ERR hold_ms must be between 1 and 4980");
     struct thread_expired_add *ta = ValkeyModule_Calloc(1, sizeof(*ta));
     ta->keyname = ValkeyModule_CreateStringFromString(NULL, argv[1]);
     ta->member = ValkeyModule_CreateStringFromString(NULL, argv[3]);

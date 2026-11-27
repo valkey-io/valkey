@@ -333,8 +333,10 @@ start_server {tags {"modules"}} {
             assert_equal OK [r zset.filter 1]
             test_defer {r zset.filter 0}
             # The thread holds the lock, walks, and runs a Call after the
-            # first element: the filter's return must not end its walk.
-            assert_equal {a b c d e} [r zset.thread_call_walk k]
+            # first element: the filter's return must not end its walk. The
+            # second element shows the filter ran once, for the PING inside
+            # the walk.
+            assert_equal {{a b c d e} 1} [r zset.thread_call_walk k]
             assert_equal PONG [r ping]
         }
 
@@ -345,8 +347,9 @@ start_server {tags {"modules"}} {
             assert_equal OK [r zset.filter 1]
             test_defer {r zset.filter 0}
             # Same on the main thread, inside a command, through a detached
-            # thread safe context.
-            assert_equal {a b c d e} [r zset.detached_call_walk k]
+            # thread safe context. The second element shows the filter ran
+            # once, for the PING inside the walk.
+            assert_equal {{a b c d e} 1} [r zset.detached_call_walk k]
             assert_equal PONG [r ping]
         }
 
@@ -432,6 +435,7 @@ start_server {tags {"modules"}} {
     # set only by a step that finds nothing.
     test "Module zset write while walking keeps the walk - listpack" {
         r del k
+        test_config_set r zset-max-listpack-value 64
         r zadd k 1 a 2 b 3 c 4 d 5 e
         assert_equal listpack [r object encoding k]
         # Position (1,a). After removing a b c the set is d e. No step has
@@ -599,7 +603,7 @@ start_server {tags {"modules"}} {
     test "Module zset range walk leaked by a scripting engine callback is ended when its context is freed" {
         # The engine's compile callback runs with the lock held in a context
         # the server frees afterwards; a walk it leaves open must end there.
-        # Inside MULTI no other hook runs between the three commands: the
+        # Inside MULTI no other hook runs between the four commands: the
         # ZADD moves the listpack, and the module command's Call would then
         # read the leaked walk's pointer into freed memory.
         r select 0
@@ -607,20 +611,27 @@ start_server {tags {"modules"}} {
         r zadd k 1 a 2 b 3 c
         r multi
         r function load "#!hello name=leakwalk\nFUNCTION leakwalk\nARGS 0\nRETURN"
+        r helloengine.leakstatus
         set args {}
         for {set i 0} {$i < 100} {incr i} {lappend args [expr {$i + 10}] [format member%03d $i]}
         r zadd k {*}$args
         r zset.walk_range k score -inf +inf fwd 1
         set res [r exec]
         assert_equal leakwalk [lindex $res 0]
-        assert_equal 100 [lindex $res 1]
-        assert_equal 100 [llength [lindex $res 2]]
+        # The compile callback started the walk, and freeing its context
+        # ended it: read on the handle the callback left open, before
+        # anything else ran.
+        assert_equal {1 1} [lindex $res 1]
+        # The growth check: the ZADD added 100 members, and the walk after it
+        # sees all of them.
+        assert_equal 100 [lindex $res 2]
+        assert_equal 100 [llength [lindex $res 3]]
         assert_equal PONG [r ping]
         # Close the leaked handle (its walk is already gone) so nothing leaks.
         r function load "#!hello name=closeleak\nFUNCTION closeleak\nARGS 0\nRETURN"
         r function delete leakwalk
         r function delete closeleak
         r del k
-        r select 9
+        if {!$::singledb} {r select 9}
     }
 }

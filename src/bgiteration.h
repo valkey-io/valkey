@@ -318,7 +318,7 @@ void bgIteration_swapdb(int db1, int db2);
  * We can't update the dbEntry if the entry is actually in use (bgIteration_isEntryInuse)!
  *
  * To simplify calling code, this function does nothing if old_entry == new_entry. */
-void bgIteration_updateDbEntryPtr(dbEntry *old_entry, dbEntry *new_entry);
+void bgIteration_updateDbEntryPtr(int dbid, dbEntry *old_entry, dbEntry *new_entry);
 
 
 /* Before executing any command, the Valkey main thread must call this function.  If the key(s) are

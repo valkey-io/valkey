@@ -1016,6 +1016,8 @@ class BgIterationTest : public ::testing::Test {
         serverDb *aux = server.db[dbid0];
         server.db[dbid0] = server.db[dbid1];
         server.db[dbid1] = aux;
+        server.db[dbid0]->id = dbid0;
+        server.db[dbid1]->id = dbid1;
         bgIteration_swapdb(dbid0, dbid1);
 
         bgIteration_handleCommandReplication(0, c->cmd, c->argc, c->argv);
@@ -3551,4 +3553,92 @@ TEST_F(BgIterationTest, queueTargetGrowsWithExpeditedKeysWaiting) {
     EXPECT_GT(status.queue_length_target, target);
 
     expectAnythingCleanup(it);
+}
+
+TEST_F(BgIterationTest, flushDB_clearsEarlyIterateEntriesInUnscannedDb) {
+    // Keep DB 1 smaller than DB 0 so FLUSHDB on DB 1 does not abort the non-consistent iterator.
+    simpleDelItem(ITEMS_PER_DB);
+    simpleDelItem(ITEMS_PER_DB + 1);
+
+    bgIterator *it = bgIteratorCreateFullScanIter("iter", BGITERATOR_CONSISTENCY_EVENTUAL, NULL,
+                                                  iteratorCleanupFn, PRIVDATA);
+    expectReadKey(it, 0);
+
+    // Repeatedly create a new key in unscanned DB 1 (adding it to early_iterate_entries) and flush DB 1.
+    for (int round = 0; round < 64; round++) {
+        client *writer = static_cast<client *>(zcalloc(sizeof(client)));
+        writer->cmd = lookupCommandByCString("set");
+        writer->db = server.db[1];
+        writer->argc = 3;
+        writer->argv = static_cast<robj **>(zcalloc(sizeof(robj *) * 3));
+        writer->argv[0] = createStringObjectFromCString("set");
+        writer->argv[1] = createStringObjectFromCString("Z9");
+        writer->argv[2] = createStringObjectFromCString("1");
+
+        simulateUnblockedWriteWithModification(writer);
+        freeTestClient(writer);
+
+        simulateFlushDB(1);
+        server.db[1]->keys = kvstoreCreate(&kvstoreKeysHashtableType, 0, 0);
+    }
+
+    // Verify SWAPDB followed by FLUSHDB on the swapped DB also clears the original DB's early entries.
+    {
+        client *writer = static_cast<client *>(zcalloc(sizeof(client)));
+        writer->cmd = lookupCommandByCString("set");
+        writer->db = server.db[1];
+        writer->argc = 3;
+        writer->argv = static_cast<robj **>(zcalloc(sizeof(robj *) * 3));
+        writer->argv[0] = createStringObjectFromCString("set");
+        writer->argv[1] = createStringObjectFromCString("Z9");
+        writer->argv[2] = createStringObjectFromCString("1");
+        simulateUnblockedWriteWithModification(writer);
+        freeTestClient(writer);
+    }
+    simulateSwapDB(0, 1);
+    // Overwrite Z9 with an EMBSTR value after SWAPDB to exercise
+    // bgIteration_updateDbEntryPtr(db->id, old, new) through the swapped DB mapping.
+    {
+        client *writer = static_cast<client *>(zcalloc(sizeof(client)));
+        writer->cmd = lookupCommandByCString("set");
+        writer->db = server.db[0];
+        writer->argc = 3;
+        writer->argv = static_cast<robj **>(zcalloc(sizeof(robj *) * 3));
+        writer->argv[0] = createStringObjectFromCString("set");
+        writer->argv[1] = createStringObjectFromCString("Z9");
+        writer->argv[2] = createStringObjectFromCString("updated");
+        simulateUnblockedWriteWithModification(writer);
+        freeTestClient(writer);
+    }
+    // DB 0 now holds original DB 1 (1 key < total/2), so FLUSHDB 0 keeps the iterator alive.
+    simulateFlushDB(0);
+    server.db[0]->keys = kvstoreCreate(&kvstoreKeysHashtableType, 0, 0);
+    for (int round = 0; round < 32; round++) {
+        client *writer = static_cast<client *>(zcalloc(sizeof(client)));
+        writer->cmd = lookupCommandByCString("set");
+        writer->db = server.db[0];
+        writer->argc = 3;
+        writer->argv = static_cast<robj **>(zcalloc(sizeof(robj *) * 3));
+        writer->argv[0] = createStringObjectFromCString("set");
+        writer->argv[1] = createStringObjectFromCString("Z9");
+        writer->argv[2] = createStringObjectFromCString("1");
+        simulateUnblockedWriteWithModification(writer);
+        freeTestClient(writer);
+
+        simulateFlushDB(0);
+        server.db[0]->keys = kvstoreCreate(&kvstoreKeysHashtableType, 0, 0);
+    }
+
+    // Drain and verify the iterator completed normally without being terminated by FLUSHDB.
+    while (true) {
+        bgIteration_feedIterators();
+        bgIteratorItem *item = bgIteratorRead(it);
+        ASSERT_NE(item->type, BGITERATOR_ITEM_TERMINATED);
+        if (item->type == BGITERATOR_ITEM_COMPLETE) {
+            bgIteratorClose(it);
+            break;
+        }
+    }
+    bgIteration_feedIterators();
+    EXPECT_EQ(cleanupCount, 1);
 }

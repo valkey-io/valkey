@@ -39,7 +39,6 @@
 #include "zmalloc.h"
 #include "sds.h"
 #include "module.h"
-#include "bgiteration.h"
 #include <math.h>
 #include <ctype.h>
 
@@ -498,7 +497,6 @@ robj *objectSetKeyAndExpire(robj *o, const_sds key, long long expire) {
         robj *new = createStringObjectWithKeyAndExpire(objectGetVal(o), sdslen(objectGetVal(o)), key, expire);
         objectSetLRU(new, objectGetLRU(o));
         objectCopyMetadata(new, o);
-        bgIteration_updateDbEntryPtr(o, new);
         decrRefCount(o);
         return new;
     }
@@ -525,7 +523,6 @@ robj *objectSetKeyAndExpire(robj *o, const_sds key, long long expire) {
     objectSetEncoding(new, objectGetEncoding(o));
     objectSetLRU(new, objectGetLRU(o));
     objectCopyMetadata(new, o);
-    bgIteration_updateDbEntryPtr(o, new);
     decrRefCount(o);
     return new;
 }

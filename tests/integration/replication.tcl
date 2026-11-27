@@ -2940,3 +2940,79 @@ start_server {tags {"repl external:skip needs:debug"} overrides {save "" forkles
         }
     }
 }
+
+start_server {tags {"repl external:skip needs:debug"} overrides {save "" forkless-infrastructure-enabled yes forkless-policy prefer-forkless repl-diskless-sync yes repl-diskless-sync-delay 0}} {
+    start_server {overrides {save ""}} {
+        set primary [srv -1 client]
+        set primary_host [srv -1 host]
+        set primary_port [srv -1 port]
+        set replica [srv 0 client]
+
+        test "Forkless full sync handles FLUSHDB and SWAPDB on unscanned DBs without asserting" {
+            # Test clients default to DB 9; populate DB 0 so the scan stays below DBs 1 and 2.
+            $primary select 0
+            $primary debug populate 20000 key 100
+            $primary config set rdb-key-save-delay 200
+
+            set loglines [count_log_lines -1]
+            set sync_full_before [s -1 sync_full]
+            $replica replicaof $primary_host $primary_port
+            wait_for_condition 100 50 {
+                [s -1 rdb_bgsave_in_progress] == 1
+            } else {
+                fail "forkless full sync did not start"
+            }
+
+            # Repeatedly create keys and flush DB 1 (both SYNC and ASYNC) while the
+            # non-consistent iterator is still scanning DB 0.
+            set rd [valkey_deferring_client -1]
+            for {set i 0} {$i < 500} {incr i} {
+                $rd select 1
+                $rd set x 1
+                if {$i % 2 == 0} {
+                    $rd flushdb sync
+                } else {
+                    $rd flushdb async
+                }
+            }
+            for {set i 0} {$i < 1500} {incr i} {
+                $rd read
+            }
+            $rd close
+            assert_equal 1 [s -1 rdb_bgsave_in_progress]
+
+            # Also verify SWAPDB followed by FLUSHDB on the swapped DB drops early entries.
+            # Flush SYNC, one command at a time, so a later SET reuses the freed entry
+            # address and a stale entry left under the wrong original DB asserts.
+            for {set i 0} {$i < 100} {incr i} {
+                $primary select 1
+                $primary set s 1
+                $primary swapdb 1 2
+                $primary select 2
+                $primary flushdb sync
+                $primary set s 2
+                $primary flushdb sync
+            }
+            assert_equal 1 [s -1 rdb_bgsave_in_progress]
+
+            $primary select 1
+            $primary set final_db1 ok
+            $primary select 2
+            $primary set final_db2 ok
+            $primary select 0
+
+            $primary config set rdb-key-save-delay 0
+            wait_for_sync $replica 200 100
+            wait_for_ofs_sync $primary $replica
+
+            assert_equal "PONG" [$primary ping]
+            assert_equal [expr {$sync_full_before + 1}] [s -1 sync_full]
+            wait_for_log_messages -1 {"*target: replicas sockets*method: forkless*"} $loglines 50 100
+            assert_equal [$primary debug digest] [$replica debug digest]
+            $replica select 1
+            assert_equal "ok" [$replica get final_db1]
+            $replica select 2
+            assert_equal "ok" [$replica get final_db2]
+        }
+    }
+}

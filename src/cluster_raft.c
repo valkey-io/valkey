@@ -2397,7 +2397,8 @@ static int clusterRaftProcessInstallSnapshot(clusterLink *link, int argc, sds *a
     rs->todo_update_slot_coverage = 1;
     clearCachedClusterSlotsResponse();
     /* If our primary is failed, schedule a failover, as applying its
-     * NODE_FAIL would have done. */
+     * NODE_FAIL would have done. A pending one may be for an old primary. */
+    rs->failover_time = 0;
     if (nodeIsReplica(myself) && myself->replicaof && nodeFailed(myself->replicaof) && !nodeCantFailover(myself)) {
         rs->todo_schedule_failover = 1;
     }
@@ -3096,7 +3097,7 @@ static void clusterRaftCron(void) {
             /* The primary recovered or we are no longer its replica. */
             rs->failover_time = 0;
         } else if (server.cluster_replica_no_failover == CLUSTER_REPLICA_NO_FAILOVER_IF_EMPTY &&
-                   replicationGetReplicaOffset() == 0) {
+                   clusterRaftMyReplicationOffset() == 0) {
             /* Promoting an empty replica would lose all the data of the
              * shard. Stay pending and check again on the next cron. */
             static mstime_t last_log_time = 0;
@@ -4238,6 +4239,10 @@ static void clusterRaftSetNodePrimary(clusterNode *node, clusterNode *primary) {
     if (node == myself) {
         rs->todo_save_config = 1;
         rs->todo_update_replication = 1;
+        /* A pending failover was for the old primary. beforeSleep schedules
+         * a new one, after updating replication, if the new primary is failed. */
+        rs->failover_time = 0;
+        rs->todo_schedule_failover = 1;
     }
 }
 

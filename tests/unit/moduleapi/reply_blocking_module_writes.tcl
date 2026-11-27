@@ -148,3 +148,19 @@ start_server {tags {"modules durability external:skip"} overrides {appendonly ye
         assert_equal PONG [r ping]
     }
 }
+
+set ksmodule [file normalize tests/modules/keyspace_events.so]
+
+start_server {tags {"modules durability external:skip"} overrides {appendonly yes appendfsync always bio-aof-offload-enabled yes notify-keyspace-events Kd}} {
+    r module load $ksmodule
+
+    test "A keyspace event that follows no write is delivered without waiting for a later one" {
+        set rd [valkey_deferring_client]
+        $rd psubscribe *
+        $rd read
+        # Notifies without writing: the event's offset is already durable.
+        r keyspace.notify rbks:x
+        assert_equal {pmessage * __keyspace@9__:rbks:x notify} [$rd read]
+        $rd close
+    }
+}

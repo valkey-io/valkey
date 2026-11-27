@@ -75,6 +75,33 @@ static void executeKeyspaceNotifyTask(const taskWaitingAck *task) {
                         (int)(intptr_t)task->argv[3]);
 }
 
+/*================================= Publish Task ============================= */
+
+/* A PUBLISH/SPUBLISH message, delivered once the writes before it are durable.
+ * Its tasks go to the keyspace notify lists, so messages and keyspace events
+ * reach subscribers in the order they were produced. */
+static taskWaitingAck *createPublishTask(va_list ap) {
+    /* Arguments: channel, message, sharded. */
+    taskWaitingAck *task = zcalloc(sizeof(taskWaitingAck));
+    task->argv = zmalloc(3 * sizeof(void *));
+    for (int i = 0; i < 3; i++) task->argv[i] = va_arg(ap, void *);
+    incrRefCount((robj *)task->argv[0]);
+    incrRefCount((robj *)task->argv[1]);
+    return task;
+}
+
+static void destroyPublishTask(void *ptr) {
+    taskWaitingAck *task = (taskWaitingAck *)ptr;
+    decrRefCount((robj *)task->argv[0]);
+    decrRefCount((robj *)task->argv[1]);
+    zfree(task->argv);
+    zfree(task);
+}
+
+static void executePublishTask(const taskWaitingAck *task) {
+    pubsubDeliverAndPropagateToCluster((robj *)task->argv[0], (robj *)task->argv[1], (int)(intptr_t)task->argv[2]);
+}
+
 /*================================= Key Invalidation Task ==================== */
 
 // Create the key invalidation task.
@@ -199,6 +226,23 @@ void initTaskTypes(void) {
         destroyFlushInvalidationTask,
         executeFlushInvalidationTask,
         destroyClientDefaultCallback};
+    taskTypes[POST_COMMIT_PUBLISH_TASK] = (taskWaitingAckType){
+        createPublishTask,
+        destroyPublishTask,
+        executePublishTask,
+        destroyClientDefaultCallback};
+}
+
+/* The list a task of this type is queued on. Publish tasks share the keyspace
+ * notify list, so pub/sub messages keep their order. */
+static int taskListIndex(int type) {
+    return type == POST_COMMIT_PUBLISH_TASK ? POST_COMMIT_KEYSPACE_NOTIFY_TASK : type;
+}
+
+/* A list may hold tasks of more than one type: free by the task's own type. */
+static void destroyTask(void *ptr) {
+    taskWaitingAck *task = (taskWaitingAck *)ptr;
+    taskTypes[task->type].destroy_task(task);
 }
 
 /*================================= Task Registration ======================== */
@@ -223,7 +267,7 @@ bool replyBlockingRegisterPostCommitTask(int type, ...) {
     taskWaitingAck *task = taskTypes[type].create_task(ap);
     if (task) {
         task->type = type;
-        listAddNodeTail(server.reply_blocking.pending_tasks_waiting_ack[type], task);
+        listAddNodeTail(server.reply_blocking.pending_tasks_waiting_ack[taskListIndex(type)], task);
         return_code = true;
     }
     va_end(ap);
@@ -267,6 +311,26 @@ bool replyBlockingSignalFlushedDb(int async) {
     return true;
 }
 
+/* A message published while nothing is pending is delivered at once. It waits
+ * while any write is not durable yet: one in the current execution unit (not
+ * stamped yet), one whose ack is not processed yet (a script may publish a
+ * value it read), or while earlier messages still wait, to keep their order. */
+bool replyBlockingShouldDeferPublish(void) {
+    if (!isPrimaryReplyBlockingEnabled() || server.reply_blocking.in_post_commit_task_execution) return false;
+    const int ks = POST_COMMIT_KEYSPACE_NOTIFY_TASK;
+    return server.also_propagate.numops > 0 || hasPendingUncommittedData() ||
+           server.reply_blocking.previous_acked_offset < server.primary_repl_offset ||
+           listLength(server.reply_blocking.pending_tasks_waiting_ack[ks]) > 0 ||
+           listLength(server.reply_blocking.tasks_waiting_ack[ks]) > 0;
+}
+
+void replyBlockingDeferPublish(robj *channel, robj *message, int sharded) {
+    bool queued = replyBlockingRegisterPostCommitTask(POST_COMMIT_PUBLISH_TASK, (void *)channel, (void *)message,
+                                                      (void *)(intptr_t)sharded);
+    debugServerAssert(queued);
+    UNUSED(queued);
+}
+
 /*================================= Task Execution =========================== */
 
 // Find and execute deferred tasks when 'consensus_ack_offset' is acked.
@@ -288,7 +352,7 @@ void executeDeferredTasksForAck(const long long consensus_ack_offset) {
         while ((ln = listNext(&li))) {
             taskWaitingAck *task = listNodeValue(ln);
             if (task->offset <= consensus_ack_offset) {
-                taskTypes[i].execute_task(task);
+                taskTypes[task->type].execute_task(task);
                 listDelNode(rb_state->tasks_waiting_ack[i], ln);
             } else {
                 break;
@@ -365,10 +429,8 @@ void postCommitTaskInitLists(void) {
     for (int i = 0; i < POST_COMMIT_TASK_TYPE_MAX; i++) {
         server.reply_blocking.tasks_waiting_ack[i] = listCreate();
         server.reply_blocking.pending_tasks_waiting_ack[i] = listCreate();
-        listSetFreeMethod(server.reply_blocking.tasks_waiting_ack[i],
-                          taskTypes[i].destroy_task);
-        listSetFreeMethod(server.reply_blocking.pending_tasks_waiting_ack[i],
-                          taskTypes[i].destroy_task);
+        listSetFreeMethod(server.reply_blocking.tasks_waiting_ack[i], destroyTask);
+        listSetFreeMethod(server.reply_blocking.pending_tasks_waiting_ack[i], destroyTask);
     }
 }
 

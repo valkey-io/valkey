@@ -520,7 +520,8 @@ int pubsubUnsubscribeAllPatterns(client *c, int notify) {
 /*
  * Publish a message to all the subscribers.
  */
-int pubsubPublishMessageInternal(robj *channel, robj *message, pubsubtype type) {
+/* With count_only set, count the receivers without sending anything. */
+static int pubsubPublishMessageInternal(robj *channel, robj *message, pubsubtype type, bool count_only) {
     int receivers = 0;
     void *element;
     dictEntry *de;
@@ -537,10 +538,11 @@ int pubsubPublishMessageInternal(robj *channel, robj *message, pubsubtype type) 
         hashtableInitIterator(&iter, clients, 0);
         void *c;
         while (hashtableNext(&iter, &c)) {
+            receivers++;
+            if (count_only) continue;
             addReplyPubsubMessage(c, channel, message, *type.messageBulk);
             clusterSlotStatsAddNetworkBytesOutForShardedPubSubInternalPropagation(c, slot);
             updateClientMemUsageAndBucket(c);
-            receivers++;
         }
         hashtableCleanupIterator(&iter);
     }
@@ -565,9 +567,10 @@ int pubsubPublishMessageInternal(robj *channel, robj *message, pubsubtype type) 
             hashtableInitIterator(&iter, clients, 0);
             void *c;
             while (hashtableNext(&iter, &c)) {
+                receivers++;
+                if (count_only) continue;
                 addReplyPubsubPatMessage(c, pattern, channel, message);
                 updateClientMemUsageAndBucket(c);
-                receivers++;
             }
             hashtableCleanupIterator(&iter);
         }
@@ -579,7 +582,16 @@ int pubsubPublishMessageInternal(robj *channel, robj *message, pubsubtype type) 
 
 /* Publish a message to all the subscribers. */
 int pubsubPublishMessage(robj *channel, robj *message, int sharded) {
-    return pubsubPublishMessageInternal(channel, message, sharded ? pubSubShardType : pubSubType);
+    return pubsubPublishMessageInternal(channel, message, sharded ? pubSubShardType : pubSubType, false);
+}
+
+/* Deliver a message published by PUBLISH/SPUBLISH or a module, and send it to
+ * the other cluster nodes. Also the deferred delivery of such a message.
+ * Returns the number of local receivers. */
+int pubsubDeliverAndPropagateToCluster(robj *channel, robj *message, int sharded) {
+    int receivers = pubsubPublishMessage(channel, message, sharded);
+    if (server.cluster_enabled) clusterPropagatePublish(channel, message, sharded);
+    return receivers;
 }
 
 /*-----------------------------------------------------------------------------
@@ -660,9 +672,17 @@ void punsubscribeCommand(client *c) {
 int pubsubPublishMessageAndPropagateToCluster(robj *channel, robj *message, int sharded) {
     if (server.cluster_enabled && !clusterPublishMessageLengthValid(channel, message)) return 0;
 
-    int receivers = pubsubPublishMessage(channel, message, sharded);
-    if (server.cluster_enabled) clusterPropagatePublish(channel, message, sharded);
-    return receivers;
+    /* Under reply blocking a message waits until the writes before it are
+     * durable, as replies do. A subscriber must not see a message about a
+     * write (or carrying a value) a crash could still lose. The reply counts
+     * the subscribers the message will be delivered to. */
+    if (replyBlockingShouldDeferPublish()) {
+        int receivers =
+            pubsubPublishMessageInternal(channel, message, sharded ? pubSubShardType : pubSubType, true);
+        replyBlockingDeferPublish(channel, message, sharded);
+        return receivers;
+    }
+    return pubsubDeliverAndPropagateToCluster(channel, message, sharded);
 }
 
 /* PUBLISH <channel> <message> */

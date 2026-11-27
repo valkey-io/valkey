@@ -564,6 +564,16 @@ void replyBlockingApplyDeferredReplyBoundary(client *c) {
 /*================================= Unblocking ============================== */
 
 // Unblock responses and tasks of all blocked clients with a given consensus acked offset.
+/* Run the deferred tasks (pub/sub messages, invalidations) covered by ack. */
+static void runDeferredTasksForAck(long long ack) {
+    executeDeferredTasksForAck(ack);
+    /* Deferred key invalidations queue keys for BCAST clients, and the
+     * writers' replies were just released: send the BCAST messages now, not
+     * at the next beforeSleep(). Inside a command (e.g. DEBUG
+     * reply-blocking-resume) they wait for beforeSleep(), as usual. */
+    if (server.execution_nesting == 0) trackingBroadcastInvalidationMessages();
+}
+
 void unblockResponsesWithAckOffset(const reply_blocking_t *rb_state, const long long consensus_ack_offset) {
     serverLog(LL_DEBUG, "unblocking clients for consensus offset %lld,", consensus_ack_offset);
     listIter li, li_response;
@@ -598,12 +608,7 @@ void unblockResponsesWithAckOffset(const reply_blocking_t *rb_state, const long 
         }
     }
 
-    executeDeferredTasksForAck(consensus_ack_offset);
-    /* Deferred key invalidations queue keys for BCAST clients, and the
-     * writers' replies were just released: send the BCAST messages now, not
-     * at the next beforeSleep(). Inside a command (e.g. DEBUG
-     * reply-blocking-resume) they wait for beforeSleep(), as usual. */
-    if (server.execution_nesting == 0) trackingBroadcastInvalidationMessages();
+    runDeferredTasksForAck(consensus_ack_offset);
 }
 
 /*================================= Post-ack handlers ======================= */
@@ -654,6 +659,10 @@ void notifyReplyBlockingProgress(void) {
 
     const long long consensus_ack_offset = getDurablyCommittedOffset();
     if (consensus_ack_offset <= rb_state->previous_acked_offset) {
+        /* A task certified at an offset that is already durable (a module
+         * keyspace event that follows no write) waits for no ack: run it now
+         * instead of at the next write's ack, which may never come. */
+        runDeferredTasksForAck(rb_state->previous_acked_offset);
         return;
     }
 

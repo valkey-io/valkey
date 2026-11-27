@@ -3096,3 +3096,92 @@ start_server {tags {"repl durability external:skip"} overrides {appendonly yes a
         }
     }
 }
+
+start_server {tags {"repl durability external:skip"} overrides {appendonly yes appendfsync always bio-aof-offload-enabled yes notify-keyspace-events KEA}} {
+    # Read whatever the subscriber has received within ms milliseconds.
+    proc rb_drain {rd ms} {
+        set fd [$rd channel]
+        fconfigure $fd -blocking 0
+        set got ""
+        set start [clock milliseconds]
+        while {[clock milliseconds] - $start < $ms} { append got [read $fd]; after 5 }
+        fconfigure $fd -blocking 1
+        return $got
+    }
+
+    foreach {cmd sub} {publish subscribe spublish ssubscribe} {
+        test "$cmd in a transaction after a write is delivered once the write is durable" {
+            set s [valkey_deferring_client]
+            $s $sub pb:ch
+            $s read
+            r DEBUG reply-blocking-pause aof
+            set w [valkey_deferring_client]
+            $w multi
+            $w read
+            $w set pb:k v
+            $w read
+            $w $cmd pb:ch v
+            $w read
+            $w exec
+            assert_equal "" [rb_drain $s 300]
+            r DEBUG reply-blocking-resume aof
+            assert_equal {OK 1} [$w read]
+            assert_equal [list [string map {subscribe message ssubscribe smessage} $sub] pb:ch v] [$s read]
+            $w close
+            $s close
+        }
+    }
+
+    test "A script that publishes a key that is not durable yet is held" {
+        set s [valkey_deferring_client]
+        $s subscribe pb:ch2
+        $s read
+        r DEBUG reply-blocking-pause aof
+        set w [valkey_deferring_client]
+        $w set pb:dirty secret
+        set e [valkey_deferring_client]
+        $e eval {return redis.call('publish', 'pb:ch2', redis.call('get', KEYS[1]))} 1 pb:dirty
+        assert_equal "" [rb_drain $s 300]
+        r DEBUG reply-blocking-resume aof
+        assert_equal OK [$w read]
+        assert_equal 1 [$e read]
+        assert_equal {message pb:ch2 secret} [$s read]
+        foreach c [list $s $w $e] { $c close }
+    }
+
+    test "A publish with nothing pending is delivered at once" {
+        set s [valkey_deferring_client]
+        $s subscribe pb:ch3
+        $s read
+        r DEBUG reply-blocking-pause aof
+        assert_equal 1 [r publish pb:ch3 now]
+        assert_equal {message pb:ch3 now} [$s read]
+        r DEBUG reply-blocking-resume aof
+        $s close
+    }
+
+    test "A deferred publish keeps its order with keyspace events" {
+        set s [valkey_deferring_client]
+        $s psubscribe pb:ord* __keyspace@9__:pb:ordk
+        $s read
+        $s read
+        r DEBUG reply-blocking-pause aof
+        set w [valkey_deferring_client]
+        $w multi
+        $w read
+        $w set pb:ordk 1
+        $w read
+        $w publish pb:ord a
+        $w read
+        $w set pb:ordk 2
+        $w read
+        $w exec
+        r DEBUG reply-blocking-resume aof
+        assert_equal {OK 1 OK} [$w read]
+        assert_equal {pmessage __keyspace@9__:pb:ordk __keyspace@9__:pb:ordk set} [$s read]
+        assert_equal {pmessage pb:ord* pb:ord a} [$s read]
+        assert_equal {pmessage __keyspace@9__:pb:ordk __keyspace@9__:pb:ordk set} [$s read]
+        $w close
+        $s close
+    }
+}

@@ -19,6 +19,7 @@ typedef enum {
     POST_COMMIT_KEYSPACE_NOTIFY_TASK = 0, /* KEYSPACE NOTIFY task */
     POST_COMMIT_KEY_INVALIDATION_TASK,    /* Key invalidation task for client side caching */
     POST_COMMIT_FLUSH_INVALIDATION_TASK,  /* FLUSH invalidation task for client side caching */
+    POST_COMMIT_PUBLISH_TASK,             /* PUBLISH/SPUBLISH message; queued in the keyspace notify list */
     POST_COMMIT_TASK_TYPE_MAX             /* Max task type */
 } postCommitTaskType;
 
@@ -59,6 +60,11 @@ bool replyBlockingSignalModifiedKey(struct client *c, struct serverDb *db, struc
  * Return true if no further processing are required in signalFlushedDb() such
  * as some async tasks are created which need some time to finish, false otherwise. */
 bool replyBlockingSignalFlushedDb(int async);
+
+/* PUBLISH/SPUBLISH under reply blocking: whether the message must wait, and
+ * queue it to be delivered once the writes before it are durable. */
+bool replyBlockingShouldDeferPublish(void);
+void replyBlockingDeferPublish(struct serverObject *channel, struct serverObject *message, int sharded);
 
 /* Initialize the task lists in the reply-blocking structure.
  * Called from replyBlockingInit(). */

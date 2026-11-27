@@ -958,17 +958,16 @@ test "Raft proto: REPL_OFFSETS updates node replication offset" {
     }
 }
 
-# Have the server under test MEET a fake node, which joins as a follower.
-# Returns the leader's connection to the fake node after the first AE_ACK.
-proc raft_join_fake_follower {fake_id fake_shard {voter_policy no}} {
+# Have the server under test MEET a fake learner and return its connection.
+# Leave the first AE queued if the test needs to control when it catches up.
+proc raft_join_fake_follower {fake_id fake_shard {voter_policy no} {ack_first_ae 1}} {
     # Start listening before MEET so the leader can connect.
     set cport 0
     set fd [raft_listen_and_accept cport 5000 {
         set fake_port [expr {$cport - 10000}]
         set fake_addr "127.0.0.1:${fake_port}@${cport},,tls-port=0,shard-id=$fake_shard,voter=$voter_policy"
 
-        # Send CLUSTER MEET without waiting for reply (it blocks until
-        # NODE_JOIN commits, which needs our AE_ACK).
+        # Start the handshake before waiting for the MEET reply.
         set meet_client [valkey_deferring_client]
         $meet_client CLUSTER MEET 127.0.0.1 $fake_port
     }]
@@ -983,11 +982,11 @@ proc raft_join_fake_follower {fake_id fake_shard {voter_policy no}} {
     raft_send $fd "HI $fake_id $fake_addr"
     raft_send $fd "ADD_ME"
 
-    # Leader receives ADD_ME, invites us, commits NODE_JOIN, sends AE.
-    # Reply with offset=0.
-    set reply [raft_recv $fd 5000]
-    assert_match "AE *" $reply
-    raft_reply_ae_ack $fd $reply 0
+    if {$ack_first_ae} {
+        set reply [raft_recv $fd 5000]
+        assert_match "AE *" $reply
+        raft_reply_ae_ack $fd $reply 0
+    }
 
     # MEET should now complete. Consume the deferred reply.
     assert_match {OK} [$meet_client read]
@@ -1060,16 +1059,19 @@ proc raft_ack_until_idle {fd} {
     return $last
 }
 
-# Catch up the fake follower and wait for automatic promotion. Drain the
-# promotion's AE before the test starts inspecting later proposals.
-proc raft_wait_for_fake_voter {fd} {
+# ACK on every fake peer's link until the leader reaches the expected voter count.
+proc raft_wait_for_fake_voters {fds voters} {
     set deadline [expr {[clock milliseconds] + 5000}]
-    while {[CI 0 cluster_size] != 2} {
-        set remaining [expr {$deadline - [clock milliseconds]}]
-        if {$remaining <= 0} {fail "Fake follower did not become a voter"}
-        raft_reply_ae_ack $fd [raft_recv_until $fd "AE *" $remaining] 0
+    while {[CI 0 cluster_size] != $voters} {
+        foreach fd $fds {
+            set remaining [expr {$deadline - [clock milliseconds]}]
+            if {$remaining <= 0} {fail "Raft cluster did not reach $voters voters"}
+            raft_reply_ae_ack $fd [raft_recv_until $fd "AE *" $remaining] 0
+        }
     }
-    return [raft_ack_until_idle $fd]
+    # Drain the promotion AEs before the test inspects later proposals.
+    foreach fd $fds {raft_ack_until_idle $fd}
+    return [CI 0 cluster_raft_last_applied]
 }
 
 test "Raft proto: leader backs off next_index to the follower's last index on rejection" {
@@ -1175,50 +1177,17 @@ proc raft_ack_until {fd index} {
     }
 }
 
-# Send CLUSTER ADDVOTER on rd until the leader appends it. The learner's last
-# ACK and the command are on different connections, so the leader may get the
-# command first and reject it because the learner doesn't have the whole log.
-proc raft_propose_add_voter {rd id} {
-    for {set i 0} {$i < 50} {incr i} {
-        set appended [count_log_message 0 "Leader appended ADD_VOTER"]
-        set rejected [count_log_message 0 "rejecting ADD_VOTER"]
-        $rd CLUSTER ADDVOTER $id
-        wait_for_condition 100 10 {
-            [count_log_message 0 "Leader appended ADD_VOTER"] > $appended ||
-            [count_log_message 0 "rejecting ADD_VOTER"] > $rejected
-        } else {
-            fail "ADDVOTER was neither appended nor rejected"
-        }
-        if {[count_log_message 0 "Leader appended ADD_VOTER"] > $appended} return
-        assert_error "*rejected*" {$rd read}
-        after 10
-    }
-    fail "ADDVOTER kept being rejected"
-}
-
 test "Raft proto: an entry commits on a quorum of voters, learners don't count" {
     start_server {overrides {cluster-enabled yes cluster-protocol raft cluster-node-timeout 5000}} {
-        # Join all first: with two voters, a join needs a voter's ACK.
-        set learner_fd [raft_join_fake_follower [string repeat "a" 40] [string repeat "b" 40]]
+        # Hold the auto learners' first ACKs so all peers join before the quorum changes.
+        set learner_id [string repeat "a" 40]
+        set peer_fds [list [raft_join_fake_follower $learner_id [string repeat "b" 40] no]]
         foreach c {c d e} {
-            lappend voter_ids [string repeat $c 40]
-            lappend voter_fds [raft_join_fake_follower [lindex $voter_ids end] [string repeat "f" 40]]
+            lappend peer_fds [raft_join_fake_follower [string repeat $c 40] [string repeat "f" 40] auto 0]
         }
-        lassign $voter_fds a_fd b_fd c_fd
-
-        # ADDVOTER needs the learner to have the whole log. All voters ack it.
-        set added {}
-        foreach id $voter_ids fd $voter_fds {
-            raft_ack_until $fd [CI 0 cluster_raft_last_applied]
-            set target [expr {[CI 0 cluster_raft_commit_index] + 1}]
-            set rd [valkey_deferring_client]
-            raft_propose_add_voter $rd $id
-            foreach v $added { raft_ack_until $v $target }
-            assert_equal OK [$rd read]
-            $rd close
-            lappend added $fd
-        }
-        assert_equal 4 [CI 0 cluster_size]
+        raft_wait_for_fake_voters $peer_fds 4
+        assert {[cluster_has_flag [cluster_get_node_by_id 0 $learner_id] learner]}
+        lassign $peer_fds learner_fd a_fd b_fd
 
         # 4 voters, quorum 3: the leader and voter A aren't enough.
         set target [expr {[CI 0 cluster_raft_commit_index] + 1}]
@@ -1236,7 +1205,7 @@ test "Raft proto: an entry commits on a quorum of voters, learners don't count" 
             fail "entry not committed on a quorum of voters"
         }
         $rd close
-        foreach fd [list $learner_fd $a_fd $b_fd $c_fd] { close $fd }
+        foreach fd $peer_fds {close $fd}
     }
 }
 
@@ -1648,7 +1617,7 @@ test "Raft proto: the leader answers UNCHANGED only after a quorum acks a later 
         set f_id [string repeat "f" 40]
         R 0 cluster addslots 0
         set fd [raft_join_fake_follower $f_id [string repeat "9" 40] auto]
-        set last [raft_wait_for_fake_voter $fd]
+        set last [raft_wait_for_fake_voters $fd 2]
         set commit [CI 0 cluster_raft_commit_index]
         set term [CI 0 cluster_raft_current_term]
 
@@ -1684,7 +1653,7 @@ test "Raft proto: a read confirmed by the ACK that commits a change isn't unchan
         set f_id [string repeat "f" 40]
         R 0 cluster addslots 0
         set fd [raft_join_fake_follower $f_id [string repeat "9" 40] auto]
-        set last [raft_wait_for_fake_voter $fd]
+        set last [raft_wait_for_fake_voters $fd 2]
         set term [CI 0 cluster_raft_current_term]
 
         # F forwards a SETSLOT NODE for the current owner, then a change of
@@ -1718,7 +1687,7 @@ test "Raft proto: the leader completes its proposal only with its own entry" {
         set f_id [string repeat "f" 40]
         R 0 cluster addslots 0
         set fd [raft_join_fake_follower $f_id [string repeat "9" 40] auto]
-        set last [raft_wait_for_fake_voter $fd]
+        set last [raft_wait_for_fake_voters $fd 2]
         set term [CI 0 cluster_raft_current_term]
 
         # F proposes slot 1 to the node, then to F. Then a client proposes
@@ -1759,7 +1728,7 @@ test "Raft proto: a proposal completes after its leader's log tail is replaced" 
         set f_id [string repeat "f" 40]
         R 0 cluster addslots 0
         set fd [raft_join_fake_follower $f_id [string repeat "9" 40] auto]
-        set last [raft_wait_for_fake_voter $fd]
+        set last [raft_wait_for_fake_voters $fd 2]
         set term [CI 0 cluster_raft_current_term]
 
         # Slots 1 and 2 are appended, but not committed.

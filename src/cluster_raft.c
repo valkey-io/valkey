@@ -2028,6 +2028,7 @@ static void raftLogApply(raftLogEntry *e) {
         if (node && nodeIsReplica(myself) && myself->replicaof == node &&
             !nodeCantFailover(myself)) {
             rs->todo_schedule_failover = 1;
+            rs->failover_time = 0; /* beforeSleep schedules it again with a fresh rank. */
         }
         break;
     }
@@ -2041,6 +2042,7 @@ static void raftLogApply(raftLogEntry *e) {
             /* Cancel deferred failover if the recovered node is my primary. */
             if (nodeIsReplica(myself) && myself->replicaof == node) {
                 rs->todo_schedule_failover = 0;
+                rs->failover_time = 0;
             }
         }
         serverLog(LL_NOTICE, "Applied NODE_RECOVER %.40s (index %llu).",
@@ -2755,7 +2757,8 @@ static int clusterRaftProcessInstallSnapshot(clusterLink *link, int argc, sds *a
     clearCachedClusterSlotsResponse();
     clusterRaftOnSlotOwnershipApplied();
     /* If our primary is failed, schedule a failover, as applying its
-     * NODE_FAIL would have done. */
+     * NODE_FAIL would have done. A pending one may be for an old primary. */
+    rs->failover_time = 0;
     if (nodeIsReplica(myself) && myself->replicaof && nodeFailed(myself->replicaof) && !nodeCantFailover(myself)) {
         rs->todo_schedule_failover = 1;
     }
@@ -3479,7 +3482,24 @@ static void clusterRaftCron(void) {
 
     /* Automatic failover: propose FAILOVER when our scheduled time arrives. */
     if (rs->failover_time && now >= rs->failover_time) {
-        if (nodeIsReplica(myself) && myself->replicaof && nodeFailed(myself->replicaof)) {
+        if (!nodeIsReplica(myself) || !myself->replicaof || !nodeFailed(myself->replicaof)) {
+            /* The primary recovered or we are no longer its replica. */
+            rs->failover_time = 0;
+        } else if (server.cluster_replica_no_failover == CLUSTER_REPLICA_NO_FAILOVER_IF_EMPTY &&
+                   clusterRaftMyReplicationOffset() == 0) {
+            /* Promoting an empty replica would lose all the data of the
+             * shard. Stay pending and check again on the next cron. */
+            static mstime_t last_log_time = 0;
+            if (now - last_log_time >= 1000) {
+                last_log_time = now;
+                serverLog(LL_NOTICE, "Currently unable to failover: Replication offset is 0 and no data has "
+                                     "been received from the primary. Please check the "
+                                     "'cluster-replica-no-failover' configuration option.");
+            }
+        } else if (!nodeCantFailover(myself)) {
+            /* Propose, unless cluster-replica-no-failover was set to yes after
+             * scheduling. Then stay pending, so the failover goes ahead once it
+             * is turned off. */
             rs->failover_time = 0;
             clusterNode *primary = myself->replicaof;
             serverLog(LL_NOTICE, "Automatic failover: proposing FAILOVER for primary %.40s.",
@@ -3665,6 +3685,7 @@ static void clusterRaftBeforeSleep(bool blocked) {
                 if (memcmp(sibling->name, myself->name, CLUSTER_NAMELEN) < 0) rank++;
             }
             mstime_t delay = rank * 1000;
+            if (server.debug_cluster_failover_delay >= 0) delay += server.debug_cluster_failover_delay;
             rs->failover_time = monotonicMs() + delay;
             /* The parenthesized part matches the gossip election log, so tests
              * can check the rank and offset the same way for both. */
@@ -4638,6 +4659,10 @@ static void clusterRaftSetNodePrimary(clusterNode *node, clusterNode *primary) {
     if (node == myself) {
         rs->todo_save_config = 1;
         rs->todo_update_replication = 1;
+        /* A pending failover was for the old primary. beforeSleep schedules
+         * a new one, after updating replication, if the new primary is failed. */
+        rs->failover_time = 0;
+        rs->todo_schedule_failover = 1;
     }
 }
 

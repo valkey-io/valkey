@@ -1456,6 +1456,32 @@ static void clusterRaftResolvePendingRead(raftPendingRead *r) {
     }
 }
 
+static int raftCompareRoundDesc(const void *a, const void *b) {
+    uint64_t x = *(const uint64_t *)a, y = *(const uint64_t *)b;
+    return (x < y) - (x > y);
+}
+
+/* The quorum-th highest voter round confirms every read up to that round. */
+static uint64_t clusterRaftConfirmedRound(void) {
+    int quorum = clusterRaftQuorum();
+    if (quorum == 1 && nodeIsVoter(myself)) return UINT64_MAX;
+
+    uint64_t *rounds = zmalloc(dictSize(server.cluster->nodes) * sizeof(*rounds));
+    size_t count = 0;
+    dictIterator di;
+    dictInitIterator(&di, server.cluster->nodes);
+    dictEntry *de;
+    while ((de = dictNext(&di)) != NULL) {
+        clusterNode *node = dictGetVal(de);
+        if (nodeIsVoter(node)) rounds[count++] = node == myself ? UINT64_MAX : RAFT_NODE(node)->acked_round;
+    }
+    dictResetIterator(&di);
+    qsort(rounds, count, sizeof(*rounds), raftCompareRoundDesc);
+    uint64_t confirmed = count >= (size_t)quorum ? rounds[quorum - 1] : 0;
+    zfree(rounds);
+    return confirmed;
+}
+
 /* Resolve the reads that a quorum has confirmed. If we're no longer the
  * leader, drop them: the proposers retry with the new leader. During a
  * leadership transfer, wait, since resolving a read may append. */
@@ -1463,6 +1489,8 @@ static void clusterRaftProcessPendingReads(void) {
     clusterRaftState *rs = RAFT_STATE();
     if (listLength(rs->pending_reads) == 0) return;
     if (clusterRaftTransferSent()) return;
+    bool have_confirmed_round = false;
+    uint64_t confirmed_round = 0;
     listIter li;
     listNode *ln;
     listRewind(rs->pending_reads, &li);
@@ -1472,15 +1500,11 @@ static void clusterRaftProcessPendingReads(void) {
             listDelNode(rs->pending_reads, ln);
             continue;
         }
-        int acked = nodeIsVoter(myself) ? 1 : 0;
-        dictIterator *di = dictGetSafeIterator(server.cluster->nodes);
-        dictEntry *de;
-        while ((de = dictNext(di)) != NULL) {
-            clusterNode *node = dictGetVal(de);
-            if (node != myself && nodeIsVoter(node) && RAFT_NODE(node)->acked_round >= r->round) acked++;
+        if (!have_confirmed_round) {
+            confirmed_round = clusterRaftConfirmedRound();
+            have_confirmed_round = true;
         }
-        dictReleaseIterator(di);
-        if (acked < clusterRaftQuorum()) continue;
+        if (r->round > confirmed_round) continue;
         listUnlinkNode(rs->pending_reads, ln);
         clusterRaftResolvePendingRead(r);
         raftPendingReadFree(r);

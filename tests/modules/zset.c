@@ -264,6 +264,65 @@ int zset_walk_after_call(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int ar
     return VALKEYMODULE_OK;
 }
 
+/* ZSET.WRITEWHILEWALKING key first|last|lex rem|add|incrby member [member ...]
+ *
+ * Seeks the first (or last) element of the full score range, or the first of
+ * the full lex range, and then, with the range iteration still active, writes
+ * every listed member through the same open key: ZsetRem removes it, ZsetAdd
+ * sets its score to 0, ZsetIncrby adds 1 to its score. Replies with an array
+ * of three items: the end-reached flag after the writes, the current element
+ * or null, and the number of steps (ZsetRangePrev after last, ZsetRangeNext
+ * otherwise) that still moved.
+ */
+int zset_writewhilewalking(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    if (argc < 5) return ValkeyModule_WrongArity(ctx);
+    ValkeyModule_AutoMemory(ctx);
+    ValkeyModuleKey *key = ValkeyModule_OpenKey(ctx, argv[1], VALKEYMODULE_READ | VALKEYMODULE_WRITE);
+    if (ValkeyModule_KeyType(key) != VALKEYMODULE_KEYTYPE_ZSET)
+        return ValkeyModule_ReplyWithError(ctx, VALKEYMODULE_ERRORMSG_WRONGTYPE);
+
+    size_t len;
+    const char *dir = ValkeyModule_StringPtrLen(argv[2], &len);
+    int last = !strcasecmp(dir, "last");
+    int lex = !strcasecmp(dir, "lex");
+    if (!last && !lex && strcasecmp(dir, "first"))
+        return ValkeyModule_ReplyWithError(ctx, "ERR range must be first, last or lex");
+    const char *op = ValkeyModule_StringPtrLen(argv[3], &len);
+    if (strcasecmp(op, "rem") && strcasecmp(op, "add") && strcasecmp(op, "incrby"))
+        return ValkeyModule_ReplyWithError(ctx, "ERR operation must be rem, add or incrby");
+
+    int rc;
+    if (lex) {
+        ValkeyModuleString *min = ValkeyModule_CreateString(ctx, "-", 1);
+        ValkeyModuleString *max = ValkeyModule_CreateString(ctx, "+", 1);
+        rc = ValkeyModule_ZsetFirstInLexRange(key, min, max);
+    } else if (last) {
+        rc = ValkeyModule_ZsetLastInScoreRange(key, VALKEYMODULE_NEGATIVE_INFINITE, VALKEYMODULE_POSITIVE_INFINITE, 0, 0);
+    } else {
+        rc = ValkeyModule_ZsetFirstInScoreRange(key, VALKEYMODULE_NEGATIVE_INFINITE, VALKEYMODULE_POSITIVE_INFINITE, 0, 0);
+    }
+    if (rc != VALKEYMODULE_OK) return ValkeyModule_ReplyWithError(ctx, "ERR range init failed");
+
+    for (int i = 4; i < argc; i++) {
+        if (!strcasecmp(op, "rem"))
+            rc = ValkeyModule_ZsetRem(key, argv[i], NULL);
+        else if (!strcasecmp(op, "add"))
+            rc = ValkeyModule_ZsetAdd(key, 0, argv[i], NULL);
+        else
+            rc = ValkeyModule_ZsetIncrby(key, 1, argv[i], NULL, NULL);
+        if (rc != VALKEYMODULE_OK) return ValkeyModule_ReplyWithError(ctx, "ERR write failed");
+    }
+
+    ValkeyModule_ReplyWithArray(ctx, 3);
+    ValkeyModule_ReplyWithLongLong(ctx, ValkeyModule_ZsetRangeEndReached(key));
+    zset_walk_reply_current(ctx, key);
+    long long steps = 0;
+    while (last ? ValkeyModule_ZsetRangePrev(key) : ValkeyModule_ZsetRangeNext(key)) steps++;
+    ValkeyModule_ReplyWithLongLong(ctx, steps);
+    ValkeyModule_ZsetRangeStop(key);
+    return VALKEYMODULE_OK;
+}
+
 /* ZSET.ITER_ADD key score member
  *
  * Starts a full score-range scan on key, adds (score, member) through the open
@@ -586,8 +645,8 @@ static void *zset_thread_walk_run(void *argp) {
     ValkeyModule_AutoMemory(ctx);
     ValkeyModule_ThreadSafeContextLock(ctx);
     ValkeyModuleKey *key = ValkeyModule_OpenKey(ctx, tw->keyname, VALKEYMODULE_READ);
-    if (ValkeyModule_ZsetFirstInScoreRange(key, VALKEYMODULE_NEGATIVE_INFINITE,
-                                           VALKEYMODULE_POSITIVE_INFINITE, 0, 0) == VALKEYMODULE_OK) {
+    if (key && ValkeyModule_ZsetFirstInScoreRange(key, VALKEYMODULE_NEGATIVE_INFINITE,
+                                                  VALKEYMODULE_POSITIVE_INFINITE, 0, 0) == VALKEYMODULE_OK) {
         ValkeyModule_ZsetRangeNext(key);
         ValkeyModuleString *ele = ValkeyModule_ZsetRangeCurrentElement(key, NULL);
         if (ele) {
@@ -597,7 +656,7 @@ static void *zset_thread_walk_run(void *argp) {
         }
     }
     ValkeyModule_ThreadSafeContextUnlock(ctx);
-    if (tw->relock) {
+    if (key && tw->relock) {
         ValkeyModule_ThreadSafeContextLock(ctx);
         tw->stepped = ValkeyModule_ZsetRangeNext(key);
         tw->ended = ValkeyModule_ZsetRangeEndReached(key);
@@ -719,8 +778,8 @@ static void *zset_thread_yield_walk_run(void *argp) {
     ValkeyModuleCtx *ctx = ValkeyModule_GetThreadSafeContext(tw->bc);
     ValkeyModule_ThreadSafeContextLock(ctx);
     ValkeyModuleKey *key = ValkeyModule_OpenKey(ctx, tw->keyname, VALKEYMODULE_READ);
-    if (ValkeyModule_ZsetFirstInScoreRange(key, VALKEYMODULE_NEGATIVE_INFINITE,
-                                           VALKEYMODULE_POSITIVE_INFINITE, 0, 0) == VALKEYMODULE_OK) {
+    if (key && ValkeyModule_ZsetFirstInScoreRange(key, VALKEYMODULE_NEGATIVE_INFINITE,
+                                                  VALKEYMODULE_POSITIVE_INFINITE, 0, 0) == VALKEYMODULE_OK) {
         int first = 1;
         while (!ValkeyModule_ZsetRangeEndReached(key) && tw->count < 16) {
             size_t len;
@@ -783,12 +842,143 @@ int zset_thread_yield_walk(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int 
     return VALKEYMODULE_OK;
 }
 
+/* ZSET.FILTER 0|1
+ *
+ * Registers (1) or unregisters (0) a command filter that does nothing, so
+ * that every command, including one run through ValkeyModule_Call(), runs
+ * the command filters. */
+static ValkeyModuleCommandFilter *zset_noop_filter;
+
+static void zset_noop_filter_cb(ValkeyModuleCommandFilterCtx *fctx) {
+    VALKEYMODULE_NOT_USED(fctx);
+}
+
+int zset_filter(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    if (argc != 2) return ValkeyModule_WrongArity(ctx);
+    long long on;
+    if (ValkeyModule_StringToLongLong(argv[1], &on) != VALKEYMODULE_OK)
+        return ValkeyModule_ReplyWithError(ctx, "ERR invalid flag");
+    if (on && zset_noop_filter == NULL) {
+        zset_noop_filter = ValkeyModule_RegisterCommandFilter(ctx, zset_noop_filter_cb, 0);
+    } else if (!on && zset_noop_filter != NULL) {
+        ValkeyModule_UnregisterCommandFilter(ctx, zset_noop_filter);
+        zset_noop_filter = NULL;
+    }
+    return ValkeyModule_ReplyWithSimpleString(ctx, "OK");
+}
+
+/* Walk the whole score range of 'key', opened in 'key_ctx' (no auto memory),
+ * from its first element, recording up to 'max' members into 'members', and
+ * run ValkeyModule_Call(PING) in 'ctx' after recording the first. Returns the
+ * number recorded. The call runs the command filters, which must not end a
+ * walk started before it. */
+static int zset_walk_with_call(ValkeyModuleCtx *ctx, ValkeyModuleCtx *key_ctx, ValkeyModuleKey *key, char members[][16], int max) {
+    int count = 0;
+    if (key == NULL || ValkeyModule_ZsetFirstInScoreRange(key, VALKEYMODULE_NEGATIVE_INFINITE,
+                                                          VALKEYMODULE_POSITIVE_INFINITE, 0, 0) != VALKEYMODULE_OK)
+        return 0;
+    while (!ValkeyModule_ZsetRangeEndReached(key) && count < max) {
+        size_t len;
+        ValkeyModuleString *ele = ValkeyModule_ZsetRangeCurrentElement(key, NULL);
+        if (ele == NULL) break;
+        const char *p = ValkeyModule_StringPtrLen(ele, &len);
+        snprintf(members[count++], 16, "%.*s", (int)len, p);
+        ValkeyModule_FreeString(key_ctx, ele);
+        if (count == 1) {
+            ValkeyModuleCallReply *rep = ValkeyModule_Call(ctx, "PING", "");
+            if (rep) ValkeyModule_FreeCallReply(rep);
+        }
+        ValkeyModule_ZsetRangeNext(key);
+    }
+    ValkeyModule_ZsetRangeStop(key);
+    return count;
+}
+
+/* ZSET.THREAD_CALL_WALK key
+ *
+ * Blocks the client and runs a thread. The thread takes a thread safe
+ * context, locks, opens key, walks the whole score range running
+ * ValkeyModule_Call(PING) after the first element, then unlocks, closes the
+ * key and frees the context. The reply is the members visited, in order:
+ * the command filters run by the call must not end the walk. */
+struct thread_call_walk {
+    ValkeyModuleBlockedClient *bc;
+    ValkeyModuleString *keyname;
+    char members[16][16];
+    int count;
+};
+
+static void *zset_thread_call_walk_run(void *argp) {
+    struct thread_call_walk *tw = argp;
+    ValkeyModuleCtx *ctx = ValkeyModule_GetThreadSafeContext(tw->bc);
+    ValkeyModule_ThreadSafeContextLock(ctx);
+    ValkeyModuleKey *key = ValkeyModule_OpenKey(ctx, tw->keyname, VALKEYMODULE_READ);
+    tw->count = zset_walk_with_call(ctx, ctx, key, tw->members, 16);
+    ValkeyModule_CloseKey(key);
+    ValkeyModule_ThreadSafeContextUnlock(ctx);
+    ValkeyModule_FreeThreadSafeContext(ctx);
+    ValkeyModule_UnblockClient(tw->bc, tw);
+    return NULL;
+}
+
+static int zset_thread_call_walk_reply(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    VALKEYMODULE_NOT_USED(argv);
+    VALKEYMODULE_NOT_USED(argc);
+    struct thread_call_walk *tw = ValkeyModule_GetBlockedClientPrivateData(ctx);
+    ValkeyModule_ReplyWithArray(ctx, tw->count);
+    for (int i = 0; i < tw->count; i++) ValkeyModule_ReplyWithCString(ctx, tw->members[i]);
+    return VALKEYMODULE_OK;
+}
+
+static void zset_thread_call_walk_free(ValkeyModuleCtx *ctx, void *privdata) {
+    VALKEYMODULE_NOT_USED(ctx);
+    struct thread_call_walk *tw = privdata;
+    ValkeyModule_FreeString(NULL, tw->keyname);
+    ValkeyModule_Free(tw);
+}
+
+int zset_thread_call_walk(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    if (argc != 2) return ValkeyModule_WrongArity(ctx);
+    struct thread_call_walk *tw = ValkeyModule_Calloc(1, sizeof(*tw));
+    tw->keyname = ValkeyModule_CreateStringFromString(NULL, argv[1]);
+    tw->bc = ValkeyModule_BlockClient(ctx, zset_thread_call_walk_reply, NULL, zset_thread_call_walk_free, 0);
+    pthread_t tid;
+    if (pthread_create(&tid, NULL, zset_thread_call_walk_run, tw) != 0) {
+        ValkeyModule_AbortBlock(tw->bc);
+        zset_thread_call_walk_free(ctx, tw);
+        return ValkeyModule_ReplyWithError(ctx, "ERR cannot start thread");
+    }
+    pthread_detach(tid);
+    return VALKEYMODULE_OK;
+}
+
+/* ZSET.DETACHED_CALL_WALK key
+ *
+ * On the main thread, inside the command: takes a detached thread safe
+ * context, opens key through it, walks the whole score range running
+ * ValkeyModule_Call(PING) after the first element, closes the key and frees
+ * the context. The reply is the members visited, in order. */
+int zset_detached_call_walk(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    if (argc != 2) return ValkeyModule_WrongArity(ctx);
+    char members[16][16];
+    ValkeyModuleCtx *dctx = ValkeyModule_GetDetachedThreadSafeContext(ctx);
+    ValkeyModule_SelectDb(dctx, ValkeyModule_GetSelectedDb(ctx));
+    ValkeyModuleKey *key = ValkeyModule_OpenKey(dctx, argv[1], VALKEYMODULE_READ);
+    int count = zset_walk_with_call(ctx, dctx, key, members, 16);
+    ValkeyModule_CloseKey(key);
+    ValkeyModule_FreeThreadSafeContext(dctx);
+    ValkeyModule_ReplyWithArray(ctx, count);
+    for (int i = 0; i < count; i++) ValkeyModule_ReplyWithCString(ctx, members[i]);
+    return VALKEYMODULE_OK;
+}
+
 /* ZSET.THREAD_EXPIRED_ADD key hold_ms member score
  *
  * Blocks the client and runs a thread. The thread takes a thread safe
  * context, locks, opens key for writing, starts a full forward walk and
- * yields for hold_ms with ValkeyModule_Yield, so that the main thread runs
- * and the server clock moves past a short TTL the caller set on key.
+ * sets a TTL of hold_ms on key through the handle. It then yields with
+ * ValkeyModule_Yield until the clock is past the TTL (at most 5 seconds), so
+ * that the main thread runs and refreshes the server's command time.
  * Then it steps once and adds (score, member) through the same handle. The
  * reply is the step result and the sorted set length seen through the handle
  * after the add: the add must land on the existing key. */
@@ -807,12 +997,15 @@ static void *zset_thread_expired_add_run(void *argp) {
     ValkeyModuleCtx *ctx = ValkeyModule_GetThreadSafeContext(ta->bc);
     ValkeyModule_ThreadSafeContextLock(ctx);
     ValkeyModuleKey *key = ValkeyModule_OpenKey(ctx, ta->keyname, VALKEYMODULE_READ | VALKEYMODULE_WRITE);
-    if (ValkeyModule_ZsetFirstInScoreRange(key, VALKEYMODULE_NEGATIVE_INFINITE,
-                                           VALKEYMODULE_POSITIVE_INFINITE, 0, 0) == VALKEYMODULE_OK) {
-        /* Yield for hold_ms: the main thread runs in between and moves the
-         * server clock past the key's TTL. */
-        mstime_t until = ValkeyModule_Milliseconds() + ta->hold_ms;
-        while (ValkeyModule_Milliseconds() < until) ValkeyModule_Yield(ctx, VALKEYMODULE_YIELD_FLAG_CLIENTS, NULL);
+    if (key && ValkeyModule_ZsetFirstInScoreRange(key, VALKEYMODULE_NEGATIVE_INFINITE,
+                                                  VALKEYMODULE_POSITIVE_INFINITE, 0, 0) == VALKEYMODULE_OK) {
+        /* Set the TTL through the handle, then yield until the clock is past
+         * it: the main thread runs in between and moves the server clock. */
+        mstime_t start = ValkeyModule_Milliseconds();
+        ValkeyModule_SetExpire(key, ta->hold_ms);
+        mstime_t until = start + ta->hold_ms + 20;
+        while (ValkeyModule_Milliseconds() <= until && ValkeyModule_Milliseconds() < start + 5000)
+            ValkeyModule_Yield(ctx, VALKEYMODULE_YIELD_FLAG_CLIENTS, NULL);
         ta->moved = ValkeyModule_ZsetRangeNext(key);
         if (ValkeyModule_ZsetAdd(key, ta->score, ta->member, NULL) == VALKEYMODULE_OK)
             ta->len = ValkeyModule_ValueLength(key);
@@ -878,45 +1071,105 @@ static ValkeyModuleCtx *oneshot_ctx = NULL;
 static ValkeyModuleKey *oneshot_key = NULL;
 static ValkeyModuleString *oneshot_keyname = NULL;
 static int oneshot_db = 0;
-static int oneshot_ran = 0;
+static int oneshot_ran = 0;      /* the first callback ran */
+static int oneshot_started = 0;  /* the first callback started a walk */
+static int oneshot_check_ran = 0;/* the second callback ran */
+static int oneshot_ended = -1;   /* end flag the second callback saw */
+static int oneshot_pending = 0;  /* a callback is queued and not yet run */
+static int oneshot_cancelled = 0;
+static int oneshot_check_queued = 0;
 
-static void zset_oneshot_cb(void *user_data) {
-    VALKEYMODULE_NOT_USED(user_data);
-    ValkeyModule_SelectDb(oneshot_ctx, oneshot_db);
-    oneshot_key = ValkeyModule_OpenKey(oneshot_ctx, oneshot_keyname, VALKEYMODULE_READ);
-    if (oneshot_key && ValkeyModule_ZsetFirstInScoreRange(oneshot_key, VALKEYMODULE_NEGATIVE_INFINITE,
-                                                          VALKEYMODULE_POSITIVE_INFINITE, 0, 0) == VALKEYMODULE_OK)
-        ValkeyModule_ZsetRangeNext(oneshot_key);
-    oneshot_ran = 1;
-}
-
-int zset_oneshot_walk(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
-    if (argc != 2) return ValkeyModule_WrongArity(ctx);
-    if (oneshot_ctx != NULL) return ValkeyModule_ReplyWithError(ctx, "ERR one-shot walk already active");
-    oneshot_ctx = ValkeyModule_GetDetachedThreadSafeContext(ctx);
-    oneshot_keyname = ValkeyModule_CreateStringFromString(NULL, argv[1]);
-    oneshot_db = ValkeyModule_GetSelectedDb(ctx);
-    oneshot_ran = 0;
-    if (ValkeyModule_EventLoopAddOneShot(zset_oneshot_cb, NULL) != VALKEYMODULE_OK)
-        return ValkeyModule_ReplyWithError(ctx, "ERR cannot add one-shot event");
-    return ValkeyModule_ReplyWithSimpleString(ctx, "OK");
-}
-
-int zset_oneshot_status(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
-    VALKEYMODULE_NOT_USED(argv);
-    if (argc != 1) return ValkeyModule_WrongArity(ctx);
-    return ValkeyModule_ReplyWithLongLong(ctx, oneshot_ran);
-}
-
-int zset_oneshot_cleanup(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
-    VALKEYMODULE_NOT_USED(argv);
-    if (argc != 1) return ValkeyModule_WrongArity(ctx);
+static void zset_oneshot_free_state(void) {
     if (oneshot_key) ValkeyModule_CloseKey(oneshot_key);
     if (oneshot_ctx) ValkeyModule_FreeThreadSafeContext(oneshot_ctx);
     if (oneshot_keyname) ValkeyModule_FreeString(NULL, oneshot_keyname);
     oneshot_key = NULL;
     oneshot_ctx = NULL;
     oneshot_keyname = NULL;
+}
+
+static void zset_oneshot_cb(void *user_data) {
+    VALKEYMODULE_NOT_USED(user_data);
+    if (oneshot_cancelled) {
+        /* Cleanup was requested while we were queued: free and leave. */
+        zset_oneshot_free_state();
+        if (!oneshot_check_queued) {
+            oneshot_pending = 0;
+            oneshot_cancelled = 0;
+        }
+        return;
+    }
+    ValkeyModule_SelectDb(oneshot_ctx, oneshot_db);
+    oneshot_key = ValkeyModule_OpenKey(oneshot_ctx, oneshot_keyname, VALKEYMODULE_READ);
+    if (oneshot_key && ValkeyModule_ZsetFirstInScoreRange(oneshot_key, VALKEYMODULE_NEGATIVE_INFINITE,
+                                                          VALKEYMODULE_POSITIVE_INFINITE, 0, 0) == VALKEYMODULE_OK) {
+        ValkeyModule_ZsetRangeNext(oneshot_key);
+        oneshot_started = 1;
+    }
+    oneshot_ran = 1;
+}
+
+/* Runs after the first callback returned. It starts no walk: it only looks at
+ * the handle the first one left open. The server must have ended that walk
+ * when the first callback returned. */
+static void zset_oneshot_check_cb(void *user_data) {
+    VALKEYMODULE_NOT_USED(user_data);
+    if (oneshot_cancelled) {
+        zset_oneshot_free_state();
+        oneshot_cancelled = 0;
+        oneshot_ended = -1;
+    } else if (oneshot_key) {
+        oneshot_ended = ValkeyModule_ZsetRangeEndReached(oneshot_key);
+    }
+    oneshot_check_ran = 1;
+    oneshot_pending = 0;
+}
+
+int zset_oneshot_walk(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    if (argc != 2) return ValkeyModule_WrongArity(ctx);
+    if (oneshot_ctx != NULL || oneshot_pending) return ValkeyModule_ReplyWithError(ctx, "ERR one-shot walk already active");
+    oneshot_ctx = ValkeyModule_GetDetachedThreadSafeContext(ctx);
+    oneshot_keyname = ValkeyModule_CreateStringFromString(NULL, argv[1]);
+    oneshot_db = ValkeyModule_GetSelectedDb(ctx);
+    oneshot_ran = oneshot_started = oneshot_check_ran = 0;
+    oneshot_ended = -1;
+    oneshot_cancelled = 0;
+    oneshot_pending = 1;
+    oneshot_check_queued = 0;
+    if (ValkeyModule_EventLoopAddOneShot(zset_oneshot_cb, NULL) != VALKEYMODULE_OK) {
+        zset_oneshot_free_state();
+        oneshot_pending = 0;
+        return ValkeyModule_ReplyWithError(ctx, "ERR cannot add one-shot event");
+    }
+    if (ValkeyModule_EventLoopAddOneShot(zset_oneshot_check_cb, NULL) != VALKEYMODULE_OK) {
+        /* The first callback is queued and will free the state. */
+        oneshot_cancelled = 1;
+        return ValkeyModule_ReplyWithError(ctx, "ERR cannot add one-shot event");
+    }
+    oneshot_check_queued = 1;
+    return ValkeyModule_ReplyWithSimpleString(ctx, "OK");
+}
+
+/* Replies {done started ended_at_return}: done is 1 once both callbacks ran,
+ * started is 1 if the first callback started a walk, ended_at_return is the
+ * end flag the second callback read from the first one's handle. */
+int zset_oneshot_status(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    VALKEYMODULE_NOT_USED(argv);
+    if (argc != 1) return ValkeyModule_WrongArity(ctx);
+    ValkeyModule_ReplyWithArray(ctx, 3);
+    ValkeyModule_ReplyWithLongLong(ctx, oneshot_ran && oneshot_check_ran);
+    ValkeyModule_ReplyWithLongLong(ctx, oneshot_started);
+    ValkeyModule_ReplyWithLongLong(ctx, oneshot_ended);
+    return VALKEYMODULE_OK;
+}
+
+/* Frees the state at once if no callback is queued; otherwise marks it
+ * cancelled and the pending callback frees it. Idempotent. */
+int zset_oneshot_cleanup(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    VALKEYMODULE_NOT_USED(argv);
+    if (argc != 1) return ValkeyModule_WrongArity(ctx);
+    if (oneshot_pending) oneshot_cancelled = 1;
+    else zset_oneshot_free_state();
     return ValkeyModule_ReplyWithSimpleString(ctx, "OK");
 }
 
@@ -1029,6 +1282,17 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
                                   1, 1, 1) == VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
 
+    if (ValkeyModule_CreateCommand(ctx, "zset.filter", zset_filter, "", 0, 0, 0) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
+
+    if (ValkeyModule_CreateCommand(ctx, "zset.thread_call_walk", zset_thread_call_walk, "readonly",
+                                  1, 1, 1) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
+
+    if (ValkeyModule_CreateCommand(ctx, "zset.detached_call_walk", zset_detached_call_walk, "readonly",
+                                  1, 1, 1) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
+
     if (ValkeyModule_CreateCommand(ctx, "zset.thread_expired_add", zset_thread_expired_add, "write",
                                   1, 1, 1) == VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
@@ -1043,6 +1307,10 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
 
     if (ValkeyModule_CreateCommand(ctx, "zset.oneshot_cleanup", zset_oneshot_cleanup, "readonly",
                                   0, 0, 0) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
+
+    if (ValkeyModule_CreateCommand(ctx, "zset.writewhilewalking", zset_writewhilewalking, "write",
+                                  1, 1, 1) == VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
 
     if (ValkeyModule_CreateCommand(ctx, "zset.walk_leak", zset_walk_leak, "write",

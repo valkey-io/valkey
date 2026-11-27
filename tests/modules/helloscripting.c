@@ -605,6 +605,9 @@ static void engineFreeFunction(ValkeyModuleCtx *module_ctx,
     ValkeyModule_Free(compiled_function);
 }
 
+/* Key handle left open by the "leakwalk" test hook below. */
+static ValkeyModuleKey *leaked_key = NULL;
+
 static ValkeyModuleScriptingEngineCompiledFunction **createHelloLangEngine(ValkeyModuleCtx *module_ctx,
                                                                            ValkeyModuleScriptingEngineCtx *engine_ctx,
                                                                            ValkeyModuleScriptingEngineSubsystemType type,
@@ -613,13 +616,29 @@ static ValkeyModuleScriptingEngineCompiledFunction **createHelloLangEngine(Valke
                                                                            size_t timeout,
                                                                            size_t *out_num_compiled_functions,
                                                                            ValkeyModuleString **err) {
-    VALKEYMODULE_NOT_USED(module_ctx);
     VALKEYMODULE_NOT_USED(code_len);
     VALKEYMODULE_NOT_USED(type);
     VALKEYMODULE_NOT_USED(timeout);
     VALKEYMODULE_NOT_USED(err);
 
     HelloLangCtx *ctx = (HelloLangCtx *)engine_ctx;
+
+    /* Test hook: a function named "leakwalk" makes the compile callback open the
+     * sorted set "k" and start a range walk on it without closing the key, so
+     * the walk outlives this callback. The server must end it when it frees
+     * this context (tests/unit/moduleapi/zset.tcl). A later library with a
+     * function named "closeleak" closes the handle, so the test leaks nothing. */
+    if (strstr(code, "FUNCTION leakwalk") != NULL && leaked_key == NULL) {
+        ValkeyModuleString *kn = ValkeyModule_CreateString(NULL, "k", 1);
+        leaked_key = ValkeyModule_OpenKey(module_ctx, kn, VALKEYMODULE_READ);
+        ValkeyModule_FreeString(NULL, kn);
+        if (leaked_key != NULL) {
+            ValkeyModule_ZsetFirstInScoreRange(leaked_key, VALKEYMODULE_NEGATIVE_INFINITE, VALKEYMODULE_POSITIVE_INFINITE, 0, 0);
+        }
+    } else if (strstr(code, "FUNCTION closeleak") != NULL && leaked_key != NULL) {
+        ValkeyModule_CloseKey(leaked_key);
+        leaked_key = NULL;
+    }
 
     if (ctx->program == NULL) {
         ctx->program = ValkeyModule_Alloc(sizeof(HelloProgram));

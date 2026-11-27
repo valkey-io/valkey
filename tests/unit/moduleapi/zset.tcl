@@ -326,6 +326,30 @@ start_server {tags {"modules"}} {
             assert_equal PONG [r ping]
         }
 
+        test "Module zset range walk of a module thread survives a Call that runs command filters - $enc" {
+            r del k
+            r zadd k 1 a 2 b 3 c 4 d 5 e
+            assert_equal $enc [r object encoding k]
+            assert_equal OK [r zset.filter 1]
+            test_defer {r zset.filter 0}
+            # The thread holds the lock, walks, and runs a Call after the
+            # first element: the filter's return must not end its walk.
+            assert_equal {a b c d e} [r zset.thread_call_walk k]
+            assert_equal PONG [r ping]
+        }
+
+        test "Module zset range walk of a detached context survives a Call that runs command filters - $enc" {
+            r del k
+            r zadd k 1 a 2 b 3 c 4 d 5 e
+            assert_equal $enc [r object encoding k]
+            assert_equal OK [r zset.filter 1]
+            test_defer {r zset.filter 0}
+            # Same on the main thread, inside a command, through a detached
+            # thread safe context.
+            assert_equal {a b c d e} [r zset.detached_call_walk k]
+            assert_equal PONG [r ping]
+        }
+
         test "Module zset range walk continues on a key that expired logically while open - $enc" {
             r del k
             r zadd k 1 a 2 b 3 c
@@ -333,14 +357,14 @@ start_server {tags {"modules"}} {
             r debug set-active-expire 0
             test_defer {r debug set-active-expire 1}
             test_config_set r busy-reply-threshold 1
-            r pexpire k 20
-            # The thread yields for 100 ms; the main thread runs in between, so
-            # the server clock passes the TTL while the walk is open. The walk
+            # The worker sets a 20 ms TTL through its handle after the walk
+            # started, then yields until the clock is past it; the main thread
+            # runs in between and refreshes the command time. The walk
             # re-finds the key without an expiry check, as the handle never
             # did: the step moves and the add lands on the existing key instead
             # of creating it again.
             set rd [valkey_deferring_client]
-            $rd zset.thread_expired_add k 100 d 4
+            $rd zset.thread_expired_add k 20 d 4
             assert_equal {1 4} [$rd read]
             $rd close
             assert_equal PONG [r ping]
@@ -400,6 +424,79 @@ start_server {tags {"modules"}} {
         }
     }
     r config set zset-max-listpack-entries 128
+
+    # Ported from the closed PR #5363 (setups), with the results of the dial
+    # model: a walk's position is the entry it last returned; a step returns
+    # the first entry strictly beyond it in the set as it is now; the current
+    # element is the entry at the position if still present; the end flag is
+    # set only by a step that finds nothing.
+    test "Module zset write while walking keeps the walk - listpack" {
+        r del k
+        r zadd k 1 a 2 b 3 c 4 d 5 e
+        assert_equal listpack [r object encoding k]
+        # Position (1,a). After removing a b c the set is d e. No step has
+        # failed so the end flag is 0; a is gone so current is NULL; the
+        # steps return d and e.
+        assert_equal {0 {} 2} [r zset.writewhilewalking k first rem a b c]
+        # Set d(4) e(5). Reverse walk from (5,e). The adds put x y z at score
+        # 0, behind e: e is still present, so current is e; reverse steps
+        # return d, z, y, x.
+        assert_equal {0 e 4} [r zset.writewhilewalking k last add x y z]
+        # Set x y z (0) d(4) e(5). Forward walk from (0,x). x keeps its
+        # score so it is current; incrby moves d to 5 and e to 6, they keep
+        # their order; steps return y, z, d, e.
+        assert_equal {0 x 4} [r zset.writewhilewalking k first incrby d e]
+        assert_equal {x 0 y 0 z 0 d 5 e 6} [r zrange k 0 -1 withscores]
+        # Lex walk from x; removing every member deletes the key, so the walk
+        # has nothing to return: current NULL, no steps, end flag 0 (no
+        # step failed before the reply).
+        assert_equal {0 {} 0} [r zset.writewhilewalking k lex rem x y z d e]
+        assert_equal 0 [r exists k]
+    }
+
+    test "Module zset write while walking keeps the walk - btree, emptied leaf" {
+        test_config_set r zset-max-listpack-entries 0
+        set members {}
+        for {set i 0} {$i < 2000} {incr i} {
+            lappend members $i [format m%04d $i]
+        }
+        r del k
+        r zadd k {*}$members
+        assert_equal btree [r object encoding k]
+        set first100 {}
+        for {set i 0} {$i < 100} {incr i} {
+            lappend first100 [format m%04d $i]
+        }
+        # Position (0,m0000), removed with the other 99: current is NULL; the
+        # untouched members ahead of the position are m0100..m1999, 1900.
+        assert_equal {0 {} 1900} [r zset.writewhilewalking k first rem {*}$first100]
+        assert_equal 1900 [r zcard k]
+        assert_equal m0100 [lindex [r zrange k 0 0] 0]
+    }
+
+    test "Module zset write while walking keeps the walk - btree, compacted leaves" {
+        test_config_set r zset-max-listpack-entries 0
+        set members {}
+        for {set i 0} {$i < 2000} {incr i} {
+            lappend members $i [format m%04d $i]
+        }
+        r del k
+        r zadd k {*}$members
+        assert_equal btree [r object encoding k]
+        set scattered {}
+        for {set i 1} {$i < 1998} {incr i} {
+            if {$i % 3 != 0} {
+                lappend scattered [format m%04d $i]
+            }
+        }
+        # Position (1999,m1999) is never removed, so it is current. The
+        # reverse steps return every remaining member before it: the set
+        # holds 2000 - len(scattered) members, one of them the position.
+        assert_equal [list 0 m1999 [expr {2000 - [llength $scattered] - 1}]] \
+            [r zset.writewhilewalking k last rem {*}$scattered]
+        assert_equal [expr {2000 - [llength $scattered]}] [r zcard k]
+        assert_equal m1999 [lindex [r zrange k -1 -1] 0]
+    }
 
     foreach {enc max_entries} {listpack 128 btree 0} {
         test "Module key handle closes cleanly after a Call turns its string into a $enc zset" {
@@ -473,18 +570,57 @@ start_server {tags {"modules"}} {
             r zadd k2 1 a
             assert_equal $type [r object encoding k]
             assert_equal OK [r zset.oneshot_walk k]
-            wait_for_condition 100 10 {[r zset.oneshot_status] == 1} else {
-                fail "one-shot callback did not run"
+            test_defer {r zset.oneshot_cleanup}
+            wait_for_condition 100 10 {[lindex [r zset.oneshot_status] 0] == 1} else {
+                fail "one-shot callbacks did not run"
             }
+            # {done started ended_at_return}: the first callback started a walk
+            # and left its handle open; the second callback, queued right
+            # after it, saw the walk ended when the first callback returned.
+            assert_equal {1 1 1} [r zset.oneshot_status]
             # The walk's handle stays open with no command around it. Grow the
             # set so the listpack moves, then run any module hook.
             for {set i 0} {$i < 20} {incr i} {
                 r zadd k $i [string repeat m$i 10]
             }
             assert_equal {a} [r zset.iter_mut k2 score -inf +inf fwd 0 call PING]
-            assert_equal OK [r zset.oneshot_cleanup]
             assert_equal PONG [r ping]
         }
 
+    }
+}
+
+set hellomodule [file normalize tests/modules/helloscripting.so]
+
+start_server {tags {"modules"}} {
+    r module load $testmodule
+    r module load $hellomodule
+
+    test "Module zset range walk leaked by a scripting engine callback is ended when its context is freed" {
+        # The engine's compile callback runs with the lock held in a context
+        # the server frees afterwards; a walk it leaves open must end there.
+        # Inside MULTI no other hook runs between the three commands: the
+        # ZADD moves the listpack, and the module command's Call would then
+        # read the leaked walk's pointer into freed memory.
+        r select 0
+        r del k
+        r zadd k 1 a 2 b 3 c
+        r multi
+        r function load "#!hello name=leakwalk\nFUNCTION leakwalk\nARGS 0\nRETURN"
+        set args {}
+        for {set i 0} {$i < 100} {incr i} {lappend args [expr {$i + 10}] [format member%03d $i]}
+        r zadd k {*}$args
+        r zset.walk_range k score -inf +inf fwd 1
+        set res [r exec]
+        assert_equal leakwalk [lindex $res 0]
+        assert_equal 100 [lindex $res 1]
+        assert_equal 100 [llength [lindex $res 2]]
+        assert_equal PONG [r ping]
+        # Close the leaked handle (its walk is already gone) so nothing leaks.
+        r function load "#!hello name=closeleak\nFUNCTION closeleak\nARGS 0\nRETURN"
+        r function delete leakwalk
+        r function delete closeleak
+        r del k
+        r select 9
     }
 }

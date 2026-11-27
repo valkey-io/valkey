@@ -210,6 +210,7 @@ size_t moduleCount(void);
 void moduleAcquireGIL(void);
 int moduleTryAcquireGIL(void);
 void moduleReleaseGIL(void);
+void moduleReleaseGILTemporarily(void);
 void moduleNotifyKeyspaceEvent(int type, const char *event, robj *key, int dbid);
 unsigned long moduleNotifyKeyspaceSubscribersCnt(void);
 void firePostExecutionUnitJobs(void);

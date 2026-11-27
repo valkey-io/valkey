@@ -2985,11 +2985,7 @@ start_server {tags {"repl external:skip needs:debug"} overrides {save "" forkles
                 $primary set x 1
                 $primary flushdb async
             }
-            $primary multi
-            $primary set x before_flush
-            $primary flushdb sync
-            $primary set x after_flush
-            $primary exec
+            $primary set x final_top_level
 
             # Minor-DB flushes must not have terminated the forkless sync.
             assert_equal 1 [s -1 rdb_bgsave_in_progress]
@@ -3006,7 +3002,82 @@ start_server {tags {"repl external:skip needs:debug"} overrides {save "" forkles
 
             assert_equal [$primary debug digest] [$replica debug digest]
             $replica select 1
-            assert_equal "after_flush" [$replica get x]
+            assert_equal "final_top_level" [$replica get x]
+            $replica select 2
+            assert_equal "v2" [$replica get keep_db2]
+            $replica select 0
+        }
+
+        test "FLUSHDB inside MULTI/EXEC and Lua EVAL during forkless full sync does not crash primary" {
+            $replica replicaof no one
+            $primary flushall
+            $primary select 0
+            $primary debug populate 50000 key 100
+
+            set loglines [count_log_lines -1]
+            $primary config set rdb-key-save-delay 100
+            $replica replicaof $primary_host $primary_port
+            wait_for_log_messages -1 {"*target: replicas sockets*method: forkless*"} $loglines 100 100
+            wait_for_condition 100 50 {
+                [s -1 current_save_keys_processed] > 0
+            } else {
+                fail "forkless sync did not start scanning"
+            }
+
+            $primary select 2
+            $primary set keep_db2 v2
+
+            # Repeatedly allocate and flush a key in unscanned DB 1 inside MULTI/EXEC so
+            # address reuse hits early_iterate_entries if emptyData() failed to evict it.
+            $primary select 1
+            for {set i 0} {$i < 500} {incr i} {
+                $primary multi
+                $primary set x before_flush
+                $primary flushdb sync
+                $primary set x after_flush_
+                $primary exec
+            }
+            assert_equal "after_flush_" [$primary get x]
+            assert_equal 1 [s -1 rdb_bgsave_in_progress]
+
+            # Same pattern from Lua EVAL, both replicated and with replication disabled.
+            set eval_script {
+                server.call('SELECT', 1)
+                server.call('SET', 'x', 'before_flush')
+                server.call('FLUSHDB', 'SYNC')
+                server.call('SET', 'x', 'after_eval__')
+                return 'OK'
+            }
+            for {set i 0} {$i < 500} {incr i} {
+                assert_equal "OK" [$primary eval $eval_script 0]
+            }
+            set norepl_script {
+                server.call('SELECT', 1)
+                server.call('SET', 'x', 'before_flush')
+                server.set_repl(server.REPL_NONE)
+                server.call('FLUSHDB', 'SYNC')
+                server.set_repl(server.REPL_ALL)
+                server.call('SET', 'x', 'after_norepl')
+                return 'OK'
+            }
+            for {set i 0} {$i < 200} {incr i} {
+                assert_equal "OK" [$primary eval $norepl_script 0]
+            }
+            assert_equal 1 [s -1 rdb_bgsave_in_progress]
+            $primary select 0
+
+            $primary config set rdb-key-save-delay 0
+            wait_for_condition 200 100 {
+                [s -1 rdb_bgsave_in_progress] == 0 &&
+                [status $replica master_link_status] eq "up"
+            } else {
+                fail "forkless sync did not complete"
+            }
+            wait_for_ofs_sync $primary $replica
+
+            assert_equal [$primary debug digest] [$replica debug digest]
+            $replica select 1
+            assert_equal "after_norepl" [$replica get x]
             $replica select 2
             assert_equal "v2" [$replica get keep_db2]
             $replica select 0

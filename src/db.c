@@ -688,8 +688,8 @@ long long emptyData(int dbnum, int flags, void(callback)(hashtable *)) {
         return -1;
     }
 
-    /* bgIteration must be notified for flushall. */
-    if (dbnum == -1) bgIteration_flushall();
+    /* bgIteration must be notified before the DB entries are freed. */
+    bgIteration_flushdb(dbnum);
 
     /* Fire the flushdb modules event. */
     moduleFireServerEvent(VALKEYMODULE_EVENT_FLUSHDB, VALKEYMODULE_SUBEVENT_FLUSHDB_START, &fi);

@@ -1050,6 +1050,7 @@ class BgIterationTest : public ::testing::Test {
         simulateUnblockedWrite_inCall(c); // FLUSHDB should never block
 
         // The real FLUSH does more than this, but this is enough for unit tests
+        bgIteration_flushdb(db);
 
         // Now flush the items
         for (int d = 0; d < server.dbnum; d++) {

@@ -299,9 +299,15 @@ void bgIteration_beforeSleep(void);
 void bgIteration_keyDelete(int dbid, const_sds key);
 
 
-/* Iteration needs to know if a FLUSHALL is being performed.  For normal clients, this comes through
- * the standard "blockClientIfRequired" interface.  This interface is for cases where Valkey
- * performs the FLUSHALL operation independently of clients (e.g. when syncing with master). */
+/* Iteration needs to know whenever a DB (or all DBs, when dbid == -1) is being flushed,
+ * regardless of how the flush was triggered (top-level command, MULTI/EXEC, script, module,
+ * or internal server operation), so this is called directly from the flush path before the
+ * entries are freed. */
+void bgIteration_flushdb(int dbid);
+
+
+/* Iteration needs to know if a FLUSHALL is being performed (e.g. when swapping in a newly
+ * loaded DB during sync with primary).  Equivalent to bgIteration_flushdb(-1). */
 void bgIteration_flushall(void);
 
 

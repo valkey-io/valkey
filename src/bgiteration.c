@@ -2376,8 +2376,14 @@ void bgIteration_keyDelete(int dbid, const_sds key) {
 
 
 // PUBLIC API
+void bgIteration_flushdb(int dbid) {
+    if (bgIteration_iterationActive()) handleFlushdb(dbid);
+}
+
+
+// PUBLIC API
 void bgIteration_flushall(void) {
-    handleFlushdb(-1);
+    bgIteration_flushdb(-1);
 }
 
 
@@ -2406,15 +2412,6 @@ bool bgIteration_blockClientIfRequired(client *c) {
      * as the command and keys are examined for expedite. */
     resetReplicationFlagForIterators(c);
     iteratorReplicationFlagsWereUpdated = true;
-
-    if (c->cmd->proc == flushdbCommand || c->cmd->proc == flushallCommand) {
-        // Handle flush commands prior to execution
-        int flags;
-        if (parseFlushCommandFlags(c, &flags) == C_OK) {
-            // The command parsed ok - we WILL flush
-            handleFlushdb((c->cmd->proc == flushdbCommand) ? c->db->id : -1);
-        }
-    }
 
     bool mustBlock = false;
     hashtable *waitOnKeys = hashtableCreate(&tempKeysetHashtableType); // set of robj(sds)

@@ -1966,6 +1966,50 @@ start_multiple_servers 2 {overrides {cluster-enabled yes cluster-protocol raft c
             close $fd
         }
     }
+
+    test "Raft shard epoch: uncommitted FAILOVER rejects a second proposal for the same epoch" {
+        # Long timeout so the leader stays up while the replica cannot ACK.
+        R 0 CONFIG SET cluster-node-timeout 30000
+        pause_process [srv -1 pid]
+        test_defer [list resume_process [srv -1 pid]]
+
+        set applied_before [CI 0 cluster_raft_last_applied]
+        set logs_before [CI 0 cluster_raft_log_entries]
+        set commit_before [CI 0 cluster_raft_commit_index]
+        set loglines [count_log_lines 0]
+
+        set failover_msg "PROPOSE FAILOVER $node1_id $node_id $node0_shard 1"
+        set fd [raft_connect_fake_node 127.0.0.1 $cport $fake_id $fake_addr]
+        raft_send $fd $failover_msg
+
+        wait_for_condition 50 100 {
+            [CI 0 cluster_raft_log_entries] == [expr {$logs_before + 1}] &&
+            [CI 0 cluster_raft_last_applied] == $applied_before
+        } else {
+            fail "first FAILOVER was not appended without applying"
+        }
+        assert_equal $commit_before [CI 0 cluster_raft_commit_index]
+
+        # Drain a possible AE on this link.
+        catch {raft_recv $fd 200}
+
+        raft_send $fd $failover_msg
+        set reply [raft_recv $fd 2000]
+        assert_match "REJECT conflict *" $reply
+        wait_for_log_messages 0 {"*Leader pre-validation: rejecting*"} $loglines 1000 10
+        assert_equal [expr {$logs_before + 1}] [CI 0 cluster_raft_log_entries]
+        assert_equal $applied_before [CI 0 cluster_raft_last_applied]
+
+        # SLOT_CHANGE must see the uncommitted FAILOVER's epoch bump.
+        set slot_msg "PROPOSE SLOT_CHANGE $node_id 1 $node1_id 1 0-100"
+        raft_send $fd $slot_msg
+        set reply [raft_recv $fd 2000]
+        assert_match "REJECT conflict *" $reply
+        assert_equal [expr {$logs_before + 1}] [CI 0 cluster_raft_log_entries]
+        assert_equal $applied_before [CI 0 cluster_raft_last_applied]
+
+        close $fd
+    }
 }
 
 test "Raft proto: INSTALL_SNAPSHOT is not ACKed past the snapshot" {

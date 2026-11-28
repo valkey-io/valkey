@@ -961,10 +961,13 @@ Epoch validation happens at two points:
 1. **Pre-validation on the leader** — before appending to the log.
    This is a best-effort optimization that rejects obviously stale
    proposals early, saving log space and replication bandwidth. It
-   performs a read-only check without bumping the epoch.
+   performs a read-only check without bumping the applied epoch.
+   Epochs are compared against the applied value plus uncommitted
+   bumping entries (`FAILOVER`, `SET_REPLICA_OF`, `NODE_FORGET`).
+   `SLOT_CHANGE` only checks, so concurrent slot moves still pass.
 
 2. **Apply-time validation** — the authoritative check. Each apply
-   function validates the entry's epoch against the current shard
+   function validates the entry's epoch against the applied shard
    epoch. On match (or epoch 0 for a new shard), the epoch is bumped
    and the entry is applied. On mismatch, the entry is a no-op and
    the error is propagated to the caller's callback.
@@ -976,6 +979,8 @@ with a fresh epoch (up to 5 attempts):
 
 - **SET_REPLICA_OF / NODE_FORGET / FAILOVER (force) / SLOT_CHANGE** —
   the proposal is rebuilt with current epoch(s) and re-submitted.
+  If an uncommitted entry caused the conflict but was skipped on apply
+  or dropped on leader change, the proposal can retry at the same epoch.
 
 - **Automatic failover** — if the FAILOVER proposal is rejected, the
   failover is re-scheduled (via `todo_schedule_failover`) as long as

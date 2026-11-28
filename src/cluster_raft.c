@@ -498,8 +498,8 @@ static raftQuorumChangeStatus clusterRaftQuorumChangeStatus(int type, sds data);
 static uint64_t raftInFlightQuorumChangeIndex(void);
 static void clusterRaftScheduleParkedRetries(void);
 static clusterNode *clusterRaftSelectPromotionCandidate(void);
-static clusterNode *clusterRaftSelectDemotionCandidate(void);
-static void clusterRaftReconcileVoters(void);
+static clusterNode *clusterRaftSelectDemotionCandidate(mstime_t now);
+static void clusterRaftReconcileVoters(mstime_t now);
 
 static void clusterRaftRandomizeElectionTimeout(void) {
     mstime_t base = server.cluster_node_timeout;
@@ -3522,28 +3522,36 @@ static clusterNode *clusterRaftSelectPromotionCandidate(void) {
     return NULL;
 }
 
-/* A voter the leader may demote. Not the leader, and not the last voter.
- * Prefer cluster-voter no. If the voting set is above RAFT_TARGET_VOTERS,
- * an auto voter is also eligible. yes is never demoted. */
-static clusterNode *clusterRaftSelectDemotionCandidate(void) {
+/* Prefer cluster-voter no over excess auto voters. Keep a responsive majority
+ * of the voting set that will remain after the demotion. */
+static clusterNode *clusterRaftSelectDemotionCandidate(mstime_t now) {
     if (server.cluster->size <= 1) return NULL;
-    clusterNode *auto_excess = NULL;
+    int responsive_voters = 1; /* The leader keeps its vote. */
+    clusterNode *candidate = NULL, *unresponsive_candidate = NULL;
     dictIterator *di = dictGetSafeIterator(server.cluster->nodes);
     dictEntry *de;
     while ((de = dictNext(di)) != NULL) {
         clusterNode *n = dictGetVal(de);
         if (n == myself || !nodeIsVoter(n)) continue;
-        if (n->voter_policy == CLUSTER_VOTER_NO) {
-            dictReleaseIterator(di);
-            return n;
-        }
-        if (auto_excess == NULL && n->voter_policy == CLUSTER_VOTER_AUTO &&
-            server.cluster->size > RAFT_TARGET_VOTERS) {
-            auto_excess = n;
-        }
+
+        /* Election initializes last_ack_time even for silent peers. Require
+         * an actual replication ACK on the current link before counting one. */
+        clusterNodeRaftData *rd = RAFT_NODE(n);
+        bool responsive = !nodeFailed(n) && n->link && rd->replicating &&
+                          now - rd->last_ack_time <= server.cluster_node_timeout;
+        if (responsive) responsive_voters++;
+
+        if (n->voter_policy != CLUSTER_VOTER_NO &&
+            !(n->voter_policy == CLUSTER_VOTER_AUTO && server.cluster->size > RAFT_TARGET_VOTERS)) continue;
+        if (!candidate || n->voter_policy == CLUSTER_VOTER_NO) candidate = n;
+        if (!responsive && (!unresponsive_candidate || n->voter_policy == CLUSTER_VOTER_NO)) unresponsive_candidate = n;
     }
     dictReleaseIterator(di);
-    return auto_excess;
+
+    int new_quorum = (server.cluster->size - 1) / 2 + 1;
+    if (responsive_voters > new_quorum) return candidate;
+    if (responsive_voters == new_quorum) return unresponsive_candidate;
+    return NULL;
 }
 
 /* Append one ADD_VOTER or DEL_VOTER; not retried after a leader change. */
@@ -3568,11 +3576,11 @@ static void clusterRaftAppendMembershipChange(int type, clusterNode *node) {
 /* Leader-only. Turn each node's cluster-voter wish into one membership
  * change. Demote first (no, then excess auto above the target), then promote.
  * Stops while any quorum change is in flight. */
-static void clusterRaftReconcileVoters(void) {
+static void clusterRaftReconcileVoters(mstime_t now) {
     clusterRaftState *rs = RAFT_STATE();
     if (rs->role != RAFT_ROLE_LEADER) return;
 
-    clusterNode *demote = clusterRaftSelectDemotionCandidate();
+    clusterNode *demote = clusterRaftSelectDemotionCandidate(now);
     if (demote) {
         clusterRaftAppendMembershipChange(RAFT_ENTRY_DEL_VOTER, demote);
         return;
@@ -3738,7 +3746,7 @@ static void clusterRaftCron(void) {
             }
             myself->repl_offset = my_offset;
             clusterRaftDetectFailures(now);
-            clusterRaftReconcileVoters();
+            clusterRaftReconcileVoters(now);
         }
     }
 

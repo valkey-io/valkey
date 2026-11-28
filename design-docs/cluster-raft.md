@@ -562,6 +562,9 @@ learner, including when it is configured `yes`.
   leave it a learner. The leader does not demote itself, and does not
   demote the last voter.
 
+For both `auto` and `no`, the leader defers demotion until enough of the
+remaining voters are responsive to form a majority of the smaller set.
+
 A promotion candidate must have finished joining (no MEET flag), not be
 failed, have an active link, and have `match_index` caught up with the
 leader's last log index. `CLUSTER FORGET` of a voter can still shrink

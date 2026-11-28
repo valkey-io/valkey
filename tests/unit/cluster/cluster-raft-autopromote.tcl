@@ -49,6 +49,37 @@ start_cluster 6 0 {overrides {cluster-protocol raft cluster-node-timeout 1000}} 
     }
 }
 
+start_cluster 7 0 {overrides {cluster-protocol raft cluster-node-timeout 1200}} {
+    foreach policy {auto no} {
+        test "Raft autopromote: cluster-voter $policy waits for a quorum of remaining voters" {
+            for {set i 0} {$i < 7} {incr i} {raft_set_voter $i yes}
+            wait_for_raft_cluster_size 7
+            set failed_ids {}
+            foreach i {4 5 6} {
+                lappend failed_ids [R $i CLUSTER MYID]
+                pause_process [srv -$i pid]
+            }
+            wait_for_condition 100 50 {
+                [cluster_all_see_flag {0} $failed_ids fail]
+            } else {fail "Leader did not mark the three paused voters as failed"}
+
+            set loglines [count_log_lines 0]
+            raft_set_voter 1 $policy
+            wait_for_log_messages 0 {"*Applied NODE_INFO*"} $loglines 100 50
+            # Give the controller several cron ticks to act on the policy.
+            after 300
+            assert_equal OK [R 0 CLUSTER DELSLOTS 0]
+            assert_equal 7 [CI 0 cluster_size]
+
+            # One recovery leaves four responsive voters even after the demotion.
+            resume_process [srv -4 pid]
+            wait_for_raft_cluster_size 6
+            assert_equal learner [CI 1 cluster_raft_role]
+            assert_equal OK [R 0 CLUSTER ADDSLOTS 0]
+        }
+    }
+}
+
 start_cluster 5 0 {overrides {cluster-protocol raft cluster-node-timeout 1000}} {
     test "Raft autopromote: DELVOTER below target is applied, then the learner is promoted" {
         set target [raft_find_voter 0 5]

@@ -1602,10 +1602,10 @@ static int clusterRaftProcessUnchanged(clusterLink *link, int argc, sds *argv) {
  * <reason> is a single word: "conflict" (retryable epoch), "rejected" (terminal),
  * "voter-change-pending" (retry after applying <index>), etc. */
 static int clusterRaftProcessReject(clusterLink *link, int argc, sds *argv) {
-    UNUSED(link);
-
     /* argv[0]="REJECT", argv[1]=reason, argv[2]=index, argv[3]=type, argv[4..]=data */
     if (argc < 4) return 1;
+    clusterRaftState *rs = RAFT_STATE();
+    if (!link->node || memcmp(link->node->name, rs->leader, CLUSTER_NAMELEN) != 0) return 1;
 
     const char *reason = argv[1];
     uint64_t index = strtoull(argv[2], NULL, 10);
@@ -1620,7 +1620,6 @@ static int clusterRaftProcessReject(clusterLink *link, int argc, sds *argv) {
     if (result == RAFT_RESULT_VOTER_CHANGE_PENDING) {
         /* Park until last_applied catches up. If AE already applied that
          * entry, the retry runs from beforeSleep. */
-        clusterRaftState *rs = RAFT_STATE();
         listIter li;
         listNode *ln;
         listRewind(rs->pending_proposals, &li);

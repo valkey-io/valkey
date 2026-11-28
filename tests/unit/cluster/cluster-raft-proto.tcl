@@ -1308,7 +1308,7 @@ test "Raft proto: a new leader doesn't treat the old leader as failed if it vote
     }
 }
 
-test "Raft proto: proposal waits for a new leader instead of expiring" {
+test "Raft proto: proposal waits for a new leader and ignores the old leader's REJECT" {
     # The leader goes silent after receiving a proposal, and a new leader
     # shows up more than 2x node-timeout later. The proposal is resent to the
     # new leader, which restarts its expiry, so it commits more than 3x
@@ -1323,7 +1323,7 @@ test "Raft proto: proposal waits for a new leader instead of expiring" {
         # Listeners for the node's outbound links to the fake nodes A and B.
         set listen_a [raft_listen a_cport]
         set listen_b [raft_listen b_cport]
-        set a_addr "127.0.0.1:[expr {$a_cport - 10000}]@$a_cport,,tls-port=0,shard-id=[string repeat b 40]"
+        set a_addr "127.0.0.1:[expr {$a_cport - 10000}]@$a_cport,,tls-port=0,shard-id=[string repeat b 40],voter=no"
         set b_addr "127.0.0.1:[expr {$b_cport - 10000}]@$b_cport,,tls-port=0,shard-id=[string repeat c 40]"
 
         # A forms a cluster of three voters (A, B and the node) and leads it.
@@ -1339,23 +1339,37 @@ test "Raft proto: proposal waits for a new leader instead of expiring" {
         assert_match "HELLO *" [raft_recv $out_b]
         raft_send $out_b "HI $b_id $b_addr"
 
-        # The node proposes a slot change to A, which never replies.
+        # The node asks to forget A. A's reply is delayed.
         set rd [valkey_deferring_client]
         set start [clock milliseconds]
-        $rd cluster addslots 0
-        set propose [raft_recv_until $out_a "PROPOSE SLOT_CHANGE *"]
+        $rd cluster forget $a_id
+        set propose [raft_recv_until $out_a "PROPOSE NODE_FORGET *"]
         set entry [string range $propose [string length "PROPOSE "] end]
 
         # B becomes leader in term 2, more than 2x node-timeout later. The node
         # resends the proposal to B.
         after 2500
         set fd_b [raft_connect_fake_node 127.0.0.1 $cport $b_id $b_addr]
-        raft_send $fd_b "AE $b_id 2 3 1 3 0 0"
+        raft_send $fd_b "AE $b_id 2 3 1 4 0 2\n2 NOOP \n2 DEL_VOTER $a_id"
         assert_equal $propose [raft_recv_until $out_b "PROPOSE *"]
 
-        # B commits it more than 3x node-timeout after it was first proposed.
+        # B parks the proposal until index 5. A's late reply refers to
+        # index 7 in its old log. Deliver the replies in that order.
+        foreach {fd index} [list $out_b 5 $out_a 7] {
+            set received [CI 0 cluster_stats_bytes_received]
+            raft_send $fd "REJECT voter-change-pending $index $entry"
+            wait_for_condition 50 10 {
+                [CI 0 cluster_stats_bytes_received] > $received
+            } else {
+                fail "follower didn't receive the REJECT for index $index"
+            }
+        }
+
+        # Applying B's demotion must wake the proposal even after A's reply.
         after 1000
-        raft_send $fd_b "AE $b_id 2 3 1 4 0 1\n2 $entry"
+        raft_send $fd_b "AE $b_id 2 5 2 5 0 0"
+        assert_equal $propose [raft_recv_until $out_b "PROPOSE NODE_FORGET *" 1000]
+        raft_send $fd_b "AE $b_id 2 5 2 6 0 1\n2 $entry"
         assert_equal {OK} [$rd read]
         assert_morethan [expr {[clock milliseconds] - $start}] 3000
 

@@ -1616,8 +1616,12 @@ struct serverMemOverhead *getMemoryOverheadData(void) {
     }
 
     mh->overhead_total = mem_total;
-    mh->dataset = zmalloc_used - mem_total;
-    mh->peak_perc = (float)zmalloc_used * 100 / mh->peak_allocated;
+    /* Overhead estimates (e.g. incremental client memory tracking, shared
+     * objects attributed per client, or non-atomic cross-thread zmalloc reads)
+     * can transiently or structurally exceed zmalloc_used; clamp to 0 to avoid
+     * unsigned size_t underflow in dataset, dataset_perc, and bytes_per_key. */
+    mh->dataset = zmalloc_used > mem_total ? zmalloc_used - mem_total : 0;
+    mh->peak_perc = mh->peak_allocated ? (float)zmalloc_used * 100 / mh->peak_allocated : 0;
 
     /* Metrics computed after subtracting the startup memory from
      * the total memory. */

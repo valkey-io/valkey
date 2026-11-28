@@ -89,12 +89,14 @@ start_server {tags {"querybuf slow"}} {
     }
 
     test "query buffer resized correctly when not idle" {
-        # A 20k bulk spans reads without entering the >=32k big-arg path.
+        # A 30k bulk exceeds the allocator-rounded shared buffer (including
+        # jemalloc), but stays below the 32k big-arg threshold.
         # The greedy second read grows the private query buffer above 32k.
         r debug pause-cron 1
+        test_defer {r debug pause-cron 0}
         set rd [valkey_client]
         $rd client setname nonidle_client
-        assert_equal OK [$rd set x [string repeat A 20000]]
+        assert_equal OK [$rd set x [string repeat A 30000]]
         set initial [client_query_buffer nonidle_client]
         assert {$initial > 32768}
         r debug pause-cron 0

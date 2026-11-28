@@ -26,6 +26,28 @@ proc raft_find_voter {leader n {exclude -1}} {
 
 tags {external:skip cluster singledb} {
 
+start_cluster 2 0 {overrides {cluster-protocol raft cluster-node-timeout 10000}} {
+    start_server {overrides {cluster-enabled yes cluster-protocol raft cluster-voter no}} {
+        test "Raft autopromote: a voter policy change during admission takes effect" {
+            # R 1 is the leader. Pause its only follower to keep R 0's NODE_JOIN
+            # uncommitted while the joiner changes its policy.
+            pause_process [srv -2 pid]
+            set meet [valkey_deferring_client -1]
+            $meet CLUSTER MEET [srv 0 host] [srv 0 port]
+            wait_for_condition 100 50 {
+                [raft_inflight_count [Rn 1] NODE_JOIN] == 1
+            } else {fail "Leader did not append NODE_JOIN"}
+            assert_equal OK [raft_set_voter 0 auto]
+            resume_process [srv -2 pid]
+            assert_equal OK [$meet read]
+            $meet close
+
+            wait_for_raft_cluster_size 3
+            assert_equal follower [CI 0 cluster_raft_role]
+        }
+    }
+}
+
 start_cluster 5 0 {overrides {cluster-protocol raft cluster-node-timeout 1000}} {
     test "Raft autopromote: 1 voter + 4 learners converge to 5 and do not overshoot" {
         after 2000

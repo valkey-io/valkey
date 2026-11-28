@@ -2072,8 +2072,13 @@ static void raftLogApply(raftLogEntry *e) {
              * voter + JOINER → FOLLOWER
              * voter + LEADER → keep LEADER (singleton self-join) */
             if (memcmp(argv[0], myself->name, CLUSTER_NAMELEN) == 0) {
+                /* The advertised address includes the voter policy. If it changed
+                 * since NODE_JOIN was proposed, leave the cache empty so cron
+                 * publishes our current NODE_INFO. */
+                sds my_addr = clusterNodeAppendAddressString(sdsempty(), myself, server.tls_cluster);
                 sdsfree(rs->my_last_committed_info);
-                rs->my_last_committed_info = clusterRaftBuildMyNodeInfo();
+                rs->my_last_committed_info = sdscmp(my_addr, argv[1]) == 0 ? clusterRaftBuildMyNodeInfo() : sdsempty();
+                sdsfree(my_addr);
 
                 int was_joiner = (rs->role == RAFT_ROLE_JOINER);
                 if (first_join) {

@@ -3456,7 +3456,8 @@ void InitServerLast(void) {
     server.initial_memory_usage = 0;
     struct serverMemOverhead *mh = getMemoryOverheadData();
     /* Exclude current overhead memory to avoid double counting in the future. */
-    server.initial_memory_usage = zmalloc_used_memory() - mh->overhead_total;
+    server.initial_memory_usage =
+        mh->total_allocated > mh->overhead_total ? mh->total_allocated - mh->overhead_total : 0;
     freeMemoryOverheadData(mh);
 }
 
@@ -6701,12 +6702,12 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
         char used_memory_scripts_hmem[64];
         char used_memory_rss_hmem[64];
         char maxmemory_hmem[64];
-        size_t zmalloc_used = zmalloc_used_memory();
         size_t total_system_mem = server.system_memory_size;
         const char *evict_policy = evictPolicyToString();
         long long memory_lua = evalMemory();
         long long memory_functions = functionsMemory();
         struct serverMemOverhead *mh = getMemoryOverheadData();
+        size_t zmalloc_used = mh->total_allocated;
 
         /* Peak memory is updated from time to time by serverCron() so it
          * may happen that the instantaneous value is slightly bigger than

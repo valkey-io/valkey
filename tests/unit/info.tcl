@@ -577,6 +577,89 @@ start_server {tags {"info" "external:skip"}} {
         assert_range [dict get $mem_stats overhead.db.hashtable.rehashing] 1 64
         assert_equal [dict get $mem_stats db.dict.rehashing.count] {1}
     }
+
+    test {memory: used_memory_dataset does not underflow when overhead exceeds used_memory} {
+        r flushall
+
+        # Multiple clients subscribing to the same large channel share one robj,
+        # while pubsubMemOverhead() attributes the channel size to each client.
+        # Once clientsCron updates stat_clients_type_memory, used_memory_overhead
+        # deterministically exceeds used_memory.
+        set chan [string repeat "c" 262144]
+        set clients {}
+        for {set i 0} {$i < 12} {incr i} {
+            set rd [valkey_deferring_client]
+            $rd subscribe $chan
+            $rd read
+            lappend clients $rd
+        }
+
+        wait_for_condition 50 100 {
+            [s used_memory_overhead] > [s used_memory]
+        } else {
+            fail "Expected used_memory_overhead ([s used_memory_overhead]) > used_memory ([s used_memory])"
+        }
+
+        # Verify 0, 1, and 2 keys: with 1 key MEMORY STATS previously wrapped
+        # dataset.bytes and keys.bytes-per-key negative, and with 2 keys
+        # keys.bytes-per-key wrapped to ~SIZE_MAX/2.
+        foreach numkeys {0 1 2} {
+            if {$numkeys > 0} {
+                r set "k$numkeys" "v$numkeys"
+            }
+
+            r multi
+            r info memory
+            r memory stats
+            set res [r exec]
+            set info_mem [lindex $res 0]
+            set mem_stats [lindex $res 1]
+
+            set used_mem [getInfoProperty $info_mem used_memory]
+            set overhead [getInfoProperty $info_mem used_memory_overhead]
+            assert_morethan $overhead $used_mem
+
+            assert_equal [getInfoProperty $info_mem used_memory_dataset] 0
+            assert_equal [getInfoProperty $info_mem used_memory_dataset_perc] {0.00%}
+
+            assert_equal [dict get $mem_stats keys.count] $numkeys
+            assert_equal [dict get $mem_stats dataset.bytes] 0
+            assert {[dict get $mem_stats dataset.percentage] == 0}
+            assert_equal [dict get $mem_stats keys.bytes-per-key] 0
+        }
+
+        foreach rd $clients {
+            $rd close
+        }
+
+        # After closing subscribers, verify normal positive dataset reporting recovers.
+        r flushall
+        r set bigkey [string repeat "x" 131072]
+        wait_for_condition 50 100 {
+            [s used_memory] > [s used_memory_overhead]
+        } else {
+            fail "Expected used_memory ([s used_memory]) > used_memory_overhead ([s used_memory_overhead])"
+        }
+
+        r multi
+        r info memory
+        r memory stats
+        set res [r exec]
+        set info_mem [lindex $res 0]
+        set mem_stats [lindex $res 1]
+
+        set used_mem [getInfoProperty $info_mem used_memory]
+        set overhead [getInfoProperty $info_mem used_memory_overhead]
+        set dataset [getInfoProperty $info_mem used_memory_dataset]
+        set dataset_perc [string trimright [getInfoProperty $info_mem used_memory_dataset_perc] "%"]
+        assert_morethan $dataset 0
+        assert_equal $dataset [expr {$used_mem - $overhead}]
+        assert {$dataset_perc > 0 && $dataset_perc <= 100}
+        assert_equal [dict get $mem_stats dataset.bytes] [expr {[dict get $mem_stats total.allocated] - [dict get $mem_stats overhead.total]}]
+        assert_morethan [dict get $mem_stats dataset.bytes] 0
+        assert {[dict get $mem_stats dataset.percentage] > 0 && [dict get $mem_stats dataset.percentage] <= 100}
+        assert_morethan [dict get $mem_stats keys.bytes-per-key] 0
+    }
 }
 
 start_server {tags {"info" "external:skip"} overrides {save "" forkless-infrastructure-enabled yes}} {

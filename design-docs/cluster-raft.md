@@ -82,16 +82,19 @@ PROPOSE <entry>
     proposer completes the proposal when it applies an identical entry
     that isn't older than the proposal: one after everything committed
     or reported as unchanged when the proposal was made (on the leader,
-    after its whole log). One such entry completes every identical
-    proposal. A follower can still match an older identical entry that
-    was committed before the proposal, if it hadn't learned that yet.
+    after its whole log unless it reuses an in-flight quorum change).
+    One such entry completes every eligible identical proposal. A follower
+    can still match an older identical entry that was committed before the
+    proposal, if it hadn't learned that yet.
 
-REJECT <reason> <entry>
+REJECT <reason> <index> <entry>
     Reply to PROPOSE when the leader's pre-validation fails. <reason> is
     "conflict" (stale shard epoch; the proposer retries with fresh
     epochs), "transfer" (the leader is handing off leadership; the
-    proposer retries with the new leader) or "rejected" (the client gets
-    an error). The entry is included so the proposer can match it.
+    proposer retries with the new leader), "rejected" (the client gets
+    an error) or "voter-change-pending" (another voter change is in
+    flight). <index> is the in-flight voter-change log index for
+    voter-change-pending, otherwise last_applied.
 
 UNCHANGED <index> <entry>
     Reply to PROPOSE for an entry that wouldn't change anything, as found
@@ -542,6 +545,41 @@ consensus (§4.3). Both require the new node to receive AE as a
 non-voting member before its NODE_JOIN is committed, adding
 complexity to the leader's replication logic.
 
+#### Automatic learner promotion
+
+The leader reconciles each node's `cluster-voter` wish (`auto`, `yes`,
+or `no`; default `auto`) into the voting set. The wish is carried in the
+address string of `NODE_JOIN` and `NODE_INFO` (`voter=yes` or `voter=no`;
+absent means `auto`) and does not change `cluster_size` by itself. Only
+the leader appends `ADD_VOTER` or `DEL_VOTER`. A node always joins as a
+learner, including when it is configured `yes`.
+
+- **auto.** Promote a caught-up learner while `size < RAFT_TARGET_VOTERS`
+  (5). At the target this is a no-op. If `size` is above the target,
+  demote an auto voter until the set is 5 again.
+- **yes.** The same catch-up check, then promote even when the voting
+  set is already at the target. yes is never demoted automatically.
+- **no.** Do not promote. If the node is already a voter, demote it and
+  leave it a learner. The leader does not demote itself, and does not
+  demote the last voter.
+
+For both `auto` and `no`, the leader defers demotion until enough of the
+remaining voters are responsive to form a majority of the smaller set.
+
+A promotion candidate must have finished joining (no MEET flag), not be
+failed, have an active link, and have `match_index` caught up with the
+leader's last log index. `CLUSTER FORGET` of a voter can still shrink
+the set down to one node. Afterwards the controller promotes another
+eligible `auto` or `yes` learner when one exists.
+
+To avoid overlapping membership transitions, the leader allows **at
+most one unapplied quorum-changing entry at a time**. A transition is
+identified by its entry type and target node. Learner joins do not
+change quorum and are not serialized this way. If the same transition
+is already in the log, the leader does not append another copy;
+callers wait for the existing entry to apply. A different transition
+is rejected until that entry is applied.
+
 ## Failure Detection
 
 The leader tracks `last_ack_time` per peer, updated on every AE_ACK
@@ -986,9 +1024,10 @@ Only `STALE_SHARD_EPOCH_REJECTION_MSG` triggers retry. Other errors
 (format errors, invalid state) are forwarded to the client immediately.
 
 When the leader rejects a forwarded proposal at pre-validation, it sends
-a `REJECT <reason> <type> <data...>` message back. The reason is a token:
-`conflict` (stale epoch, retryable), `transfer` (retried with the new
-leader) or `rejected` (permanent error).
+a `REJECT <reason> <index> <type> <data...>` message back. The reason is a
+token: `conflict` (stale epoch, retryable), `transfer` (retried with the new
+leader), `voter-change-pending` (retry after applying `<index>`), or
+`rejected` (permanent error).
 
 ### Entries that don't carry an epoch
 
@@ -1022,7 +1061,9 @@ excluded as transfer targets.
 
 ## Future Work
 
-- Automatic learner promotion (promote the first 5 or 7 nodes to voters).
+- Configurable voter target and automatic failed-voter replacement (the
+  current controller hardcodes `RAFT_TARGET_VOTERS` and never replaces a
+  failed voter).
 - Chained learner replication.
 - Balancing voters over availability zones: the leader can use the
   per-node availability-zone info to add/remove voters so that voters

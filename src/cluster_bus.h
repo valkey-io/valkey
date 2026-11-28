@@ -13,6 +13,7 @@ typedef struct clusterNode clusterNode;
 /* Bit flags for the onMyselfUpdated callback */
 #define CLUSTER_UPDATED_NOFAILOVER (1 << 0)
 #define CLUSTER_UPDATED_REPLICAPRIORITY (1 << 1)
+#define CLUSTER_UPDATED_VOTER (1 << 2)
 
 /* Interface for cluster bus protocol implementations.
  * Only includes operations that code outside the protocol

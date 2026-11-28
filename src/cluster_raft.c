@@ -494,7 +494,7 @@ static void clusterRaftMaybeSendTimeoutNow(void);
 static void raftSetVerifiedIndex(uint64_t msg_term, uint64_t verified_index, bool force);
 static int clusterRaftLeaderHasFreshQuorum(mstime_t now);
 static bool raftEntryAffectsQuorum(int type, sds data);
-static raftQuorumChangeStatus clusterRaftQuorumChangeStatus(int type, sds data);
+static raftQuorumChangeStatus clusterRaftQuorumChangeStatus(int type, sds data, uint64_t *same_index);
 static uint64_t raftInFlightQuorumChangeIndex(void);
 static void clusterRaftScheduleParkedRetries(void);
 static clusterNode *clusterRaftSelectPromotionCandidate(void);
@@ -1041,25 +1041,19 @@ static void clusterRaftPropose(sds entry, void *ctx, void (*callback)(void *ctx,
 
     sds data = sp ? sdsnew(sp + 1) : sdsempty();
 
-    /* SAME: this quorum change is already appended and not yet applied.
-     * Keep the caller's callback for that entry instead of writing a copy. */
-    int already_appended = 0;
+    uint64_t same_index = 0;
     int wait_voter_change = 0;
     RaftProposalResult pre_result = RAFT_RESULT_OK;
-    if (rs->role == RAFT_ROLE_LEADER) {
-        if (clusterRaftQuorumChangeStatus(type, data) == RAFT_QC_SAME) {
-            already_appended = 1;
-        } else {
-            /* Pre-validate on the leader to reject obviously stale/invalid proposals. */
-            pre_result = clusterRaftPreValidate(type, data);
-            if (pre_result == RAFT_RESULT_VOTER_CHANGE_PENDING) {
-                /* Keep pending; retry after the in-flight voter change applies. */
-                wait_voter_change = 1;
-            } else if (pre_result != RAFT_RESULT_OK && pre_result != RAFT_RESULT_UNCHANGED) {
-                if (callback) callback(ctx, raftProposalResultMsg(pre_result));
-                sdsfree(data);
-                return;
-            }
+    if (rs->role == RAFT_ROLE_LEADER && clusterRaftQuorumChangeStatus(type, data, &same_index) != RAFT_QC_SAME) {
+        /* Pre-validate on the leader to reject obviously stale/invalid proposals. */
+        pre_result = clusterRaftPreValidate(type, data);
+        if (pre_result == RAFT_RESULT_VOTER_CHANGE_PENDING) {
+            /* Keep pending; retry after the in-flight voter change applies. */
+            wait_voter_change = 1;
+        } else if (pre_result != RAFT_RESULT_OK && pre_result != RAFT_RESULT_UNCHANGED) {
+            if (callback) callback(ctx, raftProposalResultMsg(pre_result));
+            sdsfree(data);
+            return;
         }
     }
 
@@ -1075,11 +1069,11 @@ static void clusterRaftPropose(sds entry, void *ctx, void (*callback)(void *ctx,
         pp->deferred = 0;
         pp->wait_index = 0;
         pp->retry_after = wait_voter_change ? raftInFlightQuorumChangeIndex() : 0;
-        /* Our entry will come after everything that's committed, and after
-         * what a leader already said was unchanged. On the leader, after
-         * its whole log. */
+        /* The leader can reuse an in-flight quorum change. New entries follow
+         * its whole log. On followers they follow everything known to be
+         * committed or reported as unchanged. */
         if (rs->role == RAFT_ROLE_LEADER) {
-            pp->min_index = raftLogLastIndex() + 1;
+            pp->min_index = same_index ? same_index : raftLogLastIndex() + 1;
         } else {
             pp->min_index = (rs->commit_index > rs->max_unchanged_index ? rs->commit_index : rs->max_unchanged_index) + 1;
         }
@@ -1107,7 +1101,7 @@ static void clusterRaftPropose(sds entry, void *ctx, void (*callback)(void *ctx,
         clusterRaftAddPendingRead(type, data, NULL);
         sdsfree(data);
     } else if (rs->role == RAFT_ROLE_LEADER) {
-        if (already_appended || wait_voter_change) {
+        if (same_index || wait_voter_change) {
             sdsfree(data);
         } else {
             /* If we're a singleton leader with an empty log that hasn't committed
@@ -1332,7 +1326,7 @@ static RaftProposalResult clusterRaftPreValidate(int type, sds data) {
     /* Enforce at most one quorum-changing transition in flight. A different
      * membership transition already in the log is rejected here so it never
      * consumes log space. */
-    if (clusterRaftQuorumChangeStatus(type, data) == RAFT_QC_CONFLICT) {
+    if (clusterRaftQuorumChangeStatus(type, data, NULL) == RAFT_QC_CONFLICT) {
         return RAFT_RESULT_VOTER_CHANGE_PENDING;
     }
     switch (type) {
@@ -1391,7 +1385,7 @@ static int clusterRaftProcessPropose(clusterLink *link, int argc, sds *argv) {
     /* The follower already has a pending proposal for this entry. Applying
      * the copy that is in the log completes it; REJECT would fail the client
      * before that apply. */
-    if (clusterRaftQuorumChangeStatus(type, data) == RAFT_QC_SAME) {
+    if (clusterRaftQuorumChangeStatus(type, data, NULL) == RAFT_QC_SAME) {
         sdsfree(data);
         sdsfree(entry);
         return 1;
@@ -1906,30 +1900,27 @@ static bool raftEntryAffectsQuorum(int type, sds data) {
     }
 }
 
-/* Classify the in-flight (committed but not yet applied) quorum-changing
+/* Classify the in-flight (appended but not yet applied) quorum-changing
  * entries relative to a candidate transition. Scans (last_applied,
  * raftLogLastIndex()] once. Returns:
  *   RAFT_QC_NONE     — no quorum-changing entry in flight.
- *   RAFT_QC_SAME     — the identical type and payload are in flight.
+ *   RAFT_QC_SAME     — the identical type and payload are in flight. If
+ *                      supplied, same_index receives the first matching index.
  *   RAFT_QC_CONFLICT — a different transition is in flight. */
-static raftQuorumChangeStatus clusterRaftQuorumChangeStatus(int type, sds data) {
+static raftQuorumChangeStatus clusterRaftQuorumChangeStatus(int type, sds data, uint64_t *same_index) {
     if (!raftEntryAffectsQuorum(type, data)) return RAFT_QC_NONE;
 
     clusterRaftState *rs = RAFT_STATE();
-    int found_same = 0;
-    int found_conflict = 0;
+    uint64_t match = 0;
     for (uint64_t idx = rs->last_applied + 1; idx <= raftLogLastIndex(); idx++) {
         raftLogEntry *e = raftLogGet(idx);
         if (!e || !raftEntryAffectsQuorum(e->type, e->data)) continue;
-        if (e->type == type && sdscmp(e->data, data) == 0) {
-            found_same = 1;
-        } else {
-            found_conflict = 1;
-        }
+        if (e->type != type || sdscmp(e->data, data) != 0) return RAFT_QC_CONFLICT;
+        if (!match) match = idx;
     }
-    if (found_conflict) return RAFT_QC_CONFLICT;
-    if (found_same) return RAFT_QC_SAME;
-    return RAFT_QC_NONE;
+    if (!match) return RAFT_QC_NONE;
+    if (same_index) *same_index = match;
+    return RAFT_QC_SAME;
 }
 
 /* Latest unapplied quorum-changing log index, or last_applied if none.
@@ -3432,7 +3423,8 @@ static void clusterRaftRetryProposals(int include_pending) {
         }
 
         if (rs->role == RAFT_ROLE_LEADER) {
-            raftQuorumChangeStatus status = clusterRaftQuorumChangeStatus(pp->type, pp->data);
+            uint64_t same_index;
+            raftQuorumChangeStatus status = clusterRaftQuorumChangeStatus(pp->type, pp->data, &same_index);
 
             /* A different membership transition is in flight: retry after it applies. */
             if (status == RAFT_QC_CONFLICT) {
@@ -3442,7 +3434,10 @@ static void clusterRaftRetryProposals(int include_pending) {
 
             /* The identical transition is already in the log; it will
              * complete the pending proposal when applied. */
-            if (status == RAFT_QC_SAME) continue;
+            if (status == RAFT_QC_SAME) {
+                pp->min_index = same_index;
+                continue;
+            }
 
             /* No membership transition in flight: run full pre-validation. */
             RaftProposalResult pre_result = clusterRaftPreValidate(pp->type, pp->data);
@@ -3560,7 +3555,7 @@ static void clusterRaftAppendMembershipChange(int type, clusterNode *node) {
     if (rs->role != RAFT_ROLE_LEADER || clusterRaftTransferSent()) return;
 
     sds data = sdsnewlen(node->name, CLUSTER_NAMELEN);
-    if (clusterRaftQuorumChangeStatus(type, data) != RAFT_QC_NONE ||
+    if (clusterRaftQuorumChangeStatus(type, data, NULL) != RAFT_QC_NONE ||
         clusterRaftPreValidate(type, data) != RAFT_RESULT_OK) {
         sdsfree(data);
         return;

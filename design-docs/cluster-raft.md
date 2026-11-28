@@ -82,9 +82,10 @@ PROPOSE <entry>
     proposer completes the proposal when it applies an identical entry
     that isn't older than the proposal: one after everything committed
     or reported as unchanged when the proposal was made (on the leader,
-    after its whole log). One such entry completes every identical
-    proposal. A follower can still match an older identical entry that
-    was committed before the proposal, if it hadn't learned that yet.
+    after its whole log unless it reuses an in-flight quorum change).
+    One such entry completes every eligible identical proposal. A follower
+    can still match an older identical entry that was committed before the
+    proposal, if it hadn't learned that yet.
 
 REJECT <reason> <index> <entry>
     Reply to PROPOSE when the leader's pre-validation fails. <reason> is

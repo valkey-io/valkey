@@ -2120,7 +2120,7 @@ start_cluster 3 0 {overrides {cluster-protocol raft cluster-node-timeout 15000}}
 }
 
 start_cluster 3 0 {overrides {cluster-protocol raft cluster-node-timeout 15000}} {
-    test "Raft proto: parked voter-change-pending retries after apply" {
+    test "Raft proto: duplicate FORGET shares an entry and a conflicting FORGET retries after apply" {
         # Two quorum changes from the leader: the second parks until the
         # first applies, then retries. Pause followers so the first cannot
         # commit until we resume.
@@ -2133,12 +2133,18 @@ start_cluster 3 0 {overrides {cluster-protocol raft cluster-node-timeout 15000}}
         pause_process [srv -2 pid]
         set c1 [valkey_deferring_client]
         $c1 CLUSTER FORGET $id1
-        after 400
+        wait_for_blocked_client
         assert_equal 1 [raft_inflight_count [srv 0 client] NODE_FORGET]
+
+        # Put a NODE_INFO after the FORGET so the duplicate must match an entry before the log tail.
+        R 0 CONFIG SET cluster-announce-hostname after-forget.example
+        assert {[raft_inflight_count [srv 0 client] NODE_INFO] > 0}
+        set duplicate [valkey_deferring_client]
+        $duplicate CLUSTER FORGET $id1
 
         set c2 [valkey_deferring_client]
         $c2 CLUSTER FORGET $id2
-        after 400
+        wait_for_blocked_clients_count 3
         assert_equal 1 [raft_inflight_count [srv 0 client] NODE_FORGET]
 
         resume_process [srv -1 pid]
@@ -2148,9 +2154,12 @@ start_cluster 3 0 {overrides {cluster-protocol raft cluster-node-timeout 15000}}
         } else {
             fail "parked FORGET did not retry: size=[CI 0 cluster_size]"
         }
+        wait_for_blocked_clients_count 0
         assert_equal OK [$c1 read]
+        assert_equal OK [$duplicate read]
         assert_equal OK [$c2 read]
         $c1 close
+        $duplicate close
         $c2 close
         pause_process [srv -1 pid]
         pause_process [srv -2 pid]

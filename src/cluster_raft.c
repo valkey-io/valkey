@@ -4086,19 +4086,18 @@ static sds clusterRaftAppendLogLines(sds config) {
  * and the caller replaces it with a full rewrite before sending AE_ACK. */
 static int clusterRaftPersistNewLogEntries(uint64_t from) {
     clusterRaftState *rs = RAFT_STATE();
+    if (rs->log_count == 0) return C_OK;
+    uint64_t base = rs->log[0]->index;
+    uint64_t start = from > base ? from - base : 0;
+    if (start >= rs->log_count) return C_OK;
+
     sds buf = sdsempty();
     size_t offset = 0, len;
     int fd;
-    for (uint64_t i = 0; i < rs->log_count; i++) {
-        raftLogEntry *e = rs->log[i];
-        if (e->index < from) continue;
-        buf = raftLogFormatLine(buf, e);
+    for (uint64_t i = start; i < rs->log_count; i++) {
+        buf = raftLogFormatLine(buf, rs->log[i]);
     }
     len = sdslen(buf);
-    if (len == 0) {
-        sdsfree(buf);
-        return C_OK;
-    }
     fd = open(server.cluster_configfile, O_WRONLY | O_APPEND);
     if (fd == -1) {
         serverLog(LL_WARNING, "Could not open cluster config for log append: %s", strerror(errno));

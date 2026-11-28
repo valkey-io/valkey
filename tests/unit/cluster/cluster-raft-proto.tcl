@@ -673,10 +673,18 @@ test "Raft proto: entries are persisted before they are trimmed" {
             while {![string match "AE_ACK 1 1 $last *" [set reply [raft_recv $fd]]]} {}
         }
         assert_equal $last [CI 0 cluster_raft_last_applied]
+
+        # After trimming, persist two uncommitted entries in separate batches.
+        # The second append must skip the first entry, which is already on disk.
+        set committed $last
+        for {set i 0} {$i < 2} {incr i} {
+            raft_send $fd "AE $leader_id 1 $last 1 $committed 0 1\n1 NODE_INFO $leader_id $leader_addr noflags"
+            incr last
+            while {![string match "AE_ACK 1 1 $last *" [set reply [raft_recv $fd]]]} {}
+        }
         close $fd
 
-        # All committed entries must be in nodes.conf, so the node starts
-        # after a crash.
+        # Recover through the last acknowledged index after a crash.
         exec kill -9 [srv 0 pid]
         restart_server 0 true false
         assert_equal $last [expr {[CI 0 cluster_raft_last_applied] + [CI 0 cluster_raft_log_entries]}]

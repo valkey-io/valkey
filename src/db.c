@@ -688,9 +688,6 @@ long long emptyData(int dbnum, int flags, void(callback)(hashtable *)) {
         return -1;
     }
 
-    /* bgIteration must be notified before the DB entries are freed. */
-    bgIteration_flushdb(dbnum);
-
     /* Fire the flushdb modules event. */
     moduleFireServerEvent(VALKEYMODULE_EVENT_FLUSHDB, VALKEYMODULE_SUBEVENT_FLUSHDB_START, &fi);
 
@@ -706,6 +703,11 @@ long long emptyData(int dbnum, int flags, void(callback)(hashtable *)) {
          * new set of slot imports from their primary. */
         clusterHandleFlushDuringSlotMigration();
     }
+
+    /* Notify bgIteration right before freeing the DB entries (after FLUSHDB_START
+     * and slot-migration callbacks) so any keys created by module callbacks are
+     * also evicted from early_iterate_entries. */
+    bgIteration_flushdb(dbnum);
 
     /* Empty the database structure. */
     removed = emptyDbStructure(server.db, dbnum, async, callback);

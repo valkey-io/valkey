@@ -95,6 +95,61 @@ test "Raft: concurrent CLUSTER FORGET requests for the same node both return OK"
     }
 }
 
+test "Raft: an applied FAILOVER completes its client after a rejected resend" {
+    start_multiple_servers 3 {overrides {cluster-enabled yes cluster-protocol raft cluster-node-timeout 5000}} {
+        raft_form_cluster 2 3
+        set leader [R 0 CLUSTER MYID]
+        R 0 CLUSTER ADDSLOTS 0
+        R 2 CLUSTER REPLICATE $leader
+        set rd [valkey_deferring_client -2]
+        set loglines [count_log_lines 0]
+
+        # Hold the original entry uncommitted while the replica reconnects and resends it.
+        pause_process [srv -1 pid]
+        $rd CLUSTER FAILOVER FORCE
+        wait_for_log_messages 0 {"*Leader appended proposed FAILOVER*"} $loglines 100 20
+        R 2 DEBUG CLUSTERLINK KILL TO $leader
+        wait_for_log_messages 0 {"*Leader pre-validation: rejecting FAILOVER*"} $loglines 100 20
+        # This reply on the same link arrives after the FAILOVER rejection.
+        assert_error "*proposal rejected by raft leader*" {R 2 CLUSTER ADDVOTER $leader}
+        resume_process [srv -1 pid]
+
+        assert_equal OK [$rd read]
+        assert_equal master [lindex [R 2 ROLE] 0]
+        $rd close
+    }
+}
+
+test "Raft: a skipped FORGET lets a deferred slot change retry at the same epoch" {
+    start_multiple_servers 3 {overrides {cluster-enabled yes cluster-protocol raft cluster-node-timeout 5000}} {
+        raft_form_cluster 2 3
+        set target [R 2 CLUSTER MYID]
+        set first [valkey_deferring_client -2]
+        set forget [valkey_deferring_client]
+        set second [valkey_deferring_client -2]
+        set loglines [count_log_lines 0]
+
+        # FORGET passes pre-validation while slot 0 is uncommitted. Its predicted
+        # epoch bump then prevents the leader from appending the request for slot 1.
+        pause_process [srv -1 pid]
+        $first CLUSTER ADDSLOTS 0
+        wait_for_log_messages 0 {"*Leader appended proposed SLOT_CHANGE*"} $loglines 100 20
+        $forget CLUSTER FORGET $target
+        wait_for_log_messages 0 {"*Leader appended NODE_FORGET*"} $loglines 100 20
+        $second CLUSTER ADDSLOTS 1
+        wait_for_log_messages 0 {"*Leader pre-validation: rejecting SLOT_CHANGE*"} $loglines 100 20
+        resume_process [srv -1 pid]
+
+        assert_equal OK [$first read]
+        assert_error "*proposal rejected by raft leader*" {$forget read}
+        assert_equal OK [$second read]
+        assert_equal 2 [CI 2 cluster_slots_assigned]
+        $first close
+        $forget close
+        $second close
+    }
+}
+
 test "Raft: CLUSTER FORGET transfers leadership when target is leader" {
     start_multiple_servers 3 {overrides {cluster-enabled yes cluster-protocol raft cluster-node-timeout 1000}} {
         raft_form_cluster 2 3

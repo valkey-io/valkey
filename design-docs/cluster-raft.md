@@ -979,6 +979,8 @@ with a fresh epoch (up to 5 attempts):
 
 - **SET_REPLICA_OF / NODE_FORGET / FAILOVER (force) / SLOT_CHANGE** —
   the proposal is rebuilt with current epoch(s) and re-submitted.
+  If an uncommitted entry caused the conflict but was skipped on apply
+  or dropped on leader change, the proposal can retry at the same epoch.
 
 - **Automatic failover** — if the FAILOVER proposal is rejected, the
   failover is re-scheduled (via `todo_schedule_failover`) as long as

@@ -607,7 +607,22 @@ static int string2llScalar(const char *s, size_t slen, long long *value) {
         return 0;
     }
 
-    /* Parse all the other digits, checking for overflow at every step. */
+    /* Fast path for <= 18 total digits (<= 10^18 - 1 < LLONG_MAX): overflow is
+     * impossible so no per-digit overflow checks are needed. */
+    size_t rem = slen - plen;
+    if (rem <= 17) {
+        const char *end = s + slen;
+        while (p < end) {
+            unsigned char d = (unsigned char)(*p - '0');
+            if (d > 9) return 0;
+            v = v * 10 + d;
+            p++;
+        }
+        if (value != NULL) *value = negative ? -(long long)v : (long long)v;
+        return 1;
+    }
+
+    /* Parse all the other digits (19 or 20 digits), checking for overflow at every step. */
     while (plen < slen && p[0] >= '0' && p[0] <= '9') {
         if (v > (ULLONG_MAX / 10)) /* Overflow. */
             return 0;

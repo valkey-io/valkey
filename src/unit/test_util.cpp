@@ -84,6 +84,48 @@ TEST_F(UtilTest, TestString2ll) {
     ASSERT_EQ(string2ll(buf, strlen(buf), &v), 0);
 }
 
+TEST_F(UtilTest, TestString2llBoundaries) {
+    char buf[32];
+    long long v;
+
+    /* 18-digit fast-path / 19-digit slow-path boundaries. */
+    valkey_strlcpy(buf, "999999999999999999", sizeof(buf));
+    ASSERT_EQ(string2ll(buf, strlen(buf), &v), 1);
+    ASSERT_EQ(v, 999999999999999999LL);
+
+    valkey_strlcpy(buf, "-999999999999999999", sizeof(buf));
+    ASSERT_EQ(string2ll(buf, strlen(buf), &v), 1);
+    ASSERT_EQ(v, -999999999999999999LL);
+
+    valkey_strlcpy(buf, "1000000000000000000", sizeof(buf));
+    ASSERT_EQ(string2ll(buf, strlen(buf), &v), 1);
+    ASSERT_EQ(v, 1000000000000000000LL);
+
+    valkey_strlcpy(buf, "-1000000000000000000", sizeof(buf));
+    ASSERT_EQ(string2ll(buf, strlen(buf), &v), 1);
+    ASSERT_EQ(v, -1000000000000000000LL);
+
+    /* Non-digits, adjacent ASCII bytes, and high-bit bytes in fast path. */
+    valkey_strlcpy(buf, "12345678a012345", sizeof(buf));
+    ASSERT_EQ(string2ll(buf, strlen(buf), &v), 0);
+
+    valkey_strlcpy(buf, "12345678901234567/", sizeof(buf));
+    ASSERT_EQ(string2ll(buf, strlen(buf), &v), 0);
+
+    valkey_strlcpy(buf, "12345678901234567:", sizeof(buf));
+    ASSERT_EQ(string2ll(buf, strlen(buf), &v), 0);
+
+    ASSERT_EQ(string2ll("1\xff", 2, &v), 0);
+    ASSERT_EQ(string2ll("1\x80", 2, &v), 0);
+
+    /* Empty string, sign-only, negative zero, and NULL output pointer. */
+    ASSERT_EQ(string2ll("", 0, &v), 0);
+    ASSERT_EQ(string2ll("-", 1, &v), 0);
+    ASSERT_EQ(string2ll("-0", 2, &v), 0);
+    ASSERT_EQ(string2ll("123456789012345678", 18, NULL), 1);
+    ASSERT_EQ(string2ll("12345a", 6, NULL), 0);
+}
+
 TEST_F(UtilTest, TestString2l) {
     char buf[32];
     long v;
